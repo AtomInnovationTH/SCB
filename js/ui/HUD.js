@@ -29,6 +29,7 @@ import { pinProgress } from './shopPin.js';
 import { missionName } from '../core/missionProgress.js';
 import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX, RIGHT_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
 import { dividedByScale, onHudScaleChange, currentHudScale } from './HudScale.js';
+import { skyPanelDodgePx } from './RealSkyCard.js';   // the radio box / right column dodge under the real-sky panel (Mac floor 4)
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
@@ -339,7 +340,7 @@ export class HUD {
     this.hintTicker.setTargetsShown(() => {
       const t = this.panels && this.panels.targets;
       if (!t || !t.hasAttribute) return false;
-      return !(t.hasAttribute('data-density-hidden') || t.hasAttribute('data-scan-wait')
+      return !(t.hasAttribute('data-density-hidden') || (t.hasAttribute('data-scan-wait') && !t.hasAttribute('data-scan-peek'))
         || t.hasAttribute('data-floor-gone') || (t.style && t.style.display === 'none'));
     });
 
@@ -450,8 +451,10 @@ export class HUD {
         [data-arms-wait] { display: none !important; }
         /* TARGETS + TARGET INFO wait for the first scan (owner 2026-10-13): hidden
          * until the first SCAN_COMPLETE of this boot (HUD._openScanGate), whatever
-         * the floor; nothing is marked before then, so the lists would be empty. */
-        [data-scan-wait] { display: none !important; }
+         * the floor. The player's own `+` lifts the wait for the pane (data-scan-peek,
+         * owner 2026-11-19: "should appear and disappear with - + keys, even if panes
+         * have no data because scan has not run yet"): the pane then says so in one line. */
+        [data-scan-wait]:not([data-scan-peek]) { display: none !important; }
         /* Layout-hidden left-arm riders (LeftStack). Never the density bit. */
         [data-stack-hidden] { display: none !important; }
         #hud-pin-widget, #hud-right-column {
@@ -685,6 +688,12 @@ export class HUD {
       setVisible: (v) => getEls().forEach(el => {
         if (!el) return;
         self._densitySetVisible(el, v);
+      }),
+      // The player's own `+` (see PaneDensity.up): like setVisible(true), and it lifts the first-scan wait for the
+      // Targets and Target info panes (the only two that carry it).
+      reveal: () => getEls().forEach(el => {
+        if (!el) return;
+        self._densityReveal(el);
       }),
     });
     const byId = (id) => () => [document.getElementById(id)];
@@ -953,7 +962,7 @@ export class HUD {
   _densityIsVisible(el) {
     if (!el) return false;
     if (el.hasAttribute && (el.hasAttribute('data-density-hidden') || el.hasAttribute('data-density-leaving')
-      || el.hasAttribute('data-arms-wait') || el.hasAttribute('data-scan-wait'))) {
+      || el.hasAttribute('data-arms-wait') || (el.hasAttribute('data-scan-wait') && !el.hasAttribute('data-scan-peek')))) {
       return false;
     }
     // Layout-hidden is not a density hide — LeftStack must be able to un-hide.
@@ -967,11 +976,16 @@ export class HUD {
 
   /**
    * Slider slot test for a DOM pane: true when it shows now, or when our density bit is what hides it (leaving /
-   * hidden / layout-hidden). A wait gate (scan / daughters) is not ours to lift, so it is no slot.
+   * hidden / layout-hidden). The daughters gate is not ours to lift, so it is no slot. The FIRST-SCAN wait (value '')
+   * IS: the player's `+` lifts it for that pane (`_densityReveal`), so it is a slot before the scan. The Z wait of target
+   * info ('analyse', mission 1 only) stays no slot.
    */
   _densityIsAvailable(el) {
     if (!el) return false;
-    if (el.hasAttribute && (el.hasAttribute('data-arms-wait') || el.hasAttribute('data-scan-wait'))) return false;
+    if (el.hasAttribute && el.hasAttribute('data-arms-wait')) return false;
+    if (el.hasAttribute && el.hasAttribute('data-scan-wait') && !el.hasAttribute('data-scan-peek')) {
+      return el.getAttribute('data-scan-wait') === '' && this._scanPeekAllowed();
+    }
     if (el.hasAttribute && (el.hasAttribute('data-density-hidden') || el.hasAttribute('data-density-leaving')
       || el.hasAttribute('data-stack-hidden'))) return true;
     return this._densityIsVisible(el);
@@ -980,7 +994,34 @@ export class HUD {
   _densitySetVisible(el, v) {
     if (!el || !el.setAttribute) return;
     if (v) this._densityShow(el);
-    else this._densityHide(el);
+    else {
+      if (el.removeAttribute) el.removeAttribute('data-scan-peek');   // a hide ends the peek: the wait applies again
+      this._densityHide(el);
+    }
+  }
+
+  /**
+   * The player's own `+` (PaneDensity.up / restore calls `rung.reveal`): shows the pane like `_densitySetVisible(el, true)`
+   * and, while it waits for the first scan, lifts that wait for this pane (`data-scan-peek`). Room arrivals use setVisible,
+   * never this, so a floor's 'shown' room does not put an empty pane on screen before the scan.
+   */
+  _densityReveal(el) {
+    if (!el || !el.setAttribute) return;
+    this._densityShow(el);
+    if (el.hasAttribute && el.hasAttribute('data-scan-wait') && el.getAttribute('data-scan-wait') === ''
+      && this._scanPeekAllowed()) {
+      el.setAttribute('data-scan-peek', '');
+    }
+  }
+
+  /**
+   * May the player's `+` lift the first-scan wait on the current floor? Not on the map floors 4 and 5: the plan (sky-1119-keys
+   * D4) keeps the empty Targets / Target info panes off the chart views until a scan, as before. Floors 1-3 (and no mask) allow it.
+   */
+  _scanPeekAllowed() {
+    let floor = null;
+    try { floor = this._floorMask && typeof this._floorMask.getCurrentFloor === 'function' ? this._floorMask.getCurrentFloor() : null; } catch (_e) { floor = null; }
+    return floor !== 4 && floor !== 5;
   }
 
   _densityCancel(el) {
@@ -1094,7 +1135,10 @@ export class HUD {
       else this._commsResizeSettleAt = null;
     }
     if (this._commsRectBottom == null || leaving) {
-      this._commsRectBottom = comms.getBoundingClientRect().bottom;
+      // The rect includes the radio box's dodge under the real-sky panel (RealSkyCard, Mac floor 4); the column carries the same
+      // translate itself, so the layout top is measured without it (else the column sits that far too low: 166 px, measured).
+      const b = comms.getBoundingClientRect().bottom;
+      this._commsRectBottom = b > 0 ? b - skyPanelDodgePx() : b;
     }
     const newTop = Math.round(this._commsRectBottom + 10);
     if (leaving) this._commsRectBottom = null;   // mid-glide — never cache it
@@ -1663,6 +1707,7 @@ export class HUD {
     this._scanGateOpen = true;
     this._scanGateOn(false);
     this._syncRailQuiet(true);
+    if (this._updateTimers) this._updateTimers.targets = 1;   // the Targets list redraws on the next tick: "No scan yet" never lingers after the scan
   }
 
   _scanGateOn(on) {
@@ -1676,6 +1721,11 @@ export class HUD {
       if (el && el.setAttribute) el.setAttribute('data-scan-wait', '');
       this._infoGateWait = '';
     } else {
+      // The first scan ends every peek (the wait is gone). Target info the player pulled in with `+` before the scan
+      // stays open for good, as one pulled in after it does (`_infoPulled`), instead of dropping behind the Z wait.
+      const info = this._wireframeContainerEl;
+      if (info && info.hasAttribute && info.hasAttribute('data-scan-peek')) this._infoPulled = true;
+      for (const el of [targets, info]) if (el && el.removeAttribute) el.removeAttribute('data-scan-peek');
       this._infoGateWait = null;      // re-decide below, whatever was written before
       this._syncInfoGate();
     }

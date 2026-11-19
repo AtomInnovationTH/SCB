@@ -11,18 +11,23 @@
  * @module ui/RealSkyCard
  */
 
-export const CLASS_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown'];
+export const CLASS_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown', 'starlink'];
+/** The seventh kind (lane sky-skylook-1119, owner 2026-11-19): a working satellite whose name starts with STARLINK. It is not a data class: RealSkyLayer assigns it at load. */
+export const CLS_STARLINK = 6;
+/** True for a row (data/sky.json: [norad, name, cls, ...]) that draws as the Starlink kind: class "working" and a name starting with STARLINK. A dead or unknown-status Starlink stays in its own class. */
+export function isStarlinkRow(row) {
+  return !!row && row[2] === CLS_WORKING && /^STARLINK/i.test(String(row[1]));
+}
 /**
- * One colour per class (index = skyPack.CLS), readable on the dark map. Debris is a deep error red and working a deep pure green
- * (owner 2026-11-19: debris "a bit faint and a bit orange", working "a bit faint and a bit yellow-green"; lane sky-look-1119).
- * Floor 4's dots go through the composer's OutputPass (ACES), which pales a bright green toward yellow-green (measured: #1aff40 came out
- * rgb 154,229,119, hue 101); #00b42a is about the brightest green that still comes out green there (ACES alone: rgb 53,192,53 hue 120; measured
- * on screen with the bloom 60-ish,195,60-ish). Red survives
- * (#ff2020 comes out about 252,48,39).
+ * One colour per kind (index = CLASS_NAMES index = skyPack.CLS, Starlink last). Warm = she can remove it, cool grey = live traffic (owner
+ * pick 2026-11-19, DECISIONS §78, from "dots are bright green, very visible, a bit cartoony"): debris amber, rocket stage orange, dead
+ * satellite dusty tan, working satellite cool slate-blue, "satellite" grey, unknown dim grey, Starlink a dim slate that sits under the rest.
+ * Red stays free for threats near her path. Floor 4's dots go through the composer's OutputPass (ACES), so the on-screen colour is darker
+ * and less saturated than the hex (sampled 2026-11-19: debris 175,139,71; working 93,117,133; stage 178,112,51).
  */
-export const CLASS_COLORS = ['#ff2020', '#c77dff', '#8f98a8', '#00b42a', '#4fb4ff', '#ffe14d'];
+export const CLASS_COLORS = ['#d8a050', '#e07f3a', '#c89070', '#6f8fa8', '#8a96a0', '#6a7078', '#3f4a58'];
 /** The one-row colour key's short words (same order as CLASS_NAMES; the full name is each item's tooltip). */
-export const LEGEND_LABELS = ['debris', 'stage', 'dead', 'working', 'sat', 'unknown'];
+export const LEGEND_LABELS = ['debris', 'stage', 'dead', 'working', 'sat', 'unknown', 'Starlink'];
 
 /**
  * The one small credit line: every source the full credit names, in a few words. Built from the full text (never typed
@@ -96,6 +101,7 @@ export function cardFields(row, heights, snapshotUtc, gcatName) {
 
 /** Floor 4 = the NAVCOM globe (Earth big); floor 5 = the SDA chart (Earth a small disc, its bottom right holds the Kessler timeline). */
 const FLOOR_GLOBE = 4;
+const FLOOR_CHART = 5;
 /** Two clicks or taps on the open object's name within this many ms = "fly to it" (floor 4). */
 const NAME_DOUBLE_MS = 350;
 
@@ -114,9 +120,38 @@ const NAME_DOUBLE_MS = 350;
  */
 export function panelPlacement(glass, floor) {
   if (glass && floor === FLOOR_GLOBE) return { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: 'calc(100vh - 260px)' };
-  // Mac floor 4 (lane fix F3, 2026-11-18): while a radio message shows, the right column (NEXT) moves down under the radio box and sits at
-  // y 153-215 (measured 1728x1117); the panel at 176 covered 39 px of it. 224 clears it by 9 px; with no message NEXT is at y 10-73.
-  return { top: !glass && floor === FLOOR_GLOBE ? '224px' : '176px', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
+  // Mac floor 4 (lane sky-skylook-1119, owner 2026-11-19: "move the right panel to top right to improve visibility of the object cloud"):
+  // the panel's top edge is 12 px from the top. The radio box and NEXT that sat there move out of its way (see `SKY_PANEL_TOP_CLASS`).
+  if (!glass && floor === FLOOR_GLOBE) return { top: 'calc(12px + env(safe-area-inset-top, 0px))', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
+  return { top: '176px', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
+}
+
+/**
+ * Mac floor 4: the panel sits at the top right, so the radio box (`#hud-comms-panel`) and the right column (NEXT, `#hud-right-column`),
+ * which live there, move DOWN to just under it (lane sky-skylook-1119). Measured (tmp/sky10-look/probe-rects.js, 1728 x 1117, dots not
+ * hidden by Earth): moved to the LEFT of the panel the 600 px wide radio box covered 1,555 dots and NEXT 260-288; moved below, 519-882 and
+ * 26-157 (panel closed / card open). Below wins on both, and it is the side that never reaches Earth. How: `<html data-sky-panel-top>`
+ * and `--sky-panel-dy` (the panel's bottom + 12 px) feed the one rule below; the individual `translate` property sits outside the HUD's
+ * own `scale` and `transform` (index.html), so neither is disturbed. Set only while the panel shows with a mouse on floor 4 or 5 (floor 5: the panel keeps top 176 px; the column's Targets / Target info panes dodge too).
+ */
+export const SKY_PANEL_TOP_ATTR = 'data-sky-panel-top';
+export const SKY_PANEL_DY_VAR = '--sky-panel-dy';
+export const SKY_PANEL_STYLE_ID = 'real-sky-panel-dodge-style';
+export const SKY_PANEL_TOP_CSS = `html[${SKY_PANEL_TOP_ATTR}] #hud-comms-panel, html[${SKY_PANEL_TOP_ATTR}] #hud-right-column { translate: 0 var(${SKY_PANEL_DY_VAR}, 0px); }`;
+/** Gap between the panel's bottom edge and the radio box / NEXT under it, px. */
+export const SKY_PANEL_GAP_PX = 12;
+/**
+ * How far the dodge rule has moved the radio box and the right column down right now, px (0 when it is off). HUD reads it so the right
+ * column's layout top (radio box bottom + 10) is measured without the radio box's own translate: both carry the same one, and counting it
+ * twice left the Targets pane 166 px too low (and NEXT off the screen with a card open; measured 1728 x 1117, lane sky-skylook-1119 D7).
+ * @param {Document|null} [doc]
+ * @returns {number}
+ */
+export function skyPanelDodgePx(doc = typeof document !== 'undefined' ? document : null) {
+  const el = doc && doc.documentElement;
+  if (!el || !el.hasAttribute || !el.hasAttribute(SKY_PANEL_TOP_ATTR) || !el.style) return 0;
+  const v = parseFloat(el.style.getPropertyValue(SKY_PANEL_DY_VAR));
+  return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
 const PANEL_CSS = [
@@ -150,6 +185,9 @@ export class RealSkyCard {
     this._statusJoined = false;
     this._loadFailed = false;
     this._els = {};
+    this._dodgeOn = false;                // <html data-sky-panel-top> is set (the radio box and NEXT are moved under the panel)
+    this._dodgeDy = NaN;                  // the --sky-panel-dy written now, px
+    this._ro = null;
   }
 
   /** The layer wires these: onSearch(query) => row index or -1; onClose() => void; onToggleKind(name) flips a legend box; isKindHidden(name) => bool (the boxes read it); onFlyName() turns floor 4's globe to the open object. */
@@ -261,6 +299,8 @@ export class RealSkyCard {
 
     root.append(input, msg, fail, card, legend, credit);
     d.body.appendChild(root);
+    // A size change the render calls do not see (the full credit wording opened, a late font) moves the panel's bottom too.
+    if (typeof ResizeObserver !== 'undefined') { try { this._ro = new ResizeObserver(() => this._syncDodge()); this._ro.observe(root); } catch (_) { this._ro = null; } }
     Object.assign(this._els, { root, input, msg, card, nameEl, dot, body, credit, legend, legendItems, fail });
     // A double-click or double-tap on the object's name turns floor 4's globe to it (two clicks within 350 ms; a click fires for mouse and finger).
     let lastNameClick = -Infinity;
@@ -279,7 +319,7 @@ export class RealSkyCard {
    * @param {number|null} floor
    */
   setLayout(glass, floor) {
-    const g = glass === true, f = floor === FLOOR_GLOBE ? FLOOR_GLOBE : null;
+    const g = glass === true, f = floor === FLOOR_GLOBE ? FLOOR_GLOBE : (floor === FLOOR_CHART ? FLOOR_CHART : null);
     if (g === this._glass && f === this._floor && this._placed) return;
     this._glass = g;
     this._floor = f;
@@ -296,6 +336,36 @@ export class RealSkyCard {
     root.style.bottom = p.bottom;
     root.style.maxHeight = p.maxHeight;
     this._placed = true;
+    this._syncDodge();
+  }
+
+  /**
+   * Mouse + floor 4 or 5 + showing: put the radio box, NEXT and the Targets / Target info panes under the panel (attribute + the panel's
+   * bottom + SKY_PANEL_GAP_PX as a CSS variable on <html>); in every other state take it all back. Floor 5 (D7, review of 2026-11-19):
+   * the panel stays at top 176 px, right 12 px, 272 px wide, over `#hud-right-column` (right 0, 350 px), and `+` after a scan shows the
+   * panes there as on floor 4 (no floor test in the `+` walk: PaneDensity, HUD `_densityIsAvailable`), so the same dodge applies. Writes
+   * only on change; reads the panel's rect only here (a show, a re-render, a size change), never per frame.
+   */
+  _syncDodge() {
+    const d = this._doc, de = d && d.documentElement;
+    if (!de || !de.style || typeof de.setAttribute !== 'function') return;
+    const root = this._els.root;
+    const on = !!root && this._shown && !this._glass && (this._floor === FLOOR_GLOBE || this._floor === FLOOR_CHART);
+    if (!on) {
+      if (this._dodgeOn) { de.removeAttribute(SKY_PANEL_TOP_ATTR); de.style.removeProperty(SKY_PANEL_DY_VAR); this._dodgeOn = false; this._dodgeDy = NaN; }
+      return;
+    }
+    if (!this._dodgeStyle && d.head && d.createElement) {
+      const st = d.createElement('style');
+      st.id = SKY_PANEL_STYLE_ID;
+      st.textContent = SKY_PANEL_TOP_CSS;
+      d.head.appendChild(st);
+      this._dodgeStyle = st;
+    }
+    const r = typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null;
+    const dy = Math.round((r && r.bottom) || 0) + SKY_PANEL_GAP_PX;
+    if (!this._dodgeOn) { de.setAttribute(SKY_PANEL_TOP_ATTR, ''); this._dodgeOn = true; }
+    if (dy !== this._dodgeDy) { de.style.setProperty(SKY_PANEL_DY_VAR, `${dy}px`); this._dodgeDy = dy; }
   }
 
   /** Whether the CelesTrak status was joined into the data: when not, no dot is working or dead, so those two legend entries are hidden. */
@@ -317,7 +387,7 @@ export class RealSkyCard {
     e.legend.style.display = this._loadFailed ? 'none' : 'grid';
     e.credit.style.display = this._loadFailed ? 'none' : 'block';
     CLASS_NAMES.forEach((n, i) => {
-      const hide = (i === CLS_DEAD || i === CLS_WORKING) && !this._statusJoined;
+      const hide = (i === CLS_DEAD || i === CLS_WORKING || i === CLS_STARLINK) && !this._statusJoined;   // Starlink is a working satellite: no status, no Starlink
       const item = e.legendItems[i];
       item.style.display = hide ? 'none' : 'flex';
       item.style.minHeight = this._glass ? '44px' : '22px';
@@ -326,19 +396,21 @@ export class RealSkyCard {
       item.setAttribute('aria-checked', off ? 'false' : 'true');
       item.children[0].textContent = off ? '' : '\u2713';
     });
+    this._syncDodge();                              // the panel's height may have changed (rows shown or hidden)
   }
 
   show() {
     if (this._isGlass) this._glass = this._isGlass() === true;
     this._build();
     this._shown = true;
-    this._place();
     if (this._els.root) this._els.root.style.display = 'block';
+    this._place();
   }
 
   hide() {
     this._shown = false;
     if (this._els.root) this._els.root.style.display = 'none';
+    this._syncDodge();
     if (this._els.input && this._doc && this._doc.activeElement === this._els.input) this._els.input.blur();
   }
 
@@ -394,7 +466,7 @@ export class RealSkyCard {
     this._renderCredit();
     const i = this._info;
     e.card.style.display = i ? 'block' : 'none';
-    if (!i) return;
+    if (!i) { this._syncDodge(); return; }
     e.dot.style.background = CLASS_COLORS[i.cls] || CLASS_COLORS[5];
     e.nameEl.textContent = i.name;
     const rows = [
@@ -420,5 +492,6 @@ export class RealSkyCard {
     asOf.style.cssText = 'margin-top:3px;color:#8392b3';
     asOf.textContent = i.asOf;
     e.body.append(asOf);
+    this._syncDodge();                              // a card opened or closed: the panel's bottom moved
   }
 }

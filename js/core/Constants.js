@@ -15,13 +15,13 @@ export const Constants = {
   // --- VERSION ---
   // VERSION is the raw value; VERSION_LABEL is the exact string the UI renders. NON-module consumers (e.g. sw.js
   // cache name) must be updated by hand — keep them in sync here.
-  VERSION: '1.08',
-  VERSION_LABEL: 'V1.08',
+  VERSION: '1.09',
+  VERSION_LABEL: 'V1.09',
 
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as ?v=<DATA_VERSION>). Deliberately SEPARATE
   // from VERSION: a curated-content edit must invalidate cached JSON without moving the release number. Bump it on
   // every ./data/ content change; leave VERSION for actual releases.
-  DATA_VERSION: '1118',   // V1.08 release, owner 2026-11-18
+  DATA_VERSION: '1119',   // V1.09 release (whats-new.json changed), 2026-11-19
   // owner 2026-09-08: the T1 nose-collar card is the DOCKING COLLAR card (docking_berthing.hardwareNames). The DAUGHTER
   // STRUTS card (daughter cradle struts callout) was appended to that list later, no entries added: DECISIONS §13 r4.
 
@@ -6501,9 +6501,11 @@ export const Constants = {
     // Floors 4-5 (the map floors) at rest (sky-speed-1119, owner 2026-11-19 "BL2 uses only 10 % of GPU"). Measured on the
     // dev Mac (Apple M5 Max, headless ANGLE-Metal, tmp/speed1119/table.md): floor 4 at rest cost 3-9 ms of GPU per frame at 60
     // draws/s (session to session; 17-53 % busy), 3-5 ms of it the bloom mip chain. At 30 draws/s with bloom skipped it is 4-10 % busy.
-    // At the real-speed clock nothing on the map moves fast enough to need 60 fps, so the map floors
-    // draw at MAP_REST_FPS and skip bloom; input, rides, drags, the view return, a fly-to and a map clock of MAP_FULL_RATE_STEP
+    // The map clock starts at x10 (since sky-speed-1119 / Sky 9, 0cb9b7f0), where nothing on the map moves fast enough to need
+    // 60 fps, so the map floors
+    // draw at MAP_REST_FPS and skip bloom; input, rides, the view return, a fly-to and a map clock of MAP_FULL_RATE_STEP
     // (x100) or faster all go back to the full draw rate (FrameSched.mapRest decides; main.js feeds it); bloom stays off there.
+    // A drag's coast is not one of them: after BOOST_MS without input it also draws at MAP_REST_FPS (the owner approved that look).
     MAP_REST_FPS: 30,
     MAP_FLOORS: [4, 5],        // = FloorContract.TIME_RULES.MAP_CLOCK_FLOORS
     MAP_FULL_RATE_STEP: 3,     // map clock step index (MAP_CLOCK_STEPS: pause 0, real 1, x10 2, x100 3, x1000 4)

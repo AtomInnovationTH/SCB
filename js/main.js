@@ -2685,8 +2685,8 @@ async function init() {
       // GAME_STATE_CHANGE → MENU below. A CONTINUE disarms this on PERSISTENCE_LOADED (above). The first-run bit
       // (_introFirstRun) gates only the GestureSplash.
       if (_introRideAllowed() && !_introFlown) {
-        // Opening dance: while it runs, the flyby is the dance's: the dive lands CLOSE on the hull (z01 0.23 ≈ 2.67 m)
-        // as the petals crack, the dwell's dolly drifts out to z01 0.82 ≈ 5.59 m through the wings' roll-out (2.0 s,
+        // Opening dance: while it runs, the flyby is the dance's: the dive lands CLOSE on the hull (z01 0.23 ≈ 2.575 m)
+        // as the petals crack, the dwell's dolly drifts out to z01 0.82 ≈ 4.923 m through the wings' roll-out (2.0 s,
         // ending before the 8.70 s hand-over), and OPENING_DANCE_HANDOVER (the listener right below) ends the dwell the
         // moment the wings are out; dwellMs is only the CEILING (hand-over + 2 s) for a dropped event, never the
         // duration. Flag OFF (Constants.FEATURE_FLAGS.OPENING_DANCE): no dance runs and no hand-over ever fires, so arm
@@ -6266,14 +6266,10 @@ function gameLoop(timestamp) {
     // Floors 4-5 at a calm picture rest at MAP_REST_FPS (FrameSched.mapRest). Allocation-free reads (floorId, not getState).
     // Skipped ticks still advance gameplay time: lastTime moves on drawn ticks only, so realDt below spans the skipped ones.
     {
-      const _lad = (ladderController && ladderController.isActive() && !_planArgs.riding) ? ladderController.ladder : null;
-      const _mf = (_lad && _lad.floorId) ? _lad.floorId() : null;
-      const _lcam = (cameraSystem && cameraSystem._ladderCam) ? cameraSystem._ladderCam : null;
-      _mapRestArgs.floor = _mf;
-      _mapRestArgs.clockStep = mapClock.step();
-      _mapRestArgs.trip = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
-      _mapRestArgs.viewMotion = !!(_lcam && (_lcam.earthTurn || _lcam.leveling || (_lcam.viewReturn && _lcam.viewReturn.glide)));
-      _planArgs.mapRest = _mf != null && FrameSched.mapRest(_mapRestArgs);
+      _planArgs.mapRest = FrameSched.mapRestFrom(_mapRestArgs, {
+        ladderController, riding: _planArgs.riding, mapClock, gameFlowManager, cameraSystem, perf: Constants.PERF,
+      });
+      const _mf = _mapRestArgs.floor;
       _mapFloorSettled = (_mf != null && Constants.PERF.MAP_FLOORS.includes(_mf)) ? _mf : null;
     }
     _planArgs.periodMs = _rafPeriodMs;

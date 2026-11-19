@@ -29,7 +29,7 @@ import { Constants } from '../core/Constants.js';
 import { fetchData } from '../core/dataUrl.js';
 import { SkyPropagator, WGS72 } from '../systems/SkyPropagator.js';
 import { meoRadialMap, radiusPxForAltKm, chartTextBoxes, chartTextVersion } from './SdaChart.js';
-import { cardFields, CLASS_COLORS, CLASS_NAMES } from './RealSkyCard.js';
+import { cardFields, CLASS_COLORS, CLASS_NAMES, CLS_STARLINK, isStarlinkRow } from './RealSkyCard.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 
 export { CLASS_COLORS };
@@ -61,6 +61,11 @@ export const RING_EDGE_PX = 2;
 /** A double-tap on floor 4 (touch): two taps on the same dot within this many ms and CSS px turn the globe to it (a mouse uses the browser's `dblclick`). */
 export const DOUBLE_TAP_MS = 350;
 export const DOUBLE_TAP_PX = 24;
+/**
+ * The dive's peak dot opacity, 0.7 (owner 2026-11-19: the dive's dots are "too bright, too cartoonish"). Multiplies the dive's fade, so
+ * the fade's shape is unchanged.
+ */
+export const DIVE_PEAK = 0.7;
 
 const FLOOR_NAVCOM = 4;
 const FLOOR_SDA = 5;
@@ -194,7 +199,8 @@ export class RealSkyLayer {
     this._ctx = null;
     this._sx = null;
     this._sy = null;
-    this._cls = null;                   // Uint8Array(N): class per row, clamped to the 6 colours (floor 5 paints by class from it)
+    this._cls = null;                   // Uint8Array(N): class per row (0-5 the data's class, 6 = Starlink; floor 5 paints by class from it)
+    this._starlink = 0;
     this._lastPaintMs = -Infinity;      // -Infinity = repaint at once (a show, a selection change)
     this._lastPaintKey = '';
     this._lastPaintT = NaN;
@@ -232,6 +238,10 @@ export class RealSkyLayer {
   fetchCount() { return this._fetchCount; }
   loadState() { return this._loadState; }
   dotCount() { return this._rows.length; }
+  /** Rows drawn as the Starlink kind (computed at load). */
+  starlinkCount() { return this._starlink; }
+  /** Rows of each kind now drawn (index = CLASS_NAMES index), hidden kinds included; for tests and probes. */
+  kindCounts() { const out = new Array(CLASS_NAMES.length).fill(0); if (this._cls) for (let i = 0; i < this._cls.length; i++) out[this._cls[i]]++; return out; }
   rows() { return this._rows; }
   snapshotUtc() { return this._sky ? this._sky.snapshotUtc : null; }
   selected() { return this._selected; }
@@ -280,9 +290,11 @@ export class RealSkyLayer {
     this._cls = new Uint8Array(N);
     const c = new THREE.Color();
     const palette = CLASS_COLORS.map((h) => { c.setStyle(h); return [c.r, c.g, c.b]; });
+    this._starlink = 0;
     for (let i = 0; i < N; i++) {
       const k = sky.rows[i][2];
-      const ci = k >= 0 && k < palette.length ? k : palette.length - 1;   // an unknown class number draws as "unknown"
+      let ci = k >= 0 && k < CLS_STARLINK ? k : CLS_STARLINK - 1;   // an unknown class number draws as "unknown"
+      if (isStarlinkRow(sky.rows[i])) { ci = CLS_STARLINK; this._starlink++; }   // computed here, not in the data: no rebuild, no DATA_VERSION change
       this._cls[i] = ci;
       const p = palette[ci];
       col[3 * i] = p[0]; col[3 * i + 1] = p[1]; col[3 * i + 2] = p[2];
@@ -625,7 +637,9 @@ export class RealSkyLayer {
       sx[i] = cx + dx * r; sy[i] = cy + dy * r;
     }
     let n = 0;
-    for (let c = 0; c < CLASS_COLORS.length; c++) {
+    // Starlink first, so its dim dots lie under every other kind's (draw order = painting order here).
+    for (let o = 0; o < CLASS_COLORS.length; o++) {
+      const c = (o + CLS_STARLINK) % CLASS_COLORS.length;
       if (hide[c] === 1) continue;
       g.fillStyle = CLASS_COLORS[c];
       for (let i = 0; i < N; i++) {
@@ -720,7 +734,9 @@ export class RealSkyLayer {
   describe(i) {
     if (i < 0 || !this._prop) return null;
     const g = this._sky.gcatNames;
-    return cardFields(this._rows[i], this._prop.heightsKm(i), this._sky.snapshotUtc, g ? g[this._rows[i][0]] : undefined);
+    const f = cardFields(this._rows[i], this._prop.heightsKm(i), this._sky.snapshotUtc, g ? g[this._rows[i][0]] : undefined);
+    if (this._cls && this._cls[i] === CLS_STARLINK) f.cls = CLS_STARLINK;   // the card's dot wears the Starlink colour; its kind line still says "working satellite"
+    return f;
   }
 
   /** Open the card on row i (or close with -1), highlight its dot, draw its orbit (floor 4). */
@@ -952,8 +968,9 @@ export class RealSkyLayer {
   }
 
   /**
-   * Floor 4: draw only the rows whose kind is on. Nothing hidden = the plain non-indexed draw as before; otherwise an index of the
-   * visible rows (one Uint32 attribute, rebuilt only here, when the set changes) and a draw range of its length. No per-frame cost.
+   * Floor 4: which rows are drawn and in what order. The Starlink rows go first in the index, so every other kind's dots are drawn over
+   * them (the Points draw in index order, depthWrite off); a hidden kind is left out. With no Starlink rows and nothing hidden it is the
+   * plain non-indexed draw as before. One Uint32 attribute, rebuilt only here, when the set changes; no per-frame cost.
    */
   _applyHiddenDraw() {
     const geo = this._geo;
@@ -961,11 +978,12 @@ export class RealSkyLayer {
     const N = this._rows.length, cls = this._cls, hide = this._hideCls;
     let any = false;
     for (let k = 0; k < hide.length; k++) if (hide[k] === 1) any = true;
-    if (!any) { geo.setIndex(null); geo.setDrawRange(0, Infinity); return; }
+    if (!any && this._starlink === 0) { geo.setIndex(null); geo.setDrawRange(0, Infinity); return; }
     if (!this._idxAttr) this._idxAttr = new THREE.BufferAttribute(new Uint32Array(N), 1);
     const arr = this._idxAttr.array;
     let n = 0;
-    for (let i = 0; i < N; i++) if (hide[cls[i]] !== 1) arr[n++] = i;
+    if (hide[CLS_STARLINK] !== 1) for (let i = 0; i < N; i++) if (cls[i] === CLS_STARLINK) arr[n++] = i;
+    for (let i = 0; i < N; i++) if (cls[i] !== CLS_STARLINK && hide[cls[i]] !== 1) arr[n++] = i;
     this._idxAttr.needsUpdate = true;
     geo.setIndex(this._idxAttr);
     geo.setDrawRange(0, n);
@@ -1054,6 +1072,6 @@ export class RealSkyLayer {
     if (!this._points) return;
     const m = this._points.material;
     if (m.transparent !== true) { m.transparent = true; m.needsUpdate = true; }
-    m.opacity = v;
+    m.opacity = v * DIVE_PEAK;
   }
 }

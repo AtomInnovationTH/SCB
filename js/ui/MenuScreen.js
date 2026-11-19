@@ -23,6 +23,9 @@ import { buildWhatsNewCard, loadNotes, readNotice, markSeen, placeNotice } from 
 import { clamp } from '../core/MathUtil.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 
+// The title is off-white with no glow in the cockpit sans (B612 = --font-ui), same wide spacing; its version button and the line under
+// it are off-white at 60 % (owner pick 2026-11-19, DECISIONS §78: "Is SPACE COWBOY in bright green too 1980's arcade game?").
+
 /** The one line on the menu while the game switches to the new build by itself. */
 const UPDATE_NOTICE_TEXT = 'Updating to the new version\u2026';
 /** If the page is still here this long after the switch was asked for, give up: drop the notice, show the card (ms). */
@@ -330,8 +333,8 @@ export class MenuScreen {
            index.html has a global button:focus green outline; this button keeps its quiet look and shows focus only
            from the keyboard. Coarse pointer: a 44 px hit box by padding, undone by a negative margin. ── */
         #menu-version-btn:focus { outline: none; }
-        #menu-version-btn:focus-visible { color: #00ff88 !important; }
-        @media (hover: hover) { #menu-version-btn:hover { color: #00ff88 !important; } }   /* not on touch: a tap must not leave it lit */
+        #menu-version-btn:focus-visible { color: #e8ecf2 !important; }
+        @media (hover: hover) { #menu-version-btn:hover { color: #e8ecf2 !important; } }   /* not on touch: a tap must not leave it lit */
         #menu-version-btn:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
         #menu-version-btn .menu-version-more { font-size: 0.6em; letter-spacing: 0.08em; }
         #menu-version-btn .menu-version-dot {
@@ -538,12 +541,12 @@ export class MenuScreen {
 
         <!-- ══ HEADER (full-width, centered) ══ -->
         <div id="menu-header">
-          <h1 style="font-family: var(--font-mono); font-size:3.5rem; font-weight:700; color:#00ff88;
+          <h1 style="font-family: var(--font-ui); font-size:3.5rem; font-weight:700; color:#e8ecf2;
                       letter-spacing:0.3em; margin-bottom:0.5rem; white-space:nowrap;
-                      text-shadow: 0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3);">
-            SPACE COWBOY<span style="display:inline-block; width:0; white-space:nowrap; overflow:visible;"><button type="button" id="menu-version-btn" style="font-family:var(--font-ui); font-weight:inherit; font-size:0.5em; letter-spacing:0.1em; font-variant-numeric:tabular-nums; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6); background:none; border:none; padding:0; cursor:pointer; text-shadow:none; white-space:nowrap;">${Constants.VERSION_LABEL || ''}<span class="menu-version-more"> \u00B7 What's new</span><span class="menu-version-dot" aria-hidden="true"></span></button></span>
+                      text-shadow: none;">
+            SPACE COWBOY<span style="display:inline-block; width:0; white-space:nowrap; overflow:visible;"><button type="button" id="menu-version-btn" style="font-family:var(--font-ui); font-weight:inherit; font-size:0.5em; letter-spacing:0.1em; font-variant-numeric:tabular-nums; margin-left:0.4em; vertical-align:0.15em; color:rgba(232,236,242,0.6); background:none; border:none; padding:0; cursor:pointer; text-shadow:none; white-space:nowrap;">${Constants.VERSION_LABEL || ''}<span class="menu-version-more"> \u00B7 What's new</span><span class="menu-version-dot" aria-hidden="true"></span></button></span>
           </h1>
-          <div style="font-size:1.1rem; color:rgba(0,255,136,0.6); letter-spacing:0.15em;
+          <div style="font-size:1.1rem; color:rgba(232,236,242,0.6); letter-spacing:0.15em;
                        margin-bottom:1.5rem;">
             Active Debris Remediation (ADR)
           </div>

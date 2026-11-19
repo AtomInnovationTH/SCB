@@ -142,6 +142,10 @@ export function shortTargetHeightPx(step, glass, rows, expandedSelected, section
     + Math.max(0, sectionsPx || 0);
 }
 
+/** The one line the Targets pane shows when the player pulled it in before the first scan (owner 2026-11-19). Glass has no S key. */
+export const NO_SCAN_LINE = 'No scan yet. Press S to scan.';
+export const NO_SCAN_LINE_GLASS = 'No scan yet. Tap SCAN.';
+
 /** The live viewport height, or undefined headless (→ the tall-viewport rows). */
 function viewportHeight() {
   return (typeof window !== 'undefined' && window && Number.isFinite(window.innerHeight)) ? window.innerHeight : undefined;
@@ -476,7 +480,7 @@ export class TargetPanel {
     if (!panel) return;
     // Before the first scan the pane is held back by HUD's scan gate, not the density bit: a press here must not save
     // a hide the player never saw. Say when it comes, write nothing.
-    if (panel.hasAttribute('data-scan-wait')) {
+    if (panel.hasAttribute('data-scan-wait') && !panel.hasAttribute('data-scan-peek')) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Targets appear after your first scan (S)', priority: 'info', _reactive: true,
       });
@@ -994,6 +998,10 @@ export class TargetPanel {
   }
 
   _updateTargetList(cachedTargets, cachedUntracked, cachedActiveSats) {
+    // Before the first scan the pane lists nothing, whatever the field holds (nothing is known until S; DECISIONS §15 row 1):
+    // the player may pull it in with `+` (HUD data-scan-peek) and it then says so in one line.
+    const unscanned = !!(this.panels.targets && this.panels.targets.hasAttribute && this.panels.targets.hasAttribute('data-scan-wait'));
+    if (unscanned) { cachedTargets = []; cachedUntracked = []; cachedActiveSats = []; }
     this._lastTrackedCount = Array.isArray(cachedTargets) ? cachedTargets.length : 0;
     if (this._chrome && this._chrome.isMinimized) this._updateMinSummary();
 
@@ -1084,7 +1092,9 @@ export class TargetPanel {
       const netReachKm = Number(Constants.NET_LOCK_RANGE_M) / 1000;
 
       if (targets.length === 0) {
-        listEl.innerHTML = '<span style="opacity:0.4">No targets nearby</span>';
+        listEl.innerHTML = unscanned
+          ? `<span style="opacity:0.6">${this._glassNow() ? NO_SCAN_LINE_GLASS : NO_SCAN_LINE}</span>`
+          : '<span style="opacity:0.4">No targets nearby</span>';
         this._shownListPx = 0;
         this._shownRows = 1;   // the "No targets nearby" line takes one row's height
         this._applyTargetHeight();

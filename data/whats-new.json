@@ -1,9 +1,9 @@
 {
   "bullets": [
-    "Real sky: tracked debris and satellites, floors 4-5",
-    "Sun cycle and storms move debris pieces",
-    "Training missions 1-3 polished"
+    "Map: smooth dots, speed slider (pause to 1000×), tap a dot for orbit, double-tap to fly",
+    "Map: Starlink row and tick box; warm debris, grey working satellites; panel top right",
+    "Floors 2-3 show daughter reach; - and + show target panes before a scan; new title look"
   ],
-  "release": "2026-11-18",
-  "version": "1.08"
+  "release": "2026-11-19",
+  "version": "1.09"
 }

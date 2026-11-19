@@ -77,7 +77,9 @@ export class FrameSched {
    * Is the engaged floor a map floor (4-5) whose picture is calm enough for the lower rest rate? True only on a map floor
    * (`perf.MAP_FLOORS`) with the map clock below `perf.MAP_FULL_RATE_STEP` (x100: a dot would jump about a pixel per frame at
    * 30 fps), no fly-to / trip burn, and no view motion of the camera's own (the 15 s view return gliding, a floor-4 framing
-   * turn). Input, rides and drags are NOT read here: plan() already boosts those to native.
+   * turn). Input and rides are NOT read here: plan() boosts those to native whatever this says. A drag's coast is not read
+   * here either, and plan() reads `dragLive` only under a held world (cover 'partial'): on a map floor a turntable coast
+   * drops to MAP_REST_FPS once BOOST_MS has passed since the last input (owner approved that look 2026-11-19).
    * @param {{floor:(number|null), clockStep:number, trip:boolean, viewMotion:boolean, perf:object}} a
    * @returns {boolean}
    */
@@ -85,6 +87,27 @@ export class FrameSched {
     if (floor == null || !perf || !Array.isArray(perf.MAP_FLOORS) || !perf.MAP_FLOORS.includes(floor)) return false;
     if (trip || viewMotion) return false;
     return !(clockStep >= perf.MAP_FULL_RATE_STEP);
+  }
+
+  /**
+   * The per-frame feed for mapRest, built from the live sources (main.js calls this once per rAF with the one reused `out`
+   * object, so nothing allocates). Fills `out` {floor, clockStep, trip, viewMotion, perf} and returns mapRest(out).
+   * floor: the settled ladder floor (null when the ladder is off, inactive, or a ride is in flight); clockStep: the map
+   * clock's step index; trip: a trip burn is running; viewMotion: the ladder camera's own motion (a floor-4 framing turn
+   * `earthTurn` / `leveling`, or the 15 s view return gliding: `viewReturn.glide`; a camera fly-to to a dot (RealSkyLayer.flyTo → CameraSystem.ladderTurnEarthDir → earthTurn) is `viewMotion` too).
+   * @param {object} out reused args object
+   * @param {{ladderController:object, riding:boolean, mapClock:{step:()=>number}, gameFlowManager:object, cameraSystem:object, perf:object}} src
+   * @returns {boolean} the calm-map-floor answer
+   */
+  static mapRestFrom(out, { ladderController, riding, mapClock, gameFlowManager, cameraSystem, perf }) {
+    const lad = (ladderController && ladderController.isActive() && !riding) ? ladderController.ladder : null;
+    const lcam = (cameraSystem && cameraSystem._ladderCam) ? cameraSystem._ladderCam : null;
+    out.floor = (lad && lad.floorId) ? lad.floorId() : null;
+    out.clockStep = mapClock.step();
+    out.trip = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
+    out.viewMotion = !!(lcam && (lcam.earthTurn || lcam.leveling || (lcam.viewReturn && lcam.viewReturn.glide)));
+    out.perf = perf;
+    return out.floor != null && FrameSched.mapRest(out);
   }
 
   /**

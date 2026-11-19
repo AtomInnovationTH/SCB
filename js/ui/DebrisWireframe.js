@@ -51,6 +51,8 @@ const HEADER_COLOR = 'rgba(0, 255, 136, 0.7)';
 const TYPE_COLOR = VisualLaw.COLORS.INFO;
 const INFO_COLOR = VisualLaw.COLORS.PLAYER;
 const DIM_COLOR = 'rgba(0, 255, 136, 0.5)';
+/** The one line the Target info pane draws when pulled in before the first scan with nothing selected (owner 2026-11-19). */
+export const NOTHING_SELECTED_LINE = 'Nothing selected.';
 const SEPARATOR_COLOR = 'rgba(0, 255, 136, 0.3)';
 
 const TYPE_LABELS = {
@@ -1325,8 +1327,8 @@ export class DebrisWireframe {
    * Falls back to a plain canvas hide when floating (no container / no min line).
    */
   toggleMinimized() {
-    // Held back until the first scan (HUD's scan gate): say when it comes, fold nothing.
-    if (this._container && this._container.hasAttribute('data-scan-wait')) {
+    // Held back until the first scan (HUD's scan gate): say when it comes, fold nothing. (Pulled in with `+`: it is on screen, so 9 works.)
+    if (this._container && this._container.hasAttribute('data-scan-wait') && !this._container.hasAttribute('data-scan-peek')) {
       // In mission 1, after the scan it waits for the player's analyse (Z).
       const analyse = typeof this._container.getAttribute === 'function' && this._container.getAttribute('data-scan-wait') === 'analyse';
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1451,6 +1453,16 @@ export class DebrisWireframe {
     ctx.font = mono(13, 'bold');
     ctx.textAlign = 'center';
     ctx.fillStyle = HEADER_COLOR;
+
+    // Pulled in with `+` before the first scan (HUD data-scan-peek, owner 2026-11-19) and nothing selected: one plain line,
+    // not the satellite self-view (that shows once the scan has run).
+    if (this._showingADR && this._container && this._container.hasAttribute
+      && this._container.hasAttribute('data-scan-wait')) {
+      ctx.fillText('TARGET INFO', WIRE_CX, 15);
+      ctx.fillStyle = DIM_COLOR;
+      ctx.fillText(NOTHING_SELECTED_LINE, WIRE_CX, 90);
+      return;
+    }
 
     if (this._showingADR) {
       ctx.fillText('YOUR SATELLITE', WIRE_CX, 15);

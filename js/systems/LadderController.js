@@ -75,7 +75,7 @@ export const INTRO_PULLBACK_MS = 800;
  * Opening-dance flyby camera figures, passed by the hub to `armIntroRide`. They are CAMERA numbers (the dance owns
  * WHEN, the ladder owns WHERE), quoted against the 7 m F1/F2 boundary.
  *
- * Landing z01 0.23 → 2.67 m on F1; drift end 0.82 → 5.59 m; both strictly inside the free zone (0.15–0.85) so the
+ * Landing z01 0.23 → 2.575 m on F1; drift end 0.82 → 4.923 m (measured with distanceFromZ01); both strictly inside the free zone (0.15–0.85) so the
  * settle-back rule never yanks them to a wall edge. The dolly is 2.0 s (DECISIONS §15 row 4): it must END before the
  * dance's hand-over (8.70 s), which pulls the camera back. Measured (2026-11-19, game clock): the ladder engages ~0.03 s after
  * the cut (dance t 2.73) and the 2.4 s switch-off ride lands near dance t 5.13, so a 2.0 s drift ends ~7.13 (about 1.6 s margin).
@@ -83,6 +83,16 @@ export const INTRO_PULLBACK_MS = 800;
  */
 export const INTRO_DANCE_LANDING_Z01 = 0.23;
 export const INTRO_DANCE_DRIFT_Z01 = 0.82;
+/**
+ * Where the OPENING DIVE (`?dive=1` only) lands: z01 0.85, the far edge of floor 1's free zone (1 - WALL_ZONE_FRAC), never
+ * the normal opening's close 0.23. The dive has no dolly, so the pull-back starts from the landing point, and its first frames
+ * run on floor 2, whose near clip is 3 m. Measured 2026-11-19 (tmp/sky10-keys/before, camera to ship centre / nearest hull
+ * surface): landing at 0.23 was 2.58 m / 1.50 m and the pull-back began at 2.59 m / 1.52 m, so the hull sat inside that 3 m
+ * near clip: "mother view starts partialy inside mother, too close" (owner 2026-11-19, DECISIONS section 78). At 0.85 the
+ * landing is 5.09 m / 4.0 m (3 m near clip plus 1 m), and every later frame is farther out. Any z01 above 0.85 is wall zone,
+ * where the ladder's settle-back would creep the camera in.
+ */
+export const INTRO_DIVE_LANDING_Z01 = 0.85;
 export const INTRO_DANCE_DOLLY_MS = 2000;
 /**
  * The engage-lag budget of the intro dive after the cut, ms, used by test-StartPose's dolly pin. It is the OLD budget figure
@@ -91,12 +101,12 @@ export const INTRO_DANCE_DOLLY_MS = 2000;
  */
 export const INTRO_DANCE_ENGAGE_LAG_MS = 1000;
 /**
- * Where the pull-back leaves the camera when the player takes the wheel: z01 0.17 on F2 = **11 m** (owner 2026-09-21:
- * "closer", asked for 10 m). Not 10 m: F2 runs 7–100 m, so 10 m is z01 0.134, INSIDE the lower wall zone
- * (`WALL_ZONE_FRAC` 0.15); settle-back (`ZoomLadder._tick`) would snap an idle wall-zone position to the wall edge after
- * `SETTLE_IDLE_MS` (250 ms), a visible creep to 10.43 m. 10.431 m is the hard floor; 11 m clears it by z01 0.02 (10.5 m
- * by 0.0025, float dust). Measured: `distanceFromZ01(F2, 0.17)`.
- * Default (non-dance) intro rides keep the contract's ENTRY_Z01_FROM_BELOW 0.25 → 13.61 m.
+ * Where the pull-back leaves the camera when the player takes the wheel: z01 0.17 on F2 = **9.68 m** (owner 2026-09-21:
+ * "closer", asked for 10 m). Measured 2026-11-19 with `distanceFromZ01`: F2 runs 6–100 m, so 10 m is about z01 0.18, in
+ * the free zone, and the wall edge (`WALL_ZONE_FRAC` 0.15) is 9.15 m. 0.17 is 0.02 above that edge, so settle-back
+ * (`ZoomLadder._tick`, after `SETTLE_IDLE_MS` 250 ms) does not move it; an idle position below 0.15 (under 9.15 m)
+ * would creep out to the edge.
+ * Default (non-dance) intro rides keep the contract's ENTRY_Z01_FROM_BELOW 0.25 → 12.12 m.
  */
 export const INTRO_DANCE_HANDOVER_Z01 = 0.17;
 /**
@@ -1095,7 +1105,7 @@ export class LadderController {
    * has no top / landing floor, or when the placement fails.
    *
    * Opening-dance options; absent → the plain flyby (pinned):
-   *   `entryZ01` — the DIVE's landing z01 (null → the floor rule); the dance arms 0.23 (2.67 m on F1).
+   *   `entryZ01` — the DIVE's landing z01 (null → the floor rule); the dance arms 0.23 (2.575 m on F1).
    *   `dwellMs` — the dwell CEILING, not its duration (INTRO_DWELL_MS when absent): the hand-over event ends the dwell via
    *     endIntroDwellEarly(); this only fires the pull-back if the event is dropped. The dance arms dance-total + 2 s.
    *   `dolly` — `{ toZ01, rideMs }`: a silent within-floor ride (ZoomLadder.dollyTo) fired by _introTick ITSELF on the
@@ -1105,8 +1115,9 @@ export class LadderController {
    *     ENTRY_Z01_FROM_BELOW.
    *   `pullbackMs` — the pull-back's duration. Absent ⇒ INTRO_PULLBACK_MS.
    *   `dive` — the OPENING DIVE (test switch `?dive=1`): the armed ride is the long dive (the caller passes `rideMs`
-   *     INTRO_DIVE_MS), the dwell's dolly is dropped (the hand-over starts the pull-back from the hull), and the ride
-   *     flies with INTRO_DIVE_FAR_U as its far plane. See diveInFlight() / finishDive().
+   *     INTRO_DIVE_MS), the dwell's dolly is dropped (the hand-over starts the pull-back from where the dive landed, which is
+   *     INTRO_DIVE_LANDING_Z01 whatever `entryZ01` says), and the ride flies with INTRO_DIVE_FAR_U as its far plane. See
+   *     diveInFlight() / finishDive().
    * @param {{ rideMs?: number, entryZ01?: number, dwellMs?: number,
    *           dolly?: { toZ01: number, rideMs?: number },
    *           handoverZ01?: number, pullbackMs?: number, dive?: boolean,
@@ -1153,6 +1164,7 @@ export class LadderController {
     if (dive === true) {
       this._introDive = true;
       this._introDolly = null;   // the dive replaces the dwell's drift
+      this._introEntryZ01 = INTRO_DIVE_LANDING_Z01;   // and lands out at the drift's end, never inside the near clip of the pull-back
     }
     return true;
   }
@@ -1489,7 +1501,7 @@ export class LadderController {
       const ms = this._introPending;
       this._introPending = null;
       const t = (tMs === undefined) ? this._now() : tMs;
-      // The dive's landing z01 override: null passes the core its geometry default; 0.23 lands close on the hull (2.67 m).
+      // The dive's landing z01 override: null passes the core its geometry default; 0.23 lands close on the hull (2.575 m).
       const entryZ01 = this._introEntryZ01;
       this._introEntryZ01 = null;
       const decisions = (typeof this._ladder.ceremonyRide === 'function')

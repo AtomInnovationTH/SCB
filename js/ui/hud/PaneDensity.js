@@ -45,6 +45,8 @@
  * @property {string}  label              Human label used in the feedback line.
  * @property {() => boolean} isVisible     Live "is this pane on screen right now?"
  * @property {(v: boolean) => void} setVisible  Show (true) / hide (false) the pane.
+ * @property {() => void} [reveal]        The player's own show (`+`, slider, restore) when it differs from setVisible(true):
+ *   the Targets and Target info panes lift their first-scan wait only here, never when a floor's room applies them.
  * @property {boolean} [world]            Scene/world rung — does NOT count as
  *   HUD chrome (`hudClear()` ignores it).
  * @property {DensityRung[]} [members]    Composite members (absent on a leaf).
@@ -318,7 +320,7 @@ export class PaneDensity {
     for (let i = this.rungs.length - 1; i >= 0; i--) {
       const rung = this.rungs[i];
       if (this._safeVisible(rung)) continue;
-      rung.setVisible(true);
+      this._show(rung);
       if (this._onFlip) this._onFlip(rung.id, true);    // AFTER the bit flip
       flipped = rung;
       if (this._safeVisible(rung)) { shown = rung; break; }
@@ -391,7 +393,7 @@ export class PaneDensity {
     for (const id of stash) {
       const rung = this.rungs.find((r) => r && r.id === id);
       if (!rung || this._safeVisible(rung)) continue;
-      rung.setVisible(true);
+      this._show(rung);
       if (this._onFlip) this._onFlip(rung.id, true);
       shown++;
     }
@@ -408,6 +410,16 @@ export class PaneDensity {
   dropStash() { this._stash = null; }
 
   hasStash() { return !!(this._stash && this._stash.length); }
+
+  /**
+   * @private The player's own show (`+`, the touch slider, a clean-view restore): a rung with a `reveal` adapter runs that,
+   * else setVisible(true). `reveal` is how the Targets and Target info panes appear BEFORE the first scan (owner
+   * 2026-11-19): a floor's room applies `setVisible(true)` and leaves them waiting; only the player's own `+` lifts the wait.
+   */
+  _show(rung) {
+    if (typeof rung.reveal === 'function') rung.reveal();
+    else rung.setVisible(true);
+  }
 
   /** @private visible, or hidden by the ladder (see availableCount). Throwing adapter = not a slot. */
   _safeAvailable(rung) {
