@@ -218,8 +218,23 @@ export const FloorContract = {
       id: 4,
       name: 'LEO',           // player label; instrument name NAVCOM
       anchor: 'earth',
-      // 1.1-4 R_E: 70..255 u (R_E = Constants.EARTH_RADIUS = 63.71 u).
-      camera: { distU: [70, 255], rangeLog10: logRange(70, 255), fov: 45, near: 0.05, far: 500, upFrame: 'earth-north' },
+      // 1.1-7.8 R_E (R_E = Constants.EARTH_RADIUS = 63.71 u). Owner 2026-11-19 (DECISIONS §79 row 1): floor 4 keeps zooming
+      // out smoothly instead of crossing to floor 5. The range's top is 707 u so that the free zone's top (z01 0.85, the
+      // wall edge, a hard stop here: the 4->5 crossBlock in LadderController) lands at 500 u, floor 5's inner limit.
+      // Until 2026-11-19 the range was [70, 255] (free zone 85..210 u); `entryZ01` below keeps the arrivals where they were.
+      // far 1200: the farthest thing drawn from the camera at 500 u is a GEO-shell dot on the far side (421.6 + 500 = 922 u);
+      // the Moon and planets follow the camera on this floor (SunLight), as the star shell does. `frameMaxU` is the NAVCOM
+      // framing's own limit: the old free zone's top (70 * (255/70)^0.85 = 210.1 u), unchanged by the longer range.
+      // The wheel feel is today's (fix round 1, Z3): the range grew from 0.561 to 1.004 decades, and the ladder moves z01 (a
+      // fraction of the range) per notch, so `wheelStepScale` (old span / new span, 0.559) keeps every notch the old 1.053x, and
+      // `wallLoFrac` (0.15 of the old range, 0.0838 of the new) keeps the inner wall edge, the closest steady zoom, at the old 85.0 u
+      // (the outer edge is the 500 u hard stop, 0.85). ZoomLadder reads both for this floor; other floors use the shared values.
+      camera: { distU: [70, 707], rangeLog10: logRange(70, 707), fov: 45, near: 0.05, far: 1200, upFrame: 'earth-north', frameMaxU: 70 * Math.pow(255 / 70, 0.85),
+        wheelStepScale: Math.log10(255 / 70) / Math.log10(707 / 70), wallLoFrac: 0.15 * Math.log10(255 / 70) / Math.log10(707 / 70) },
+      // Arrival z01 (overrides LADDER_GEOMETRY.ENTRY_Z01_*): fromBelow 0.152 = 99.1 u (was 0.25 of the old range = 96.7 u;
+      // the free zone now starts at 0.0838 = 85 u), fromAbove
+      // 0.42 = 184.9 u (was 0.75 of the old range = 184.6 u).
+      entryZ01: { fromBelow: 0.152, fromAbove: 0.42 },
       humps: { inFirmness: 1.6 },
       timeCap: 0.1, // real speed (1 game s per real s); was 20 (200x) until 2026-11-18. The map clock slider picks faster.
       fidelity: { nearField: false, physicsMode: 'warp-moid', debrisMode: 'clusters' },

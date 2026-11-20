@@ -549,7 +549,7 @@ export class NavcomFloor {
    * @param {number} [a.viewW]      default: window.innerWidth
    * @param {number} [a.viewH]      default: window.innerHeight
    * @param {Array} [a.rects]       default: hudPanelRects()
-   * @param {number} [a.maxDistU]   default: the floor's free-zone top (z01 0.85, 210.1 u)
+   * @param {number} [a.maxDistU]   default: the floor's framing limit, FloorContract floor 4 `camera.frameMaxU` (210.1 u)
    * @returns {{mode:string, dir:object, distU:number, dShell:number, rhoPx:number}|null}
    */
   framing({ shipPos, shipVel, project, fovDeg, viewW, viewH, rects, maxDistU } = {}) {
@@ -565,8 +565,11 @@ export class NavcomFloor {
     const d = (this._focusDesc && this._focusDesc.id === focused.id) ? this._focusDesc : null;
     const lines = d ? [d.label, d.estimate].filter(Boolean) : [ClusterIcons.nameLine(focused)];
     const foot = ClusterIcons.footprint({ ringPx: d ? d.ringPx : ClusterIcons.ringPx(focused.count, true), lines });
+    // The framing keeps today's reach (210.1 u, the old free zone's top): the floor's zoom now goes out to 500 u, but the
+    // framing never zooms that far on its own (it would jump 210 -> ~400 u). FloorContract floor 4 `camera.frameMaxU`.
     const max = Number.isFinite(maxDistU) ? maxDistU
-      : distanceFromZ01(FLOOR, 1 - FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC);
+      : (Number.isFinite(FLOOR.camera.frameMaxU) ? FLOOR.camera.frameMaxU
+        : distanceFromZ01(FLOOR, 1 - FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC));
     return earthFrame({
       ship: shipPos, field, shipVel,
       fovDeg: Number.isFinite(fovDeg) ? fovDeg : FLOOR.camera.fov,

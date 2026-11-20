@@ -51,7 +51,7 @@ export function curveDirLvlh(o) {
   const plan = planLaunch({
     R: [r, 0, 0], V: [0, n * r, 0], dd: [0, 0, 0], dtgt: [px, py, pz],
     ut: [vx - n * py, vy + n * px, vz],
-    speedPhys: o.speedGame / TimeAuthority.BASE_SCALE, maxRangeM: o.tetherMax * CW_FLIGHT.TETHER_FRACTION,
+    speedPhys: o.speedGame / TimeAuthority.armScale(), maxRangeM: o.tetherMax * CW_FLIGHT.TETHER_FRACTION,   // the arm's own scale (1 under the ladder's real-speed clock, DECISIONS §70 row 6), so the pair rule plans what the spring will take
   });
   return plan ? { dir: plan.dir, T: plan.T } : null;
 }

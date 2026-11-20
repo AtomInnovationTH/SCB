@@ -1848,7 +1848,7 @@ export class DebrisField {
    */
   static _advanceTumble(debris, dt, maxVisualRad) {
     if (debris._capturedByArm || debris._armPinned) return; // cinched — no tumble
-    const visualRate = Math.min(debris.tumbleRate * TimeAuthority.BASE_SCALE, maxVisualRad);
+    const visualRate = Math.min(debris.tumbleRate * TimeAuthority.worldClockScale(), maxVisualRad);   // BASE_SCALE at home; the world's real speed while a daughter is out (§70 row 6)
     debris.tumbleAngle += visualRate * dt;
   }
 

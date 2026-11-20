@@ -130,6 +130,12 @@ const WORKBENCH_FLOOR = 1;
  */
 const INTRO_LANDING_FLOOR = 2;
 
+/** The one crossing a zoom may never make (owner 2026-11-19): floor 4 up to floor 5. Floor 5 to 4 by zooming in stays. */
+export const F4_OUTER_BLOCK = { FROM: 4, TO: 5 };
+
+/** Floor 4's range before 2026-11-19 (scene units), the scale an older save's z01 was written on (see restoreView). */
+const LEGACY_F4_RANGE = { FLOOR: 4, MIN_U: 70, MAX_U: 255 };
+
 /**
  * Is `z01` a FREE-zone rest, strictly between the wall edges (`WALL_ZONE_FRAC` … 1 − `WALL_ZONE_FRAC`)? The last such
  * position per applied floor is the player's WORKING position (`_restZ01`); wall edges (flick-to-wall landing,
@@ -222,6 +228,16 @@ export class LadderController {
     this._sceneManager = deps.sceneManager || null;
     this._gameState = deps.gameState || null;
     this._rail = deps.rail || null;
+    // Owner 2026-11-19: floor 5 opens by clicking its rung (from floor 4), and floor 4's rung is the way back; the rail only
+    // takes the pointer on those two rungs (RailIndicator.notchClickable), and this re-checks the floor before it jumps.
+    if (this._rail && typeof this._rail.setNotchClick === 'function') {
+      this._rail.setNotchClick((floor) => {
+        const s = this._ladder.getState();
+        if (s && ((s.floor === F4_OUTER_BLOCK.FROM && floor === F4_OUTER_BLOCK.TO) || (s.floor === F4_OUTER_BLOCK.TO && floor === F4_OUTER_BLOCK.FROM))) {
+          this.jump({ toFloor: floor });
+        }
+      });
+    }
     this._navcom = deps.navcom || null;
     this._proxNet = deps.proxNet || null;
     this._sdaFloor = deps.sdaFloor || null;
@@ -266,7 +282,12 @@ export class LadderController {
     // (the extra zoom below is the daughter limit's own). Asked only by a wheel/flick crossing. Set after the core is
     // built so the pinned `rules: {...}` line above (test-LadderController) stays as it is; injected cores get it too.
     if (typeof this._ladder.setCrossBlock === 'function') {
-      this._ladder.setCrossBlock((from, dest) => from === FloorContract.DAUGHTER_ZOOM.FLOOR && dest === from - 1 && this._daughterFollowed());
+      this._ladder.setCrossBlock((from, dest) => {
+        // Owner 2026-11-19 (DECISIONS §79 row 1): a wheel, trackpad momentum or pinch never takes floor 4 to floor 5; the zoom
+        // stops at floor 4's outer end ('wall': no charge, no creep). Floor 5 opens by the ladder, Esc / PageUp or a swipe.
+        if (from === F4_OUTER_BLOCK.FROM && dest === F4_OUTER_BLOCK.TO) return 'wall';
+        return from === FloorContract.DAUGHTER_ZOOM.FLOOR && dest === from - 1 && this._daughterFollowed();
+      });
     }
     /** Reduced-motion probe for the follow-end ease (a cut under it). Injectable for tests. */
     this._reducedMotion = (typeof deps.reducedMotion === 'function') ? deps.reducedMotion : prefersReducedMotion;
@@ -494,7 +515,9 @@ export class LadderController {
     const f = (s && s.floor === 4) ? FloorContract.byId(s.floor) : null;
     if (!f || !(distU > 0) || !Number.isFinite(distU)) return false;
     const w = FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC;
-    const to = Math.min(1 - w, Math.max(s.z01, z01FromDistance(f, distU)));
+    // The framing keeps today's reach (camera.frameMaxU, 210.1 u): the floor now zooms out to 500 u, the glide does not.
+    const top = Number.isFinite(f.camera.frameMaxU) ? Math.min(1 - w, z01FromDistance(f, f.camera.frameMaxU)) : 1 - w;
+    const to = Math.min(top, Math.max(s.z01, z01FromDistance(f, distU)));
     if (!(to > s.z01 + 1e-6)) { this._glide = null; return false; }
     this._glide = {
       floor: s.floor, fromZ01: s.z01, toZ01: to,
@@ -505,10 +528,11 @@ export class LadderController {
     return true;
   }
 
-  /** The farthest the framing may glide on the current floor (the free zone's top), scene units. */
+  /** The farthest the framing may glide on the current floor (floor 4: `camera.frameMaxU`; else the free zone's top), scene units. */
   frameMaxDistU() {
     const s = this._ladder.getState();
     const f = s ? FloorContract.byId(s.floor) : null;
+    if (f && Number.isFinite(f.camera.frameMaxU)) return f.camera.frameMaxU;
     return f ? distanceFromZ01(f, 1 - FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC) : NaN;
   }
 
@@ -1047,12 +1071,17 @@ export class LadderController {
   /**
    * The run-scoped half of D5 for the RUN SAVE (main.js gathers it on PERSISTENCE_GATHER as `save.ladder`, inside the
    * LADDER.ENABLED gate): the core's live `(floor, z01)`. A plain fresh object; null if the core has no snapshot; never throws.
-   * @returns {{floor: number, z01: number}|null}
+   * @returns {{floor: number, z01: number, distU?: number}|null} floor 4 also carries `distU`: its z01 changed meaning on
+   *   2026-11-19 (the range grew from 70..255 to 70..707 u), so a save says which distance it means
    */
   viewState() {
     try {
       const s = this._ladder.getState();
-      return (s && Number.isFinite(s.floor) && Number.isFinite(s.z01)) ? { floor: s.floor, z01: s.z01 } : null;
+      if (!(s && Number.isFinite(s.floor) && Number.isFinite(s.z01))) return null;
+      const out = { floor: s.floor, z01: s.z01 };
+      const f = (s.floor === LEGACY_F4_RANGE.FLOOR) ? FloorContract.byId(s.floor) : null;
+      if (f) out.distU = distanceFromZ01(f, s.z01);
+      return out;
     } catch (_e) {
       return null;
     }
@@ -1074,6 +1103,15 @@ export class LadderController {
     const floor = saved.floor, z01 = saved.z01;
     if (!Number.isFinite(floor) || !FloorContract.FLOORS.some((f) => f.id === floor)) return false;
     if (typeof z01 !== 'number' || !Number.isFinite(z01)) return false;
+    // Floor 4's z01 changed meaning on 2026-11-19 (range 70..255 -> 70..707 u): a save carries its distance (`distU`); an
+    // older save has none, and its z01 is read on the old range so the view comes back where it was.
+    if (floor === LEGACY_F4_RANGE.FLOOR) {
+      const f4 = FloorContract.byId(floor);
+      const d = Number.isFinite(saved.distU) && saved.distU > 0
+        ? saved.distU
+        : Math.pow(10, Math.log10(LEGACY_F4_RANGE.MIN_U) + Math.min(1, Math.max(0, z01)) * (Math.log10(LEGACY_F4_RANGE.MAX_U) - Math.log10(LEGACY_F4_RANGE.MIN_U)));
+      return this._placeWhileHidden(floor, z01FromDistance(f4, d));
+    }
     return this._placeWhileHidden(floor, z01);
   }
 

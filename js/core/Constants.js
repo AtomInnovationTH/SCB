@@ -530,8 +530,8 @@ export const Constants = {
   // constraint is far >= D_max + R (D = camera distance from Earth center),
   // because a star directly behind Earth sits at camera distance D + R. The
   // shipped far (500) therefore only covers D <= 100 u; the ladder's
-  // Earth-anchored floors (F4 D <= 255 @ far 500, F5 D <= 1300 @ far 2000)
-  // break it — far-plane clipping blacks out the F4 sky and the F5 camera
+  // Earth-anchored floors (F4 D <= 500 @ far 1200 since 2026-11-19, F5 D <= 1300 @ far 2000)
+  // would break it for a world-fixed shell — far-plane clipping blacks out the F4 sky and the F5 camera
   // exits the shell entirely. Fix: follow mode (Starfield.setFollowCamera)
   // re-centers the shell on the camera each update, making stars pure
   // direction chrome at camera distance exactly R — inside every floor's far

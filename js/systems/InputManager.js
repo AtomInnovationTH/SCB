@@ -2824,7 +2824,8 @@ export class InputManager {
   /**
    * The piece's velocity relative to the ship from the two orbits (scene units / real s), for the first press after a pick,
    * before `_sampleReach` has 4 frames. Both are inertial km/s (debris `orbitToSceneCartesianInto`, ship `getVelocity`); one
-   * real second is `TimeAuthority.BASE_SCALE` game seconds (the unit `netFlightSpeedMps` uses; a warp rate on top is not
+   * real second is `TimeAuthority.worldClockScale()` game seconds (`BASE_SCALE` at home, the world's real speed while a daughter is out;
+   * the unit `netFlightSpeedMps` uses; a warp rate on top is not
    * read, and the tracker takes over after 4 frames). Null for a piece that does not follow its orbit (an onboarding or arm
    * pin, a captured piece, a position that is not on its orbit), no orbit, or a ship with no velocity. Matched to a finite difference of two propagated orbits in
    * test-NetReachGate.js.
@@ -2847,7 +2848,7 @@ export class InputManager {
     const sp = piece._scenePosition;
     const tol = 2 * Constants.SCENE_UNITS_PER_METER;
     if (!sp || Math.abs(sp.x - pos.x) > tol || Math.abs(sp.y - pos.y) > tol || Math.abs(sp.z - pos.z) > tol) return null;
-    const k = Constants.SCENE_SCALE * TimeAuthority.BASE_SCALE;   // km/s of game time -> scene units per real second
+    const k = Constants.SCENE_SCALE * TimeAuthority.worldClockScale();   // km/s of game time -> scene units per real second (BASE_SCALE at home; the world's real speed while a daughter is out)
     const out = this._orbRel || (this._orbRel = { x: 0, y: 0, z: 0 });
     out.x = (vel.x - sv.x) * k; out.y = (vel.y - sv.y) * k; out.z = (vel.z - sv.z) * k;
     return out;

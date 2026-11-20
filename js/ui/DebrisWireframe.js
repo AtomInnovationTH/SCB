@@ -1300,7 +1300,7 @@ export class DebrisWireframe {
       // Same structure as DebrisField.js (tumbleRate × TIME_SCALE capped) with a lower ceiling tuned for Canvas2D comfort.
       const tumble = this._target.tumbleRate || 0;
       const maxWireRad = degToRad(Constants.WIREFRAME_MAX_TUMBLE_DEG_S);
-      const rate = Math.max(MIN_TUMBLE_RATE, Math.min(tumble * TimeAuthority.BASE_SCALE, maxWireRad));
+      const rate = Math.max(MIN_TUMBLE_RATE, Math.min(tumble * TimeAuthority.worldClockScale(), maxWireRad));
       this._angle += rate * dt;
     }
 

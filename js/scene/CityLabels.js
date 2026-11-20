@@ -292,6 +292,22 @@ export function distanceFade(dist, near, far) {
 }
 
 /**
+ * Whole-label fade for a far camera (owner 2026-11-19, floor 4 zooms out to 500 u): 1 up to `near`, smoothstep to 0 at `far`.
+ * Either bound missing or `far <= near` → 1 (no fade: the layer's default). At 500 u Earth is a 14.5° disc and 22-39 in-view
+ * labels would crowd into it, so the names go out between 400 and 500 u instead of smearing.
+ * @param {number} dist camera-to-Earth-centre distance (scene units)
+ * @param {number|null|undefined} near @param {number|null|undefined} far
+ * @returns {number} 0..1
+ */
+export function farLabelFade(dist, near, far) {
+  if (!(Number.isFinite(near) && Number.isFinite(far) && far > near)) return 1;
+  if (dist <= near) return 1;
+  if (dist >= far) return 0;
+  const t = (dist - near) / (far - near);
+  return 1 - t * t * (3 - 2 * t);
+}
+
+/**
  * The text-pill collision box for a label whose dot is at screen (sx, sy), in a
  * slot. CSS px, origin top-left. Pass `out` to reuse an object (hot loop).
  * @param {number} textW — estimated pill width
@@ -554,6 +570,8 @@ export class CityLabels {
    *   equirectangular texture (command-view Earth); false for the wireframe Strategic Map
    *   so labels co-locate with ground stations.
    * @param {number} [opts.fadeNear=radius*2] @param {number} [opts.fadeFar=radius*18]
+   * @param {number} [opts.farFadeNear] @param {number} [opts.farFadeEnd] — the whole label (pinned too) fades out between
+   *   these camera distances (farLabelFade); both absent = no far fade
    * @param {number} [opts.lodNear=radius*3] — at/under this camera distance all
    *   tiers show; @param {number} [opts.lodFar=radius*10] — at/over this only tier 1.
    * @param {number} [opts.maxVisible=Infinity] — cap on placed non-launch labels per frame
@@ -565,7 +583,7 @@ export class CityLabels {
    */
   attach({ parent, radius, camera, container, isActive = null,
            lonOffsetDeg = 0, mirrorLon = false,
-           fadeNear, fadeFar, lodNear, lodFar,
+           fadeNear, fadeFar, lodNear, lodFar, farFadeNear, farFadeEnd,
            maxVisible = Infinity, maxVisibleLaunch = Infinity,
            occluders = null }) {
     if (!parent || !camera || !this._cities.length) return null;
@@ -625,6 +643,8 @@ export class CityLabels {
       fadeFar: fadeFar != null ? fadeFar : radius * 18,
       lodNear: lodNear != null ? lodNear : radius * 3,
       lodFar: lodFar != null ? lodFar : radius * 10,
+      farFadeNear: Number.isFinite(farFadeNear) ? farFadeNear : null,
+      farFadeEnd: Number.isFinite(farFadeEnd) ? farFadeEnd : null,
       maxVisible, maxVisibleLaunch,
     };
     // Pinned labels bypass both caps, so they need boxes on top of the two budgets.
@@ -666,6 +686,12 @@ export class CityLabels {
       layer.parent.getWorldPosition(_center);
 
       const maxTier = lodMaxTier(_cam.distanceTo(_center), layer.lodNear, layer.lodFar);
+      // Far camera (floor 4 out to 500 u): the whole label fades out between farFadeNear and farFadeEnd.
+      const farFade = farLabelFade(_cam.distanceTo(_center), layer.farFadeNear, layer.farFadeEnd);
+      if (farFade <= 0) {
+        for (const item of layer.items) this._hide(item);
+        continue;
+      }
 
       // Occluders (the ship): one screen circle each per frame.
       let occN = 0;
@@ -718,9 +744,9 @@ export class CityLabels {
         }
         item._dist = _world.distanceTo(_cam);
         // Pinned labels skip the distance dimming (floor 0.55 otherwise).
-        item._op = item.pin
+        item._op = (item.pin
           ? lf
-          : (0.55 + 0.45 * distanceFade(item._dist, layer.fadeNear, layer.fadeFar)) * lf;
+          : (0.55 + 0.45 * distanceFade(item._dist, layer.fadeNear, layer.fadeFar)) * lf) * farFade;
         cand.push(item);
       }
 

@@ -457,6 +457,34 @@ const _HIGH_RISK_ROT_STATES = new Set([
   ARM_STATES.CARRY_HANDOFF,
   ARM_STATES.CARRY_BACK,
 ]);
+// "A daughter is OUT" for the one map clock (owner 2026-11-08/09, DECISIONS §70 row 6; `ArmManager.anyOut`). Out = away from the mother
+// and not yet home: from the clamp release (LAUNCHING, so the clock is at real speed when the spring lets her go) to the end of the
+// latch (DOCKING; "<name> is home" is said when it ends). NOT out: DOCKED, RELOADING, HOLDING_CATCH (parked at the strut tip holding a catch:
+// home, no live tether), CARRY_PREP and SCANNING (both start docked and stay on the strut), EXPENDED (lost; nothing will come home, so the
+// clock must not stay slow for her). Detached daughters (`isDetached`) are not out either: they never come home.
+const _OUT_ARM_STATES = new Set([
+  ARM_STATES.UNDOCKING,         // legacy separation from the core
+  ARM_STATES.LAUNCHING,         // clamp release then the spring: from here she is leaving
+  ARM_STATES.TRANSIT,           // flying out (hand or planned curve)
+  ARM_STATES.APPROACH,          // arriving at her piece
+  ARM_STATES.STATION_KEEP,      // waiting at her piece
+  ARM_STATES.NETTING,           // casting at it
+  ARM_STATES.GRAPPLED,          // holding the catch away from the mother
+  ARM_STATES.MAGNETIC_GRAPPLE,  // EPM contact at the piece
+  ARM_STATES.GRIPPER_GRAPPLE,   // reserved: chuck on a fixture at the piece
+  ARM_STATES.PAD_CONTACT,       // reserved: sticky pad on the piece
+  ARM_STATES.HAULING,           // hauling the catch back on the line
+  ARM_STATES.RETURNING,         // flying home
+  ARM_STATES.REELING,           // the winch pulls her home (still on the line, away from the strut)
+  ARM_STATES.DOCKING,           // last metres and the 3 s latch: home only when it ends
+  ARM_STATES.TRAWLING,          // slow sweep along the orbit
+  ARM_STATES.WEB_SHOT,          // legacy web shot
+  ARM_STATES.DEORBITING,        // sacrifice burn, until she is EXPENDED
+  ARM_STATES.ADRIFT,            // out of gas but still on the line: recoverable, so still out
+  ARM_STATES.CARRY_OUT,         // carry flight to a radiator tip (the trip owns the clock then; main.js lets the trip win)
+  ARM_STATES.CARRY_HANDOFF,
+  ARM_STATES.CARRY_BACK,
+]);
 // Arm states where the daughter parks AT her strut tip -> drum 'ready'. Mirrors ArmUnit._updateTether's hidden-line set
 // (DOCKED/DOCKING/RELOADING/HOLDING_CATCH) minus EXPENDED, whose cartridge maps to 'empty'. CARRY_PREP is docked too (her line
 // is wound, the strut and radiators are moving); the three states where she is out ('deployed') are not listed.
@@ -5516,6 +5544,22 @@ export class ArmManager {
       a.state !== S.EXPENDED &&
       !a.isDetached
     );
+  }
+
+  /**
+   * True while ANY daughter is out: away from the mother and not yet home (owner 2026-11-08/09, DECISIONS §70 row 6: "while any daughter
+   * is out, orbits slow ... to real speed until she is home"). The exact state list is `_OUT_ARM_STATES` above, one reason per state.
+   * main.js feeds it to the TimeAuthority every frame. Unlike `hasTetheredArm` it counts a reeling-in or latching daughter as out and a
+   * HOLDING_CATCH / RELOADING one as home.
+   * @returns {boolean}
+   */
+  anyOut() {
+    const arms = this.arms;
+    for (let i = 0; i < arms.length; i++) {
+      const a = arms[i];
+      if (!a.isDetached && _OUT_ARM_STATES.has(a.state)) return true;
+    }
+    return false;
   }
 
   /**

@@ -85,6 +85,9 @@ const DEFAULT_RULES = {
   miniRideMs: 200,        // hotkey-jump mini-ride (locked: VisualLaw)
   reaimMs: 300,           // re-aim / subject-loss soft ride (locked: VisualLaw)
   crossBlock: null,       // optional (fromFloor, destFloor) => true: a zoom (wheel/flick) may not cross there.
+                          // Answer `'wall'` instead of true and the zoom also stops dead at the free zone's edge (no
+                          // charge, no creep): floor 4's outer end (owner 2026-11-19, floor 5 is reached by the ladder,
+                          // Esc / PageUp or a swipe, never by zooming out).
                           // Silent: no 'cross', no 'denied'. owner 2026-10-27: while the camera rides a daughter,
                           // zooming in on floor 2 never swings to the mother's close-up (floor 1). Jumps, page keys
                           // and Esc are explicit commands and are not asked.
@@ -193,7 +196,7 @@ export class ZoomLadder {
     this._settled = false;
     this._lastInputTMs = tMs;
 
-    const wallLo = this._geo.WALL_ZONE_FRAC;
+    const wallLo = this._wallLoFrac();
     const wallHi = 1 - this._geo.WALL_ZONE_FRAC;
     const side = dir === 'in' ? 'down' : 'up';
 
@@ -222,11 +225,23 @@ export class ZoomLadder {
       return decisions;
     }
 
+    const stepZ01 = this._rules.wheelZ01Step * this._wheelStepScale();
     const target = dir === 'in'
-      ? this._z01 - mag * this._rules.wheelZ01Step
-      : this._z01 + mag * this._rules.wheelZ01Step;
+      ? this._z01 - mag * stepZ01
+      : this._z01 + mag * stepZ01;
     const wallward = dir === 'in' ? target < wallLo : target > wallHi;
 
+    // A hard wall (crossBlock answers 'wall'): the zoom ends at the free zone's edge. No charge, no creep, no crossing,
+    // no flick-cross; the camera moves up to the edge and no further, extra input changes nothing.
+    if (wallward && this._hardWall(dir)) {
+      const edge = dir === 'in' ? wallLo : wallHi;
+      if (this._z01 !== edge) {
+        this._z01 = edge;
+        decisions.push({ type: 'move', floor: this._floor, z01: edge, inWall: false, creepFrac: 0 });
+      }
+      this._recordWheel(tMs, dir, mag);
+      return decisions;
+    }
     if (!wallward) {
       // Free scroll inside the floor (clamps at the wall edges; only charging takes the camera INTO a wall).
       if (target !== this._z01) {
@@ -282,7 +297,7 @@ export class ZoomLadder {
         type: 'cross',
         fromFloor: this._floor,
         toFloor: destId,
-        entryZ01: side === 'down' ? this._geo.ENTRY_Z01_FROM_ABOVE : this._geo.ENTRY_Z01_FROM_BELOW,
+        entryZ01: this._entryZ01(dest, side === 'down' ? 'down' : 'up'),
         direction: side === 'down' ? 'in' : 'out',
         rideMsRange: [...this._rules.rideMsRange],
       });
@@ -301,7 +316,7 @@ export class ZoomLadder {
     // (tracks the live charge, so a decaying spring relaxes it back).
     const creepFrac = this._spring.CREEP_FRAC * norm;
     const newZ01 = side === 'down'
-      ? wallLo - this._geo.WALL_ZONE_FRAC * creepFrac
+      ? wallLo - wallLo * creepFrac
       : wallHi + this._geo.WALL_ZONE_FRAC * creepFrac;
     if (newZ01 !== this._z01) {
       this._z01 = newZ01;
@@ -428,8 +443,8 @@ export class ZoomLadder {
     if (Number.isFinite(tMs)) this._tick(tMs);
     if (this._ride) return [];
     if (typeof z01 !== 'number' || !Number.isFinite(z01)) return [];
-    const w = this._geo.WALL_ZONE_FRAC;
-    const z = Math.min(1 - w, Math.max(w, z01));
+    const wLo = this._wallLoFrac(), wHi = this._geo.WALL_ZONE_FRAC;
+    const z = Math.min(1 - wHi, Math.max(wLo, z01));
     this._settled = false;
     this._releaseSpring();
     if (z === this._z01) return [];
@@ -545,7 +560,7 @@ export class ZoomLadder {
     // Settle-back: idle beyond SETTLE_IDLE_MS while creeped inside a wall
     // zone → one eased return to the wall edge. Never fires mid-ride.
     if (!this._ride) {
-      const wallLo = this._geo.WALL_ZONE_FRAC;
+      const wallLo = this._wallLoFrac();
       const wallHi = 1 - this._geo.WALL_ZONE_FRAC;
       const inWall = this._z01 < wallLo || this._z01 > wallHi;
       if (inWall && tMs - this._lastInputTMs > this._spring.SETTLE_IDLE_MS) {
@@ -663,8 +678,25 @@ export class ZoomLadder {
    */
   _atOrInWall(dir) {
     return dir === 'in'
-      ? this._z01 <= this._geo.WALL_ZONE_FRAC + EPS
+      ? this._z01 <= this._wallLoFrac() + EPS
       : this._z01 >= 1 - this._geo.WALL_ZONE_FRAC - EPS;
+  }
+
+  /**
+   * @private The inner wall edge (z01) on the CURRENT floor: the floor row's `camera.wallLoFrac` (floor 4, whose range was
+   * lengthened on 2026-11-19 and keeps its old inner edge in metres), else the shared WALL_ZONE_FRAC.
+   */
+  _wallLoFrac() {
+    const row = this._byId.get(this._floor);
+    const v = row && row.camera ? row.camera.wallLoFrac : undefined;
+    return Number.isFinite(v) ? v : this._geo.WALL_ZONE_FRAC;
+  }
+
+  /** @private The floor row's `camera.wheelStepScale` (floor 4: keeps each wheel notch's zoom ratio), else 1. */
+  _wheelStepScale() {
+    const row = this._byId.get(this._floor);
+    const v = row && row.camera ? row.camera.wheelStepScale : undefined;
+    return Number.isFinite(v) && v > 0 ? v : 1;
   }
 
   /**
@@ -675,7 +707,7 @@ export class ZoomLadder {
    */
   _startFlickWall(dir) {
     const edge = dir === 'in'
-      ? this._geo.WALL_ZONE_FRAC
+      ? this._wallLoFrac()
       : 1 - this._geo.WALL_ZONE_FRAC;
     this._z01 = edge;
     this._ride = { kind: 'flickWall', toFloor: this._floor, dir };
@@ -712,9 +744,7 @@ export class ZoomLadder {
       this._gestureLocked = true;
       return false;
     }
-    const entryZ01 = side === 'down'
-      ? this._geo.ENTRY_Z01_FROM_ABOVE
-      : this._geo.ENTRY_Z01_FROM_BELOW;
+    const entryZ01 = this._entryZ01(dest, side === 'down' ? 'down' : 'up');
     decisions.push({
       type: 'cross',
       fromFloor: this._floor,
@@ -761,6 +791,24 @@ export class ZoomLadder {
     return !!(dest && typeof hook === 'function' && hook(this._floor, dest.id));
   }
 
+  /** True when the crossBlock hook answers `'wall'` for the side `dir` points at: the zoom stops dead at the free zone's
+   *  edge (no charge, no creep, no crossing). Any other truthy answer is a plain silent veto (the daughter zoom). @private */
+  _hardWall(dir) {
+    const hook = this._rules.crossBlock;
+    if (typeof hook !== 'function') return false;
+    const destId = dir === 'in' ? this._floor - 1 : this._floor + 1;
+    return !!this._byId.get(destId) && hook(this._floor, destId) === 'wall';
+  }
+
+  /** Arrival z01 on `dest` coming from below ('up') or above ('down'): the floor row's own `entryZ01` when it has one,
+   *  else the shared LADDER_GEOMETRY rule. @private */
+  _entryZ01(dest, way) {
+    const e = dest && dest.entryZ01;
+    const v = e ? (way === 'down' ? e.fromAbove : e.fromBelow) : undefined;
+    if (Number.isFinite(v)) return v;
+    return way === 'down' ? this._geo.ENTRY_Z01_FROM_ABOVE : this._geo.ENTRY_Z01_FROM_BELOW;
+  }
+
   /** Set (or clear, with null) the zoom-crossing veto: see DEFAULT_RULES.crossBlock. */
   setCrossBlock(fn) { this._rules.crossBlock = (typeof fn === 'function') ? fn : null; }
 
@@ -791,9 +839,7 @@ export class ZoomLadder {
     }
     const entry = (entryZ01 !== undefined && Number.isFinite(entryZ01))
       ? Math.min(1, Math.max(0, entryZ01))
-      : (toId > this._floor
-        ? this._geo.ENTRY_Z01_FROM_BELOW
-        : this._geo.ENTRY_Z01_FROM_ABOVE);
+      : this._entryZ01(dest, toId > this._floor ? 'up' : 'down');
     if (kind === 'alarmAuto') {
       this._preRide = { floor: this._floor, z01: this._z01 };   // scroll/Esc revert point
     }

@@ -14,11 +14,12 @@
  * so k never multiplies a warped or held world.
  *
  * Gates (force k = 1), in report order (`simGate`): not in play (menu, opening dance), paused, a world hold (open
- * drawer, codex page, held clock), a TimeAuthority rate ≠ 1 or a trip clock, catch slow-mo, a net in flight (mother or
+ * drawer, codex page, held clock), a TimeAuthority rate ≠ 1 or a trip clock, a daughter out (one clock while she is out, DECISIONS §70
+ * row 6: nothing speeds the orbits until she is home), catch slow-mo, a net in flight (mother or
  * daughter) or the lasso out, a net line-up whose meter has started (the aim is first within 0.5°: the ring then fills over
  * its real 3 s, net-odds-1107 D9; the player's own TimeAuthority rate is untouched), a catch ceremony (CeremonyTimeScale), the leash hand-off, a conjunction alert, the player
- * flying a daughter by hand, arrow-key turning. A daughter merely out on her tether is NOT a gate: her flight, reel and
- * tether physics run in the same ≤ 0.1 s steps.
+ * flying a daughter by hand, arrow-key turning. (Until 2026-11-19 a daughter merely out on her tether was NOT a gate; the real-speed
+ * clock while she is out made her one, `ArmManager.anyOut`.)
  *
  * Pure apart from its own fields; no imports beyond Constants, so tests drive it headless.
  */
@@ -33,7 +34,7 @@ const NET_FLYING = new Set([
 
 /** The gate names `simGate` can return, in the order it checks them. */
 export const SIM_GATES = Object.freeze([
-  'notInPlay', 'paused', 'worldHold', 'timeRate', 'trip', 'slowMo', 'netInFlight', 'lasso', 'netLineup',
+  'notInPlay', 'paused', 'worldHold', 'timeRate', 'trip', 'daughterOut', 'slowMo', 'netInFlight', 'lasso', 'netLineup',
   'ceremony', 'leash', 'conjunction', 'daughterByHand', 'arrowKeys',
 ]);
 
@@ -47,6 +48,7 @@ export const SIM_GATES = Object.freeze([
  * @param {boolean} [s.worldHold]     open drawer / codex page (TimeAuthority.worldHoldOpen) or a held world clock
  * @param {number}  [s.taRate]        timeAuthority.rate
  * @param {boolean} [s.trip]          a trip's clock runs (gameFlowManager.isTripRunning())
+ * @param {boolean} [s.daughterOut]   any daughter is out (`ArmManager.anyOut`; the world runs at real speed until she is home)
  * @param {boolean} [s.slowMo]        catch slow-mo
  * @param {boolean} [s.netInFlight]   a mother net out (hasMotherNetInFlight) or any net flying (netsFlying)
  * @param {boolean} [s.lasso]         lassoSystem.active
@@ -64,6 +66,7 @@ export function simGate(s) {
   if (s.worldHold) return 'worldHold';
   if (s.taRate !== undefined && s.taRate !== 1) return 'timeRate';
   if (s.trip) return 'trip';
+  if (s.daughterOut) return 'daughterOut';
   if (s.slowMo) return 'slowMo';
   if (s.netInFlight) return 'netInFlight';
   if (s.lasso) return 'lasso';

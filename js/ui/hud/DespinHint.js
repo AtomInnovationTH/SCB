@@ -124,7 +124,9 @@ export function despinTimeWords(target) {
     if (!tier) return '';
     physS = despinTimeS(tier, target.mass, target.lengthM, Math.abs(target.tumbleRate || 0), degToRad(cfg.IN_SPEC_DEG));
   }
-  return screenTimeWords(physS / (TimeAuthority.BASE_SCALE || 10));
+  // The beam runs on world time (main.js `despinLaser.update(dt, dtWorld)`): one real second is `worldClockScale()` game seconds, BASE_SCALE at
+  // home and the world's real speed while a daughter is out, so the words stay true both ways.
+  return screenTimeWords(physS / (TimeAuthority.worldClockScale() || 10));
 }
 
 /**

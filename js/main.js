@@ -844,7 +844,7 @@ const mapClock = new MapClock();
 let mapClockSlider = null;
 // Reused per-frame arg object for timeAuthority.update: it runs on the flag-off path too, so no per-frame
 // allocation; update destructures synchronously and retains nothing.
-const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false };
+const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false, daughterOut: false };
 // Drawer-open signal: true while the workbench drawer (the ONE pane: SPECS + the F1 REFIT block) is open. Feeds
 // TimeAuthority.calmCap so the world clock STOPS while reading (rail: HOLD), the viewCover 'partial' value (the
 // frame scheduler's heartbeat) and the camera's turntable gate. Written by _syncWorkbenchPanes (the ONE pane edge)
@@ -1894,6 +1894,9 @@ async function init() {
       // global peak pads-in-one-view, so pads are never truncated.
       maxVisible: 28,
       maxVisibleLaunch: 6,
+      // Floor 4 zooms out to 500 u (2026-11-19): names stay whole up to 400 u and fade out by 500 u rather than smear.
+      farFadeNear: 400,
+      farFadeEnd: 500,
       // Hide a dot inside the ship's screen circle (live position; radius covers every radiator pose).
       occluders: cityLabels.shipOccluders(() => player && player.position),
     });
@@ -6444,17 +6447,28 @@ function gameLoop(timestamp) {
     workbenchOpen: _worldHoldOpen, alertActive: _alertActive,
     gameplay: gameState.isGameplay(),   // the full-screen shop (ladder off) pauses the trip's clock like the drawer
   });
+  // ONE CLOCK WHILE A DAUGHTER IS OUT (owner 2026-11-08/09, DECISIONS §70 row 6; §79 row 3): while any daughter is away from the mother
+  // the target is clamped to real speed on every floor (floors 1-2 from 10x, floor 3 from 40x, floors 4-5 from the slider's step), and
+  // the floor's cap or the slider's step returns through the ordinary ramp once she is home. `anyOut` is the one predicate
+  // (ArmManager). A burning trip keeps its own rates (its daughters fly ship-relative carries), and with the ladder off the clock is
+  // pinned at the base rate as before; `setArmRealClock` tells the arms the same thing (her plan and readouts use `armScale`).
+  const _tripBurnNow = isTripBurning();
+  const _daughterClock = _ladderActive && !_tripBurnNow;
+  const _daughterOut = _daughterClock && !!(armManager && armManager.anyOut && armManager.anyOut());
+  TimeAuthority.setArmRealClock(_daughterClock);
+  _taFrameArgs.daughterOut = _daughterOut;
   timeAuthority.update(_taFrameArgs);
   const dtWorld = timeAuthority.dtWorld;
   // The map clock slider's row: on floors 4-5 only; dimmed with the trip's own speed while a transfer trip burns (D4: a trip
-  // keeps its rates). Write-on-change inside; the per-frame calls are cheap.
+  // keeps its rates). While a daughter is out the row shows real speed lit and the faster steps dimmed (her choice is kept and
+  // returns when she is home). Write-on-change inside; the per-frame calls are cheap.
   if (_mapFloor == null) mapClock.observeFloor(null);
   if (mapClockSlider) {
     const _mapShow = _mapFloor != null && FloorContract.TIME_RULES.MAP_CLOCK_FLOORS.includes(_mapFloor);
     mapClockSlider.setShown(_mapShow);
     if (_mapShow) {
       const _tripBurn = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
-      mapClockSlider.setState(mapClock.step(), _tripBurn, _tripBurn ? mapClockSpeedText(timeAuthority.rate, TimeAuthority.BASE_SCALE) : '');
+      mapClockSlider.setState(mapClock.step(), _tripBurn, _tripBurn ? mapClockSpeedText(timeAuthority.rate, TimeAuthority.BASE_SCALE) : '', _daughterOut);
       mapClockSlider.setLayout({ floor: _mapFloor, glass: GestureHints.isGlass() });
     }
   }
@@ -6467,7 +6481,8 @@ function gameLoop(timestamp) {
   // turns the ship on the wheels and no gate is up; it ramps on the WALL clock (realDt) and any gate drops it to 1 this
   // frame. A TimeAuthority rate ≠ 1 is a gate, so k never multiplies a warped or held world. frame() cuts this frame's
   // game time (dt × k) into steps of ≤ MAX_STEP_S that the game-time systems below run in; at k = 1 it is one step of
-  // exactly (dt, dtWorld). A daughter out on her tether is deliberately NOT read (her physics runs in the same steps).
+  // exactly (dt, dtWorld). A daughter out is a gate since 2026-11-19 (DECISIONS §70 row 6: one clock while she is out, nothing speeds
+  // the orbits then): `s.daughterOut` below. Her physics still runs in the same steps.
   const _simWheelTurn = !!(autopilotSystem && autopilotSystem.isWheelTurnActive && autopilotSystem.isWheelTurnActive());
   {
     const s = _simSig;
@@ -6477,6 +6492,7 @@ function gameLoop(timestamp) {
     s.paused = !!gameFlowManager.paused;
     s.worldHold = _worldHoldOpen || _worldHeld;
     s.taRate = timeAuthority.rate;
+    s.daughterOut = _daughterOut;
     s.trip = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
     s.slowMo = slowMoTimer > 0;
     s.netInFlight = !!(captureNetSystem && ((captureNetSystem.hasMotherNetInFlight && captureNetSystem.hasMotherNetInFlight())
@@ -7269,6 +7285,9 @@ function updateCamera(dt, timestamp) {
 
   // Update the camera system
   cameraSystem.update(dt, playerPos, playerVel, playerQuat);
+  // Floors 4-5: the Moon and planets ride the camera; SunLight placed them before the camera moved this frame, so put them on
+  // the camera's final pose (no one-frame lag while she zooms or drags).
+  if (sunLight && typeof sunLight.syncFollowToCamera === 'function') sunLight.syncFollowToCamera();
 
   // NAVCOM: tick the floor content AFTER the camera update so the cluster icons + ship chevron read THIS frame's
   // camera pose (no one-frame lag). This is the SINGLE navcom ticker. NavcomFloor.update() self-gates on active; we

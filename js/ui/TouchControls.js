@@ -115,6 +115,27 @@ export const TURN_PAD_FLOORS = Object.freeze([2, 3]);
 export const VIEW_DRAG_FLOORS = Object.freeze([1, 2, 3, 4]);
 
 /**
+ * The right-edge swipe that opens floor 5 from floor 4 (owner 2026-11-19, DECISIONS §79 row 1: floor 5 is reached by the
+ * ladder, Esc / PageUp or this swipe, never by zooming out). A finger that lands in the RIGHT 24 px band and travels at least
+ * `edgeSwipePx` (60) inward, mostly sideways (|dx| >= |dy|), within this many ms. A tap in the band stays a tap (it wakes the
+ * rail through the hub's edge band); a slower or more vertical drag does nothing.
+ */
+export const FLOOR5_SWIPE = Object.freeze({ FROM: 4, TO: 5, MAX_MS: 1000 });
+
+/**
+ * Is a finished right-band track the floor 5 swipe? Pure (Node tests). Needs a classified 'edge-open-right', the floor to be
+ * FLOOR5_SWIPE.FROM, the move mostly horizontal and quick enough.
+ * @param {{startX:number,startY:number,x:number,y:number,t0:number,t:number}} track
+ * @param {string|null} kind classifyGesture()'s verdict
+ * @param {number|null|undefined} floor the engaged floor
+ */
+export function isFloor5Swipe(track, kind, floor) {
+  if (kind !== 'edge-open-right' || floor !== FLOOR5_SWIPE.FROM || !track) return false;
+  const dx = track.x - track.startX, dy = track.y - track.startY;
+  return Math.abs(dx) >= Math.abs(dy) && (track.t - track.t0) <= FLOOR5_SWIPE.MAX_MS;
+}
+
+/**
  * Pinch → synthetic wheel deltaY (px), wheel convention: spreading the fingers (zoom IN) yields NEGATIVE deltaY.
  * Clamped per event so one fast pinch frame cannot leap floors (the router additionally caps mag at 4).
  * @param {number} prevDist  previous two-finger distance (px)
@@ -295,6 +316,7 @@ export class TouchControls {
     this._gripResyncPending = false; // one coalesced grip re-sync after an edge touch
     this._railActive = false;   // a one-finger rail drag is live
     this._railLastFloor = null; // last floor jumped to this drag (dedupe)
+    this._gripSwipe = null;     // floor 4 only: a finger that landed on the grip in the RIGHT band, undecided: { id, startX, startY, x, y, t0, t }
     this._syncTimer = null;
     this._idleTimer = null;
     this._wakeLock = null;
@@ -327,7 +349,7 @@ export class TouchControls {
     this._started = true;
 
     // Machine-observable input state (Ipad.md §5.3). Created only here: desktop/headless contexts never see the global.
-    const stats = { pinch: 0, rail: 0, nav: 0, tap: 0, hold: 0, drag: 0, turn: 0, edge: 0, radial: 0, edgeTouch: 0 };
+    const stats = { pinch: 0, rail: 0, nav: 0, tap: 0, hold: 0, drag: 0, turn: 0, edge: 0, radial: 0, edgeTouch: 0, floorSwipe: 0 };
     if (typeof window !== 'undefined' && isDevHost()) {
       window.__TOUCH = this._stats = stats;
     } else {
@@ -466,6 +488,7 @@ export class TouchControls {
         id: t.identifier, startX: t.clientX, startY: t.clientY, x: t.clientX, y: t.clientY,
         lastX: t.clientX, lastY: t.clientY, t0: now, t: now, moved: 0, maxTouches: 1,
         poisoned: false, edge: this._inEdgeBand(t.clientX), edgeLeft: t.clientX <= this._tune.edgeBandPx,
+        edgeRight: this._inEdgeBand(t.clientX) && t.clientX > this._tune.edgeBandPx,
         held: false, dragging: false, consumed: false,
       };
       this._armHold();
@@ -499,8 +522,10 @@ export class TouchControls {
     g.x = t.clientX; g.y = t.clientY; g.t = this._now();
     g.moved = Math.max(g.moved, Math.hypot(g.x - g.startX, g.y - g.startY));
     if (g.moved > this._tune.tapSlopPx) this._clearHold();   // a moving finger is not a hold
-    // A drag that starts in the LEFT band is the drawer swipe: no nudge. A drag from the RIGHT band turns the view.
+    // A drag that starts in the LEFT band is the drawer swipe: no nudge. A drag from the RIGHT band turns the view, except on
+    // floor 4, where it is the floor 5 swipe (FLOOR5_SWIPE) and turns nothing.
     if (g.edgeLeft) return;
+    if (g.edgeRight && this._floorNow() === FLOOR5_SWIPE.FROM) return;
     if (!this._viewDragFloor()) return;                       // floor 5: a drag does nothing
     // The pixel delta since the previous move goes onto the camera's ONE drag mechanism (the mouse path's math). A
     // press inside the tap slop stays a possible tap and nudges nothing; the move that crosses the slop sends the
@@ -518,6 +543,12 @@ export class TouchControls {
         if (this._stats) this._stats.turn++;
       }
     }
+  }
+
+  /** @private The engaged floor, or null without a ladder reading. */
+  _floorNow() {
+    const L = this._ladder;
+    return (L && typeof L.currentFloor === 'function') ? L.currentFloor() : null;
   }
 
   /**
@@ -572,6 +603,14 @@ export class TouchControls {
       // ('library' is the hub's name for that drawer). The right-band verbs still classify but dispatch nothing.
       case 'edge-open-left': this._swipePane('library', true); this._syncPad(); break;
       case 'edge-close-left': this._swipePane('library', false); this._syncPad(); break;
+      // Owner 2026-11-19: an inward swipe from the RIGHT edge on floor 4 opens floor 5 (a tap there only wakes the rail).
+      case 'edge-open-right':
+        if (isFloor5Swipe(g, kind, this._floorNow()) && this._ladder && typeof this._ladder.jump === 'function') {
+          if (this._stats) this._stats.floorSwipe++;
+          if (this._telemetry) this._telemetry.log('edge', { which: 'floor5', open: true });
+          this._ladder.jump({ toFloor: FLOOR5_SWIPE.TO });
+        }
+        break;
       default: break;                                         // drag / slow tap / hold release / right-band swipe: nothing more
     }
   }
@@ -910,9 +949,28 @@ export class TouchControls {
     this._requestWakeLock();
     // The grip IS the right edge: a touch on it wakes the rail through the same hub band test as a canvas touch.
     this._reportEdgeTouch(e.touches[0]);
+    const t0 = e.touches[0];
+    // Floor 4, finger in the RIGHT edge band (the grip is stretched to it): the touch may be the floor 5 swipe, so nothing
+    // jumps at touch-start. It is decided on the way (_handleGripMove) or at the lift (_handleGripEnd): an inward swipe opens
+    // floor 5; a mostly vertical drag becomes the rail drag; a tap jumps to the floor under the finger, as the grip always did.
+    if (this._floorNow() === FLOOR5_SWIPE.FROM && t0.clientX > this._tune.edgeBandPx && this._inEdgeBand(t0.clientX)) {
+      const now = this._now();
+      this._gripSwipe = { id: t0.identifier, startX: t0.clientX, startY: t0.clientY, x: t0.clientX, y: t0.clientY, t0: now, t: now };
+      this._railActive = false;
+      return;
+    }
+    this._gripSwipe = null;
     this._railActive = true;
     this._railLastFloor = null;          // first move always jumps
-    this._railJumpTo(e.touches[0]);
+    this._railJumpTo(t0);
+  }
+
+  /** @private The right-band grip finger became a rail drag: jump to the floor under it now, then follow it as before. */
+  _gripSwipeToRailDrag(touch) {
+    this._gripSwipe = null;
+    this._railActive = true;
+    this._railLastFloor = null;
+    this._railJumpTo(touch);
   }
 
   /**
@@ -943,6 +1001,18 @@ export class TouchControls {
   }
 
   _handleGripMove(e) {
+    const s = this._gripSwipe;
+    if (s) {
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+      if (e.touches.length !== 1) { this._gripSwipe = null; return; }
+      const t = e.touches[0];
+      this._touched();
+      s.x = t.clientX; s.y = t.clientY; s.t = this._now();
+      const dx = s.x - s.startX, dy = s.y - s.startY;
+      if (Math.hypot(dx, dy) > this._tune.tapSlopPx && Math.abs(dy) > Math.abs(dx)) this._gripSwipeToRailDrag(t);
+      return;
+    }
     if (!this._railActive) return;
     if (e.cancelable) e.preventDefault();
     e.stopPropagation();
@@ -953,7 +1023,29 @@ export class TouchControls {
 
   _handleGripEnd(e) {
     if (e.cancelable) e.preventDefault();
+    const s = this._gripSwipe;
+    this._gripSwipe = null;
     this._railActive = false;
+    if (!s || e.type === 'touchcancel') return;
+    let mine = null;
+    for (const t of (e.changedTouches || [])) if (t.identifier === s.id) { mine = t; break; }
+    if (!mine) return;
+    s.x = mine.clientX; s.y = mine.clientY; s.t = this._now();
+    const kind = classifyGesture(s, this._tune, this._canvasWidth());
+    if (isFloor5Swipe(s, kind, this._floorNow())) {
+      if (this._ladder && typeof this._ladder.jump === 'function') {
+        if (this._stats) this._stats.floorSwipe++;
+        if (this._telemetry) this._telemetry.log('edge', { which: 'floor5', open: true });
+        this._ladder.jump({ toFloor: FLOOR5_SWIPE.TO });
+      }
+      return;
+    }
+    // A tap (finger inside the tap slop): the grip's old touch-start jump, now at the lift. Anything else (a slow or short
+    // sideways drag): nothing.
+    if (Math.hypot(s.x - s.startX, s.y - s.startY) <= this._tune.tapSlopPx) {
+      this._railLastFloor = null;
+      this._railJumpTo(mine);
+    }
   }
 
   _injectStyles() {

@@ -102,6 +102,8 @@ export class RailIndicator {
     this._now = (typeof now === 'function') ? now : null;
     /** Last phase WRITTEN ('awake'|'fading'|'hidden', null = none yet). */
     this._phase = null;
+    /** The rung click sink (setNotchClick); null = no rung is ever clickable. */
+    this._onNotchClick = null;
     /** The notch index (0-based) currently wearing the box, or -1/null. */
     this._boxFloor = null;
     /** Whether the rate label currently wears the box. */
@@ -174,6 +176,26 @@ export class RailIndicator {
   static get INVITE_FLOOR() { return INVITE_FLOOR; }
 
   /**
+   * Pure click law (owner 2026-11-19, DECISIONS §79 row 1: floor 5 is reached by the ladder, not by zooming out): the floor 5
+   * rung is clickable while the engaged floor is 4, and the floor 4 rung while it is 5 (the way back). No other rung is.
+   * @param {{floor:number}} state
+   * @param {number} floorId - 1-based floor id of the rung
+   */
+  static notchClickable(state, floorId) {
+    const f = state && state.floor;
+    return (f === 4 && floorId === 5) || (f === 5 && floorId === 4);
+  }
+
+  /**
+   * The click sink: `fn(floorId)` runs when a clickable rung is clicked (LadderController wires it to `jump`). Without
+   * one, no rung ever takes pointer events.
+   * @param {function(number):void|null} fn
+   */
+  setNotchClick(fn) {
+    this._onNotchClick = (typeof fn === 'function') ? fn : null;
+  }
+
+  /**
    * Depot invitation (08-workbench §5 D3): `open` true → the workbench notch (floor 1) glows VALUE gold, steady, until
    * `open` false (shop entered, window lapsed, game reset). Fed by main.js from DEPOT_INVITATION; the rail never
    * derives the chapter rule. Headless / not yet built: the flag is kept and painted on the first refresh after
@@ -233,7 +255,15 @@ export class RailIndicator {
       notch.appendChild(label);
 
       root.appendChild(notch);
-      this._notches[f.id - 1] = { el: notch, fill, _cur: null, _pct: null, _deny: false, _denyTimer: null };
+      this._notches[f.id - 1] = { el: notch, fill, _cur: null, _pct: null, _deny: false, _denyTimer: null, _clickable: false };
+      // A click lands only while the rung is clickable (refresh turns pointer-events on for it, else the rail passes
+      // every pointer through): see notchClickable.
+      if (typeof notch.addEventListener === 'function') notch.addEventListener('click', (ev) => {
+        const n = this._notches[f.id - 1];
+        if (!n || !n._clickable || !this._onNotchClick) return;
+        if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        try { this._onNotchClick(f.id); } catch (_err) { /* sink */ }
+      });
     }
 
     // Warp readout at the rail's HEAD (column-reverse: a later child sits on top). Empty until the first setRate().
@@ -284,6 +314,13 @@ export class RailIndicator {
     if (this._root) this._root.style.opacity = '0';
     this._clearDenied();
     this._phase = null;
+    // A hidden rail (opacity 0) must not take clicks: drop every rung's clickable state (the next refresh sets it again).
+    for (const n of this._notches) {
+      if (!n || !n._clickable) continue;
+      n._clickable = false;
+      n.el.style.pointerEvents = 'none';
+      n.el.style.cursor = '';
+    }
   }
 
   /**
@@ -335,6 +372,13 @@ export class RailIndicator {
       if (n._pct !== fillPct) {
         n.fill.style.width = `${fillPct}%`;
         n._pct = fillPct;
+      }
+      // The floor 4 <-> 5 rung takes the pointer (write-on-change); every other rung stays pass-through.
+      const clickable = !!this._onNotchClick && RailIndicator.notchClickable(state, i + 1);
+      if (n._clickable !== clickable) {
+        n._clickable = clickable;
+        n.el.style.pointerEvents = clickable ? 'auto' : 'none';
+        n.el.style.cursor = clickable ? 'pointer' : '';
       }
     }
     this._applyDodge();

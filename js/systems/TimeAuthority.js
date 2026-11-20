@@ -22,6 +22,9 @@
  *     the `BASE_SCALE` constant.
  *
  * Warp behaviors this authority owns (docs/ladder/00-spec.md §7, FloorContract.TIME_RULES):
+ *   - **One clock while a daughter is out** (DECISIONS §70 row 6, §79 row 3): while any daughter is away from the mother the target is
+ *     clamped to REAL speed (`daughterCap`, 1 game second per real second) on every floor; when she is home the floor's cap (or the
+ *     player's slider step) returns through the ordinary ramp. Her own motion is written against `armScale()`.
  *   - **Automatic warp**: `rate` drifts toward the floor cap when calm.
  *   - **Danger cap**: a conjunction inside the alarm horizon ramps `rate` to 1× (fast) so alarms always land at 1×.
  *   - **Crossing pre-ramp**: during a ride the ZoomLadder core already reports the DESTINATION floor as current, so its
@@ -45,9 +48,62 @@ const TR = FloorContract.TIME_RULES;
 /** Daughters that hold warp at 1x while they fly a planned curve (see `TimeAuthority.holdFlight`). */
 const _flightHolds = new Set();
 
+/** True while main.js says the ladder is engaged and no trip burns, i.e. the clock WILL be real speed whenever a daughter is out (`armScale`). */
+let _armRealClock = false;
+
+/**
+ * The live world scale (game s per real s) while a daughter is out and the world is clamped below the base rate, else null (the display
+ * clocks keep BASE_SCALE). Written by `update` from the frame the clock was computed in; read by `worldClockScale`. Shared by every
+ * instance, like `_flightHolds` (the game has one authority).
+ * @type {number|null}
+ */
+let _outDisplayScale = null;
+
 export class TimeAuthority {
   /** Shipped base rate: 1 real second = BASE_SCALE game seconds (=10). */
   static get BASE_SCALE() { return Constants.TIME_SCALE_GAMEPLAY; }
+
+  /**
+   * The warp target while a daughter is out (owner 2026-11-08/09, DECISIONS §70 row 6; §79 row 3): REAL speed, 1 game second per real
+   * second = `1 / BASE_SCALE` of the base rate (the same value as the map clock's "Real" step, `FloorContract` cap 0.1).
+   */
+  static get REAL_CAP() { return 1 / Constants.TIME_SCALE_GAMEPLAY; }
+
+  /**
+   * The ONE clamp for "a daughter is out": the floor's target never exceeds real speed while any daughter is away from the mother. A
+   * min(), so a lower cap (pause, an open drawer) still wins and nothing is ever raised. Pure; `update({ daughterOut })` applies it.
+   * @param {number} cap the warp target before the clamp
+   * @param {boolean} out any daughter is out (`ArmManager.anyOut`)
+   * @returns {number}
+   */
+  static daughterCap(cap, out) { return out ? Math.min(cap, TimeAuthority.REAL_CAP) : cap; }
+
+  /**
+   * Game seconds that pass per second of HER clock when she flies. Arms are fed REAL seconds, so her motion is written against the game
+   * clock with this factor: `BASE_SCALE` (=10) as shipped, `1` once main.js says the ladder is engaged (`setArmRealClock`), because the
+   * world then runs at real speed whenever she is out (`daughterCap`). Her launch speed, the planned curve (`speedPhys = speed / armScale`)
+   * and the reel readout all use it, so her shown speed is her true speed against the field. Default (tests, headless, ladder off): BASE_SCALE.
+   * @returns {number}
+   */
+  static armScale() { return _armRealClock ? TimeAuthority.BASE_SCALE * TimeAuthority.REAL_CAP : TimeAuthority.BASE_SCALE; }
+
+  /**
+   * main.js, once per frame: the ladder is engaged and no transfer trip burns, so a daughter that is out will fly under the real-speed clock
+   * (`armScale` = 1). Off everywhere else (ladder off: the clock stays at BASE_SCALE and so does her scale; a trip keeps its own rates).
+   * @param {boolean} on
+   */
+  static setArmRealClock(on) { _armRealClock = !!on; }
+
+  /**
+   * Game seconds per real second that pieces' DISPLAYED motion runs at (tumble draw, the mother's net-lead estimate, the despin hint's
+   * screen time): `BASE_SCALE` (=10) as shipped and whenever she is home (the draw never followed the warp rate, so home is unchanged),
+   * and the live world scale while a daughter is out (DECISIONS §70 row 6: spins show their true rate), the ramp included, never
+   * below 1 (real speed; a paused world does not divide by zero). Differs from `armScale()`, which is 1 whenever the ladder is engaged.
+   * @returns {number}
+   */
+  static worldClockScale() {
+    return _outDisplayScale === null ? TimeAuthority.BASE_SCALE : Math.max(TimeAuthority.BASE_SCALE * TimeAuthority.REAL_CAP, _outDisplayScale);
+  }
 
   /** Warp above this switches conjunction detection to MOID screening (=10). */
   static get MOID_SCREENING_ABOVE() { return TR.MOID_SCREENING_ABOVE; }
@@ -64,8 +120,9 @@ export class TimeAuthority {
   static baseGameDt(dtReal) { return dtReal * Constants.TIME_SCALE_GAMEPLAY; }
 
   /**
-   * A daughter on the curved long-fetch flight (ArmUnit `_cw`) holds warp at 1x: her plan assumes the world runs exactly BASE_SCALE
-   * world seconds per second of her clock, and arms are fed real dt while the world gets dt x BASE x rate. Owners (arms) register
+   * A daughter on the curved long-fetch flight (ArmUnit `_cw`) holds warp at 1x (10x real): a safety net kept below the real-speed clamp
+   * (`daughterCap`, which already takes the target to real speed while she is out, so this hold only binds where that clamp does not
+   * apply: never in the ladder game). Her plan is written against `armScale()`, not a fixed BASE_SCALE. Owners (arms) register
    * here and release when the flight ends; any owner holds the rate at 1 like a conjunction does (never raises a paused target).
    * @param {object} owner
    */
@@ -157,6 +214,7 @@ export class TimeAuthority {
     this.rate = 1;
     this.scale = TimeAuthority.BASE_SCALE;
     this._moidScreening = false;
+    _outDisplayScale = null;
     this.dtWorld = this.dtReal * this.scale;
     return this;
   }
@@ -167,8 +225,9 @@ export class TimeAuthority {
    * @param {boolean} [p.active=false]  warp allowed (ladder flag on + gameplay + engaged)
    * @param {number}  [p.targetCap=1]   auto-warp target = current/destination floor timeCap
    * @param {boolean} [p.dangerActive=false] conjunction inside alarm horizon → ramp to 1×
+   * @param {boolean} [p.daughterOut=false]  any daughter is out (`ArmManager.anyOut`) → the target is clamped to REAL speed (`daughterCap`)
    */
-  update({ dtReal = 0, active = false, targetCap = 1, dangerActive = false } = {}) {
+  update({ dtReal = 0, active = false, targetCap = 1, dangerActive = false, daughterOut = false } = {}) {
     this.dtReal = dtReal;
 
     // Inactive: pin the base rate with NO ramp (dtWorld === dtReal × BASE_SCALE, bit-for-bit).
@@ -176,6 +235,7 @@ export class TimeAuthority {
       this.rate = 1;
       this.scale = TimeAuthority.BASE_SCALE;
       this._moidScreening = false;
+      _outDisplayScale = null;
       this.dtWorld = dtReal * this.scale;
       return this;
     }
@@ -184,7 +244,10 @@ export class TimeAuthority {
     // stays paused.
     const cap = Math.max(0, targetCap);
     // A daughter flying a planned curve holds it the same way (`holdFlight`).
-    const target = (dangerActive || _flightHolds.size > 0) ? Math.min(1, cap) : cap;
+    let target = (dangerActive || _flightHolds.size > 0) ? Math.min(1, cap) : cap;
+    // One clock while a daughter is out (DECISIONS §70 row 6): real speed on every floor until she is home, then the floor's cap (or the
+    // player's slider step) comes back through the ordinary ramp. Another min(): pause and a held world stay at 0.
+    target = TimeAuthority.daughterCap(target, daughterOut);
 
     // Exponential approach: ramping DOWN uses the fast τ (danger and down-crossings arrive slow), UP the gentle τ
     // (auto-warp / up-crossings ease in with visible feedback).
@@ -196,6 +259,7 @@ export class TimeAuthority {
 
     this.scale = TimeAuthority.BASE_SCALE * this.rate;
     this.dtWorld = dtReal * this.scale;
+    _outDisplayScale = daughterOut ? Math.min(TimeAuthority.BASE_SCALE, this.scale) : null;   // see `worldClockScale`
     this._moidScreening = this.rate > TimeAuthority.MOID_SCREENING_ABOVE;
     return this;
   }

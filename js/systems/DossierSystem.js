@@ -341,21 +341,35 @@ export class DossierSystem {
   }
 
   /**
-   * The spin AS DRAWN, in radians per game second at the shipped base rate. The 3D draw turns a piece by
-   * `min(|tumbleRate| x BASE_SCALE, DEBRIS_MAX_VISUAL_TUMBLE_DEG_S)` per real second (DebrisField._advanceTumble: a cap chosen for smooth
-   * motion, "jagged object rotating fast"), so the Meteor 2's 1.5 deg/s true spin is drawn at 1.0 deg per game second. The step's turn
+   * The spin AS DRAWN, in radians per WORLD second. The 3D draw turns a piece by `min(|tumbleRate| x scale, DEBRIS_MAX_VISUAL_TUMBLE_DEG_S)`
+   * per real second (DebrisField._advanceTumble: a cap chosen for smooth motion, "jagged object rotating fast"), with `scale` =
+   * `TimeAuthority.worldClockScale()`: BASE_SCALE at home, so the Meteor 2's 1.5 deg/s true spin is drawn at 1.0 deg per game second, and
+   * the world's real speed while a daughter is out (DECISIONS §70 row 6), where the same piece shows its true 1.5 deg/s. The step's turn
    * and the plain-words rate both use this, so the label, the drawn turn and the step are one clock.
+   * @param {object} target
+   * @param {number} [scale] game s per real s the draw runs at (default: live `worldClockScale`)
    */
-  static drawnSpinRadS(target) {
-    const base = TimeAuthority.BASE_SCALE;
+  static drawnSpinRadS(target, scale = TimeAuthority.worldClockScale()) {
     const cap = degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity);
-    return Math.min(Math.abs(target.tumbleRate || 0) * base, cap) / base;
+    return Math.min(Math.abs(target.tumbleRate || 0) * scale, cap) / scale;
   }
 
-  /** @private One full turn of the piece as drawn, in game seconds (SPIN_MIN_S for a piece that does not spin). */
+  /** @private One full turn of the piece as drawn at HOME (the shipped clock), in game seconds (SPIN_MIN_S for a piece that does not spin). */
   static _spinTurnS(target) {
-    const w = DossierSystem.drawnSpinRadS(target);
+    const w = DossierSystem.drawnSpinRadS(target, TimeAuthority.BASE_SCALE);
     return w > 1e-9 ? (2 * Math.PI) / w : Constants.INSPECT.SPIN_MIN_S;
+  }
+
+  /**
+   * @private How fast the measured turn fills against the home draw: the drawn turn rate now over the drawn turn rate at the shipped clock
+   * (1 at home, below 1 while a daughter is out and the draw runs at the world's real speed), so one full turn takes the time it is
+   * drawn to take. 1 for a piece that does not spin.
+   */
+  static _spinFill(target) {
+    const r = Math.abs(target.tumbleRate || 0);
+    const cap = degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity);
+    const home = Math.min(r * TimeAuthority.BASE_SCALE, cap);
+    return home > 1e-12 ? Math.min(r * TimeAuthority.worldClockScale(), cap) / home : 1;
   }
 
   /** @returns {Array<{k:string, s:string[]}>} the paid steps, for the save (empty = nothing to write). */
@@ -431,7 +445,7 @@ export class DossierSystem {
 
     // 4. Measure its spin: within SPIN_RANGE_M for one full turn of the piece as drawn (one clock with the label).
     if (!paid.has('spin') && bestM <= I.SPIN_RANGE_M) {
-      pr.spinS += step;
+      pr.spinS += step * DossierSystem._spinFill(target);
       if (pr.spinS >= DossierSystem._spinTurnS(target)) this._payInspect(target, key, 'spin', ip.pay.spin);
     }
 

@@ -269,8 +269,11 @@ export function* screenWindowGen(inp, T, out) {
   const end = pieces.map((p) => cwFree(n, T, p.pos, p.vel));
   for (let i = 0; i < pieces.length; i++) {
     for (let j = i + 1; j < pieces.length; j++) {
-      if (len3(sub3(pieces[i].pos, pieces[j].pos)) < P.MIN_SEP_M) continue;
       const A = end[i], B = end[j];
+      // A clump is judged where the pair is looked at: now when searching. A flight that replans passes `minSepM: 0`: the pair was
+      // accepted when it stood apart, and the pieces' own CW motion can bring two of them within MIN_SEP_M mid-flight (or at the end)
+      // without the pair rule at the end point minding (`pairVerdict` has its own MIN_SEP_DEG): sky-1120-pairfix.
+      if (len3(sub3(pieces[i].pos, pieces[j].pos)) < (inp.minSepM ?? P.MIN_SEP_M)) continue;
       for (let s = P.S_MIN; s <= P.S_MAX + 1e-9; s += P.S_STEP) {
         const L0 = [A.pos[0] + s * (B.pos[0] - A.pos[0]), A.pos[1] + s * (B.pos[1] - A.pos[1]), A.pos[2] + s * (B.pos[2] - A.pos[2])];
         const V = [A.vel[0] + s * (B.vel[0] - A.vel[0]), A.vel[1] + s * (B.vel[1] - A.vel[1]), A.vel[2] + s * (B.vel[2] - A.vel[2])];
@@ -325,6 +328,7 @@ export function chooseBest(pass) {
  * @param {Array<{id:*, pos:number[], vel:number[]}>} inp.pieces relative LVLH states now
  * @param {number} inp.reachM @param {number} inp.launchSpeed (m/s) @param {number} inp.homeGapS
  * @param {number[]} [inp.windows] @param {number[]} [inp.z0] her barrel in LVLH (for the bisector test)
+ * @param {number} [inp.minSepM] pieces nearer than this now are a clump and skipped (default `MIN_SEP_M`; 0 = a flight's replan)
  * @param {(c:object)=>boolean} [inp.verdict] the pair rule from the end point
  * @param {number} [inp.maxTry=80] @param {number} [inp.maxPass=4]
  * @returns {object[]} candidates (`finishGoal`), cheapest first
@@ -748,6 +752,10 @@ export class PairSetup {
     b.nextReplan = b.t + PAIR_SETUP.REPLAN_S;
     const left = b.T - b.t;
     if (left < PAIR_SETUP.REPLAN_END_S) return;
+    // The single window left sits near a whole orbit: no goal can be screened there (`screenWindowGen`, MIN_SIN), so a look would
+    // only count a false miss. The arcs in force stay valid (arc 2 is timed from b.T); the next replan looks again.
+    const p = this._ap._player;
+    if (p && p.orbit && Math.abs(Math.sin(p.orbit.meanMotion * left)) < PAIR_SETUP.MIN_SIN) return;
     const ctx = this._context(true);
     const plan = ctx ? this._planPairIn(ctx, b.idA, b.idB, left) : null;
     if (!plan) { b.noPlan = (b.noPlan || 0) + 1; if (b.noPlan >= 3) this._abort('the two pieces drifted out of line'); return; }
@@ -760,7 +768,7 @@ export class PairSetup {
     const pieces = this._pieces(ctx, [idA, idB]);
     if (pieces.length < 2) return null;
     const inp = this._input(ctx, pieces, [T]);
-    inp.maxPass = 6; inp.maxTry = 200;
+    inp.maxPass = 6; inp.maxTry = 200; inp.minSepM = 0;
     const c = chooseBest(planPairSetups(inp));
     return c ? { c, pieces } : null;
   }

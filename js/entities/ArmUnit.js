@@ -3803,7 +3803,7 @@ export class ArmUnit {
     const R = [parentPos.x / M, parentPos.y / M, parentPos.z / M];
     const rn = Math.hypot(R[0], R[1], R[2]);
     if (!(rn > 6.0e6 && rn < 1.0e8)) return null;   // not a position on an Earth orbit: leave it to the old controller
-    const BS = TimeAuthority.BASE_SCALE;
+    const BS = TimeAuthority.armScale();   // game s per second of her clock: BASE_SCALE as shipped, 1 under the real-speed clock (DECISIONS §70 row 6); same in every `BS` of this long fetch
     return {
       R, V: [mc.velocity.x * 1000, mc.velocity.y * 1000, mc.velocity.z * 1000],
       dd: [(this.position.x - parentPos.x) / M, (this.position.y - parentPos.y) / M, (this.position.z - parentPos.z) / M],
@@ -3855,7 +3855,7 @@ export class ArmUnit {
     if (inp) {
       const plan = planLaunch({
         R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut,
-        speedPhys: speed / TimeAuthority.BASE_SCALE, maxRangeM: this.config.tetherMax * CW_FLIGHT.TETHER_FRACTION,
+        speedPhys: speed / TimeAuthority.armScale(), maxRangeM: this.config.tetherMax * CW_FLIGHT.TETHER_FRACTION,
       }, accept ? { accept } : {});
       if (plan) dir = new THREE.Vector3(plan.dir[0], plan.dir[1], plan.dir[2]);
     }
@@ -3875,7 +3875,7 @@ export class ArmUnit {
     this._cwClear(true);
     const inp = this._cwEligibleInputs(this.target);
     if (!inp || !pushDir) return false;
-    const BS = TimeAuthority.BASE_SCALE;
+    const BS = TimeAuthority.armScale();
     const px = pushDir.x, py = pushDir.y, pz = pushDir.z, pn = Math.hypot(px, py, pz) || 1;
     const cosTol = Math.cos(CW_FLIGHT.AIM_TOL_DEG * Math.PI / 180);
     const plan = planLaunch({
@@ -3889,7 +3889,7 @@ export class ArmUnit {
       elapsedWorld: (CROSSBOW_RELEASE_TIME + 0.2) * BS,   // the spring-to-TRANSIT frames fly the straight line (a few metres: no tide to speak of)
       sinceReplan: 0, pending: new THREE.Vector3(), path: null, corrections: 0, a: [0, 0, 0],
     };
-    TimeAuthority.holdFlight(this);   // the plan assumes the world runs exactly BASE_SCALE x her clock: warp stays at 1 while she flies it
+    TimeAuthority.holdFlight(this);   // a floor under the real-speed clamp (see `TimeAuthority.holdFlight`); her plan is written against `armScale()` (BS above)
     // the path she will fly (the push the spring really gives, along the strut), drawn from the launch (the mother's frame)
     const sp = speedMps / BS / pn;
     this._cw.path = coastPath({ R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut, ud: [px * sp, py * sp, pz * sp], T: plan.T });
@@ -3919,7 +3919,7 @@ export class ArmUnit {
     if (!this._cwTide || !this._smoothDriftVel) return;
     const inp = this._cwInputs(parentPos);
     if (!inp) return;
-    const k = M * TimeAuthority.BASE_SCALE;   // true m/s -> her units (scene/s)
+    const k = M * TimeAuthority.armScale();   // true m/s -> her units (scene/s)
     this._smoothDriftVel.set(inp.ut[0] * k, inp.ut[1] * k, inp.ut[2] * k);
   }
 
@@ -3931,7 +3931,7 @@ export class ArmUnit {
    */
   _cwTideKick(dt, parentPos) {
     if (!this._cwTide || !parentPos || !(dt > 0)) return;
-    const BS = TimeAuthority.BASE_SCALE;
+    const BS = TimeAuthority.armScale();
     const k = dt * BS * BS * M;
     const a = tideAccel(
       [parentPos.x / M, parentPos.y / M, parentPos.z / M],
@@ -3952,7 +3952,7 @@ export class ArmUnit {
     if (!cw) return false;
     if (this.target !== cw.target || !(dt > 0)) { this._cwClear(); return false; }
     if (distScene / M <= CW_FLIGHT.HANDOFF_M) { this._cwClear(); return false; }
-    const BS = TimeAuthority.BASE_SCALE;
+    const BS = TimeAuthority.armScale();
     // a true acceleration a (m/s^2) over the frame's world time dt*BS changes her speed (game units, scene/s) by a * BS^2 * dt * M
     const kick = 0.5 * dt * BS * BS * M;
     const Rm = [parentPos.x / M, parentPos.y / M, parentPos.z / M];
@@ -3963,7 +3963,7 @@ export class ArmUnit {
     const pend = cw.pending.length();
     if (pend > 0 && !this._powerOff()) {
       const aMax = Constants.DAUGHTER_AUTOPILOT.MAX_ACCEL / this._fitMassRatio();
-      const take = Math.min(pend, aMax * M * dt * BS);
+      const take = Math.min(pend, aMax * M * dt * TimeAuthority.BASE_SCALE);   // her thrust law runs on her own game clock (BASE_SCALE), not the world's
       this.velocity.addScaledVector(cw.pending, take / pend);
       this._impulseDvAccum += take / M;
       cw.pending.multiplyScalar((pend - take) / pend);
@@ -3989,7 +3989,7 @@ export class ArmUnit {
     const cw = this._cw;
     const inp = this._cwInputs(parentPos);
     if (!cw || !inp) { this._cwClear(); return; }
-    const BS = TimeAuthority.BASE_SCALE;
+    const BS = TimeAuthority.armScale();
     const period = 2 * Math.PI / Math.sqrt(Constants.MU_EARTH * 1e9 / Math.pow(Math.hypot(inp.R[0], inp.R[1], inp.R[2]), 3));
     const Trem = cw.T - cw.elapsedWorld;
     if (Trem < CW_FLIGHT.NO_REPLAN_ORBITS * period) return;   // too near the end to re-solve; the handover is close
@@ -5028,7 +5028,7 @@ export class ArmUnit {
     if (!Constants.isFeatureEnabled('CAPTURE_TORQUE_SETTLE')) return;
     if (!(d.tumbleRate > 0) || !(dt > 0)) return;
     const maxVisualRad = degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity);
-    d.tumbleAngle = (d.tumbleAngle || 0) + Math.min(d.tumbleRate * TimeAuthority.BASE_SCALE, maxVisualRad) * dt;
+    d.tumbleAngle = (d.tumbleAngle || 0) + Math.min(d.tumbleRate * TimeAuthority.worldClockScale(), maxVisualRad) * dt;   // the same draw rate as DebrisField._advanceTumble (one clock)
   }
 
   /**
@@ -5857,7 +5857,7 @@ export class ArmUnit {
     if (st !== S.REELING && !(st === S.DOCKING && this._rhDockFree)) return null;
     const distM = this._strutTipDistM();
     if (distM == null) return null;
-    const BS = TimeAuthority.BASE_SCALE || 10;
+    const BS = TimeAuthority.armScale() || 10;   // game units -> true m/s: her shown speed is true against the field (1 under the real-speed clock)
     if (this._rhReelStartM == null || !(this._rhReelStartM > 0)) this._rhReelStartM = distM;
     const startM = this._rhReelStartM;
     const catching = this.capturedDebris !== null;
@@ -9168,8 +9168,9 @@ export class ArmUnit {
    * brakes the mother feels just the line's share.
    * Called from the REAL reel update (`_updateReeling`), never from `_rhReelStep`: `_reelHomeEtaS` steps that to estimate
    * the time left, and an estimate must not move the real mother.
-   * Units: the reel runs on REAL dt with game-scale speeds; the game clock runs TIME_SCALE_GAMEPLAY x faster, so the line
-   * acts for dt x BASE_SCALE game seconds: J = T x dt_game (true N·s), Δv = J / her live mass (as the mother-net tug).
+   * Units: the reel runs on REAL dt with game-scale speeds; the world clock runs `TimeAuthority.armScale()` x faster (BASE_SCALE
+   * at home, 1 while she is out under the real clock, DECISIONS §70 row 6), so the line acts for dt x armScale() world seconds:
+   * J = T x dt_world (true N·s), Δv = J / her live mass (as the mother-net tug).
    * @param {number} dt real seconds
    * @param {THREE.Vector3} tipWorld the strut-tip dock, world (scene units)
    * @private
@@ -9183,13 +9184,13 @@ export class ArmUnit {
     const dist = f.length();
     if (!(dist > 1e-7)) return;
     f.multiplyScalar(T / dist);
-    const res = ps.applyForceAtPoint(f, tipWorld, dt * TimeAuthority.BASE_SCALE, this._pushOpts || (this._pushOpts = { source: this }));
+    const res = ps.applyForceAtPoint(f, tipWorld, dt * TimeAuthority.armScale(), this._pushOpts || (this._pushOpts = { source: this }));   // world seconds of this frame: BASE_SCALE at home, 1 while she is out under the real clock
     if (res === false) this._reelPushRefused();
   }
 
   /**
    * reel-push: the daughter arrives at the strut tip with `reelSpeedGame` (game-scale m/s) and stops: her momentum goes into the
-   * mother, J = m x v (true N·s; v = reelSpeed / BASE_SCALE, 0.10 m/s true at V_DOCK), along her approach, at the tip. The strut
+   * mother, J = m x v (true N·s; v = reelSpeed / armScale(): BASE_SCALE at home, 1 while she is out under the real clock; 0.10 m/s true at V_DOCK at home), along her approach, at the tip. The strut
    * is rigid here (its give is not modelled). Flushes whatever the line left gathered.
    * @private
    */
@@ -9197,7 +9198,7 @@ export class ArmUnit {
     const ps = this._playerSatellite;
     if (this.isDetached || !ps || typeof ps.applyImpulseAtPoint !== 'function') return;
     const m = this._rhReelMassKg;
-    const v = reelSpeedGame / TimeAuthority.BASE_SCALE;
+    const v = reelSpeedGame / TimeAuthority.armScale();   // her TRUE speed: BASE_SCALE at home, 1 while she is out under the real clock
     const j = (this._pushJ || (this._pushJ = new THREE.Vector3())).subVectors(tipWorld, this.position);   // her -> the tip: her approach
     const d = j.length();
     if ((m > 0) && (v > 0) && (d > 1e-9)) j.multiplyScalar(m * v / d);
@@ -9481,8 +9482,8 @@ export class ArmUnit {
       const rs = this._playerSatellite && this._playerSatellite._resourceSystem;
       if (rs && typeof rs.billWatts === 'function') {
         // Under REEL_HOME the tension is true newtons, so the line speed must be TRUE m/s too (reel speed is game-scale:
-        // / TimeAuthority.BASE_SCALE). The legacy path keeps its game-scale pairing (old coefficient).
-        const lineSpeed = (rh && profileV2) ? reelSpeed / TimeAuthority.BASE_SCALE : reelSpeed;
+        // / TimeAuthority.armScale(): BASE_SCALE at home, 1 while she is out). The legacy path keeps its game-scale pairing (old coefficient).
+        const lineSpeed = (rh && profileV2) ? reelSpeed / TimeAuthority.armScale() : reelSpeed;   // armScale: BASE_SCALE at home, 1 while she is out under the real clock
         const mechW = Math.max(0, this.tetherTension) * lineSpeed / (MD.REEL_EFFICIENCY || 0.5);
         rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt, 'strutReel');
       }

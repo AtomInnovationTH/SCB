@@ -603,12 +603,34 @@ const DEPTH_MASK_MAT = new THREE.MeshBasicMaterial({
 
 const DEPTH_MASK_DIST = Constants.BODY_DEPTH_MASK_DIST;
 
+/**
+ * Camera-following bodies (floors 4-5, see SunLight._followsCamera): SunLight.update runs BEFORE the camera moves each frame,
+ * so a body placed at (sky offset + camera.position) there would trail the camera by one frame while it zooms or turns.
+ * `recordFollow` remembers each object's offset from the camera as placed; `syncFollowToCamera` (called right after
+ * CameraSystem.update) re-applies it to the camera's final pose. `follow` false clears the record.
+ * @param {object} self the SunLight (or a test stand-in): holds `_followOff` (a Map, made on first use)
+ * @param {boolean} follow
+ * @param {Array<THREE.Object3D|null|undefined>} objs
+ */
+function recordFollow(self, follow, objs) {
+  const map = self._followOff || (self._followOff = new Map());
+  if (!follow || !self.camera) { for (const o of objs) if (o) map.delete(o); return; }
+  const cam = self.camera.position;
+  for (const o of objs) {
+    if (!o) continue;
+    let off = map.get(o);
+    if (!off) { off = new THREE.Vector3(); map.set(o, off); }
+    off.copy(o.position).sub(cam);
+  }
+}
+
 export class SunLight {
   /**
    * @param {import('./SceneManager.js').SceneManager} [sceneManager] — needed for bloom, camera, renderer
    */
   constructor(scene, sceneManager) {
     this.scene = scene;
+    this._sceneManager = sceneManager || null;
     this.camera = sceneManager ? sceneManager.getCamera() : null;
     this.renderer = sceneManager ? sceneManager.getRenderer() : null;
     this.elapsedTime = 0;
@@ -1087,12 +1109,18 @@ export class SunLight {
       Math.sin(moonAngle)
     ).normalize();
 
-    // Origin-centered (not camera-relative like the sun); parallax is negligible.
+    // Origin-centered (not camera-relative like the sun); parallax is negligible. On the Earth-anchored floors (4, 5) the
+    // camera is up to 500 u out and the disc 430 u from Earth's centre would sit up to 930 u from it: past the far plane on
+    // the far side (the disc vanished along a line across the view, owner 2026-11-19), so there it follows the camera, as
+    // the Sun and the star shell do.
+    const follow = this._followsCamera();
     const moonPos = this._bodyPos.copy(moonDir).multiplyScalar(Constants.MOON_DIST);
+    if (follow) moonPos.add(this.camera.position);
     this.moonMesh.position.copy(moonPos);
 
     if (this._moonDepthMask) {
       this._moonDepthMask.position.copy(moonDir).multiplyScalar(DEPTH_MASK_DIST);
+      if (follow) this._moonDepthMask.position.add(this.camera.position);
     }
 
     // Phase is rendered by the shader from uSunDirView (set in onBeforeRender), not
@@ -1114,7 +1142,7 @@ export class SunLight {
     // edge; mask/label keep binary visibility.
     let opacity = Constants.MOON_BASE_OPACITY;
     if (this.camera) {
-      const moonOccluded = this._isOccludedByEarth(this.moonMesh.position, this.camera.position);
+      const moonOccluded = this._isOccludedByEarth(this.moonMesh.position, this.camera.position, follow);
       opacity *= this._earthLimbFadeFactor(this.moonMesh.position, this.camera.position);
       this.moonMesh.visible = !moonOccluded;
       if (this._moonDepthMask) this._moonDepthMask.visible = !moonOccluded;
@@ -1122,6 +1150,7 @@ export class SunLight {
     }
 
     this._moonMaterial.uniforms.uOpacity.value = opacity;
+    recordFollow(this, follow, [this.moonMesh, this._moonDepthMask, this._moonLabel]);
   }
 
   /**
@@ -1219,6 +1248,8 @@ export class SunLight {
     const _down = this._downTmp.set(0, -1, 0);
     if (this.camera) _down.applyQuaternion(this.camera.quaternion);
 
+    const follow = this._followsCamera();
+    const camPos = follow ? this.camera.position : null;
     for (const p of this._planets) {
       const angle = sunAngle + p.deg * DEG2RAD;
       _pos.set(Math.cos(angle), 0, Math.sin(angle));
@@ -1227,18 +1258,37 @@ export class SunLight {
       if (p.depthMask) p.depthMask.position.copy(_pos).multiplyScalar(DEPTH_MASK_DIST);
       p.glow.position.copy(_pos).multiplyScalar(Constants.PLANET_GLOW_DIST);  // slightly behind disc
       _pos.multiplyScalar(Constants.PLANET_DIST);  // restore for label calc
+      if (camPos) {   // floors 4-5: the sky follows the camera (see _updateMoon)
+        p.disc.position.add(camPos);
+        if (p.depthMask) p.depthMask.position.add(camPos);
+        p.glow.position.add(camPos);
+        _pos.add(camPos);
+      }
 
       const labelOffset = p.radius + Constants.PLANET_LABEL_OFFSET;
       p.label.position.copy(_pos).add(this._labelTmp.copy(_down).multiplyScalar(labelOffset));
 
       if (this.camera) {
-        const occluded = this._isOccludedByEarth(p.disc.position, this.camera.position);
+        const occluded = this._isOccludedByEarth(p.disc.position, this.camera.position, follow);
         p.disc.visible = !occluded;
         p.glow.visible = !occluded;
         p.label.visible = !occluded && !this._labelsHidden;
         if (p.depthMask) p.depthMask.visible = !occluded;
       }
+      recordFollow(this, follow, [p.disc, p.glow, p.label, p.depthMask]);
     }
+  }
+
+  /**
+   * Re-apply the camera-following bodies' offsets to the camera's pose of THIS frame: call it right after
+   * CameraSystem.update (SunLight.update ran earlier in the frame, so the Moon and planets would lag the moving camera by a
+   * frame). A no-op off floors 4-5, without a camera, or before the first update.
+   */
+  syncFollowToCamera() {
+    const map = this._followOff;
+    if (!map || !map.size || !this.camera || !this._followsCamera()) return;
+    const cam = this.camera.position;
+    for (const [obj, off] of map) obj.position.copy(off).add(cam);
   }
 
   /**
@@ -1316,11 +1366,22 @@ export class SunLight {
   }
 
   /**
+   * True while the camera is on an Earth-anchored ladder floor (4, 5): the Moon and planets then sit camera-relative like
+   * the Sun and the star shell (SceneManager.isLadderSkyFollowing), so no far plane cuts them. False without a scene
+   * manager (tests) or off the ladder: origin-centred as always.
+   */
+  _followsCamera() {
+    const sm = this._sceneManager;
+    return !!(this.camera && sm && typeof sm.isLadderSkyFollowing === 'function' && sm.isLadderSkyFollowing());
+  }
+
+  /**
    * True if `bodyPos` is behind Earth's angular disc from `cameraPos` (world).
    * Geometric CPU-side test: bodies with depthTest:false (moon, planets) cannot
-   * be occluded by the depth buffer.
+   * be occluded by the depth buffer. `atInfinity` (camera-following bodies, floors 4-5): the body is at the sky, farther
+   * than any Earth surface, so only the angular test counts (a 430 u disc seen from 500 u would otherwise pass in front).
    */
-  _isOccludedByEarth(bodyPos, cameraPos) {
+  _isOccludedByEarth(bodyPos, cameraPos, atInfinity = false) {
     const earthRadius = Constants.EARTH_RADIUS;
     const camDist = cameraPos.length(); // camera to Earth center (origin)
     if (camDist <= earthRadius) return false;
@@ -1338,7 +1399,7 @@ export class SunLight {
 
     // Occluded: inside Earth's angular disc AND farther than the Earth surface.
     const earthSurfaceDist = camDist - earthRadius;
-    return angle < earthAngularRadius && bodyDist > earthSurfaceDist;
+    return angle < earthAngularRadius && (atInfinity || bodyDist > earthSurfaceDist);
   }
 
   /**
