@@ -5613,7 +5613,7 @@ export class ArmUnit {
 
   /**
    * Begin a magnetic grapple from STATION_KEEP: sub-FSM ENERGIZING → CLOSING → GRIP in `_updateMagneticGrapple`. Emits
-   * AUTOPILOT_TARGET_LOCK so CollisionAvoidance exempts the target while she closes within contact range (§5.1 gotcha).
+   * AUTOPILOT_TARGET_LOCK so CollisionAvoidance exempts the target for the whole close-in, 4-12 m at a few cm/s (§5.1 gotcha).
    * @returns {boolean}
    */
   magneticGrapple() {
@@ -5625,9 +5625,10 @@ export class ArmUnit {
     eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'magnet' });
     this._magPhase = 'ENERGIZING';
     this._magTimer = 0;
+    this._latch = null;   // the real-speed close-in state (`_latchClose`) starts fresh with each grapple
     this._captureToolKind = 'MAGNET';
     audioSystem.playMagnetic();
-    // CA exemption during CLOSING (she drives < 0.5 m to the target); released centrally on any exit from MAGNETIC_GRAPPLE.
+    // CA exemption for the whole close-in (she drives the full stand-off range, 4-12 m, to the piece's surface); released centrally on any exit from MAGNETIC_GRAPPLE.
     this._toolLockedDebrisId = target.id;
     eventBus.emit(Events.AUTOPILOT_TARGET_LOCK, { debrisId: target.id });
     eventBus.emit(Events.MAGNETIC_GRIP_ATTEMPT, {
@@ -5661,21 +5662,21 @@ export class ArmUnit {
     }
 
     if (this._magPhase === 'CLOSING') {
+      // Real latch close-in (§70 row 1): jet speeds her up and brakes her, touching the piece's surface at V_TOUCH_MS (`_latchClose`).
       const tPos = target._scenePosition;
-      if (tPos) {
-        this.position.lerp(tPos, Math.min(1, dt * 2.0));
-        const distM = this.position.distanceTo(tPos) / M;
-        if (distM <= MAG.CONTACT_RANGE_M) {
-          this._magPhase = 'GRIP';
-          this._magTimer = 0;
-          return;
-        }
+      if (tPos && this._latchClose(target, dt, 'MAGNET')) {
+        if (this._latch.hard) { this._failMagneticGrip('standoff'); return; }   // touched faster than the pad's limit: a hard hit, no latch
+        this._magPhase = 'GRIP';
+        this._magTimer = 0;
+        return;
       }
-      if (this._magTimer >= MAG.CLOSE_TIMEOUT_S) this._failMagneticGrip('standoff');
+      // the timeout is the law's own closed-form time x TIMEOUT_FACTOR + TIMEOUT_PAD_S, fixed when the close-in began
+      if (this._magTimer >= (this._latch ? this._latch.timeoutS : MAG.TIMEOUT_PAD_S)) this._failMagneticGrip('standoff');
       return;
     }
 
     if (this._magPhase === 'GRIP') {
+      if (this._latch && target._scenePosition) this._latchClose(target, dt, 'MAGNET');   // touching: she rides with the piece through the dwell
       if (this._magTimer >= MAG.GRIP_DWELL_S) this._resolveMagnetGrip(target);
     }
   }
@@ -6064,7 +6065,7 @@ export class ArmUnit {
   }
 
   /**
-   * Begin a 3-jaw gripper grapple from STATION_KEEP: sub-FSM in `_updateGripperGrapple`, EXTEND → SEEK (fixture raycast) → CLOSE → latch roll.
+   * Begin a 3-jaw gripper grapple from STATION_KEEP: sub-FSM in `_updateGripperGrapple`, EXTEND → SEEK (she closes in on the piece at a real latch speed, `_latchClose`) → CLOSE (jaws, only after touching) → latch roll.
    * @returns {boolean}
    */
   gripperGrapple() {
@@ -6077,6 +6078,7 @@ export class ArmUnit {
     eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'gripper' });
     this._gripPhase = 'EXTEND';
     this._gripTimer = 0;
+    this._latch = null;   // the real-speed close-in state (`_latchClose`) starts fresh with each grapple
     this._captureToolKind = 'GRIPPER';
     audioSystem.playClick();
     this._toolLockedDebrisId = target.id;
@@ -6104,20 +6106,144 @@ export class ArmUnit {
     }
 
     if (this._gripPhase === 'SEEK') {
+      // Real latch close-in (§70 row 1): the jaws close (below) only once she has TOUCHED the piece, at V_TOUCH_MS, not before.
       const tPos = target._scenePosition;
-      if (tPos) this.position.lerp(tPos, Math.min(1, dt * 2.0));
-      if (this._gripTimer >= G.SEEK_TIME_S) {
+      const touched = tPos ? this._latchClose(target, dt, 'GRIPPER') : false;
+      if (touched && this._latch.hard) {
+        this._failGripperGrip('no_fixture');   // touched faster than the pad's limit: a hard hit, no latch (the existing miss path)
+      } else if (touched && this._gripTimer >= G.SEEK_TIME_S) {
         const fixtured = target.hasGrappleFixture === true;
         eventBus.emit(Events.GRIPPER_LATCH_ATTEMPT, { armId: this.id, targetId: target.id, fixtured });
         this._gripPhase = 'CLOSE';
         this._gripTimer = 0;
+      } else if (this._gripTimer >= (this._latch ? this._latch.timeoutS : Constants.MAGNETIC_GRAPPLE.TIMEOUT_PAD_S)) {
+        this._gripUnreachedS = this._gripTimer;   // for the line
+        this._failGripperGrip('unreached');   // she never got there: the same time limit as the magnet's close-in
       }
       return;
     }
 
     if (this._gripPhase === 'CLOSE') {
+      if (this._latch && target._scenePosition) this._latchClose(target, dt, 'GRIPPER');   // touching: she rides with the piece while the jaws close
       if (this._gripTimer >= G.CLOSE_TIME_S) this._resolveGripperLatch(target);
     }
+  }
+
+  /**
+   * @private The one close-in law for the magnet and the gripper (DECISIONS §70 row 1, owner 2026-11-08: "a few cm/s"). She rides
+   * with the piece as the pad does (her offset from it is kept and re-added to its scene position every frame), and her cold-gas
+   * jet speeds her up and brakes her at its TRUE acceleration (thrust / (her mass + gas), no game-speed factor), so her closing
+   * speed along the line follows vDes(gap) = sqrt(V^2 + 2a(gap - SLOW)) down to V_TOUCH_MS at SLOW_ZONE_M, then holds V_TOUCH_MS
+   * to contact. Contact is the piece's SURFACE (`DebrisField.trueReachM`) plus the tool head's offset, never its centre. Thrust
+   * seconds (speeding up and braking, none while she coasts) are billed as real gas as the seat spin-down does; with the bottle
+   * empty the same law runs on her ion thrust (billed as the ion thread bills it; no ion fuel and no gas: no thrust at all, so the
+   * timeout ends it). Her top speed is capped by the gas left (she may only speed up as far as the gas can still brake her to
+   * V_TOUCH_MS, 10 % kept back; re-planned every frame). A touch faster than the pad's `CONTACT_VEL_MAX_M_S` sets `_latch.hard` (the
+   * callers fail it through their miss path). The first
+   * call of a close-in fixes the closed-form time (the start line and the timeout `timeoutS`); the calls after contact only keep
+   * her riding. `_latchFreezeOverride` (test seam) holds her still, as if blocked.
+   * @param {object} target the piece
+   * @param {number} dt seconds (real, the dt the sub-FSM gets)
+   * @param {'MAGNET'|'GRIPPER'} tool picks the head offset
+   * @returns {boolean} true once she touches (and while she stays touching)
+   */
+  _latchClose(target, dt, tool) {
+    const MAG = Constants.MAGNETIC_GRAPPLE;
+    const V = MAG.V_TOUCH_MS, SLOW = MAG.SLOW_ZONE_M;
+    const tPos = target._scenePosition;
+    let L = this._latch;
+    const CG = Constants.DAUGHTER_COLD_GAS || {};
+    const thrustN = this._coldGasThrustN();
+    const ve = (CG.ISP_S ?? 60) * Constants.G0;
+    const live = !this._powerOff();
+    const gasKg = Math.max(0, this.coldGasKg);
+    const mass = this._massKg() + gasKg;
+    const hasGas = live && gasKg > (CG.EMPTY_KG ?? 1e-5) && thrustN > 0;
+    const hasIon = live && this.fuel > 0 && this._ionThrustN() > 0;   // the ion thread burns FEEP: no fuel, no ion thrust
+    const aGas = thrustN / mass;
+    const aIon = hasIon ? this._ionThrustN() / mass : 0;
+    // Gas speed budget (Δv left in the bottle, 10 % kept back): she may only speed up as far as the gas that is left can still
+    // brake her to V_TOUCH_MS. Re-evaluated every frame from the gas then left, so a pack that goes flat re-plans the same way.
+    // The ion's few mm/s^2 are not counted (conservative: braking is planned on the gas alone).
+    const dvGas = hasGas ? 0.9 * gasKg * ve / mass : 0;
+    const speedCap = (v) => (hasGas ? Math.min((dvGas + v + V) / 2, v + dvGas) : Infinity);
+    // Closed form of the profile she flies (the start line and the timeout): speed up at a to the peak (the triangle peak, or
+    // `vCap` if the gas allows less), brake at a to V at the zone, creep at V to contact; a start inside the zone just speeds up to V.
+    const plan = (D, a, vCap) => {
+      if (!(D > 0) || !(a > 0) || !(vCap > 0)) return { t: 0, peak: 0 };
+      const dV = V * V / (2 * a);
+      if (D <= dV) return { t: Math.sqrt(2 * D / a), peak: Math.sqrt(2 * a * D) };   // touches before reaching V
+      const vpk = Math.sqrt(V * V / 2 + a * Math.max(0, D - SLOW));
+      const vc = Math.min(Math.max(vpk, V), vCap);
+      if (vc < V) return { t: vc / a + (D - vc * vc / (2 * a)) / vc, peak: vc };       // too little gas to reach V: cruises at vc
+      const d1 = vc * vc / (2 * a), d2 = (vc * vc - V * V) / (2 * a);
+      const creep = Math.min(SLOW, Math.max(0, D - d1 - d2));
+      const cruise = Math.max(0, D - d1 - d2 - creep);
+      return { t: (2 * vc - V) / a + cruise / vc + creep / V, peak: vc };
+    };
+    if (!L || L.target !== target) {
+      const off0 = this.position.clone().sub(tPos);
+      // Contact: the piece's surface (`trueReachM`) + her centre-to-face distance (half her 0.2 m body along y, `WEAVER_BODY`, the
+      // face the tools sit on) + how far the tool reaches past that face (gripper jaws `REACH_M` 0.30; magnet pole face `HEAD_OFFSET_M`).
+      const faceM = ((Constants.WEAVER_BODY && Constants.WEAVER_BODY[1]) || 0.2) / 2;
+      const stopM = DebrisField.trueReachM(target, 0) + faceM
+        + (tool === 'GRIPPER' ? Constants.GRIPPER_GRAPPLE.REACH_M : MAG.HEAD_OFFSET_M);
+      const D = off0.length() / M - stopM;
+      let pl = hasGas ? plan(D, aGas, speedCap(0)) : plan(D, aIon, Infinity);
+      if (hasGas && pl.peak < 0.01) pl = plan(D, aIon, Infinity);   // a bottle with next to no gas: the ion does the work
+      const estS = pl.t, peakMs = pl.peak;
+      L = this._latch = {
+        target, off: off0, stopM, v: 0, touched: D <= 1e-6, hard: false, estS, peakMs,
+        timeoutS: MAG.TIMEOUT_FACTOR * estS + MAG.TIMEOUT_PAD_S,
+      };
+      if (estS > 0) {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: this.displayName, channel: 'CMD', priority: 'info',
+          text: `${this.displayName}: Closing in at ${Math.round(V * 100)} cm/s, about ${Math.max(1, Math.round(estS))} s.`,
+        });
+      }
+    }
+    const prevX = this.position.x, prevY = this.position.y, prevZ = this.position.z;
+    const off = L.off;
+    const dM = off.length() / M;
+    let gap = dM - L.stopM;
+    if (!L.touched && this._latchFreezeOverride !== true && dt > 0) {
+      const a = hasGas ? aGas : aIon;
+      const vProfile = gap > SLOW ? Math.sqrt(V * V + 2 * a * (gap - SLOW)) : V;
+      const vDes = Math.min(vProfile, speedCap(L.v));
+      const need = Math.abs(vDes - L.v);
+      if (a > 0 && need > 0) {
+        let dv = Math.min(need, a * dt), kg = 0, ionS = 0;
+        if (hasGas) {
+          kg = thrustN * (dv / aGas) / ve;
+          if (kg > gasKg) {                       // the bottle runs dry inside this frame: the rest of it is the ion's
+            const gasS = gasKg * ve / thrustN;
+            const dvG = aGas * gasS;
+            dv = Math.min(need, dvG + aIon * Math.max(0, dt - gasS));
+            kg = dv < dvG ? thrustN * (dv / aGas) / ve : gasKg;
+            ionS = aIon > 0 ? Math.max(0, dv - dvG) / aIon : 0;
+          }
+        } else {
+          ionS = dv / aIon;
+        }
+        L.v += Math.sign(vDes - L.v) * dv;
+        if (kg > 0) { this.coldGasKg = Math.max(0, this.coldGasKg - kg); this.power.markGas(); }
+        if (ionS > 0) {                           // the ion's thrust seconds are billed as the ion thread bills them (FEEP + engine mark)
+          const bs = TimeAuthority.BASE_SCALE;    // `_billIonThread` multiplies by it (game seconds); these are true seconds
+          this._billIonThread(ionS / (bs > 0 ? bs : 1), mass);
+        }
+      }
+      const stepM = Math.min(Math.max(0, L.v) * dt, Math.max(0, gap));
+      if (dM > 0 && stepM > 0) { off.multiplyScalar((dM - stepM) / dM); gap -= stepM; }
+      if (gap <= 1e-6) {
+        L.touched = true;
+        // faster than the pad's own limit is a hard hit, not a latch: the callers fail it through their miss path
+        L.hard = L.v > Constants.PAD_CONTACT.CONTACT_VEL_MAX_M_S;
+      }
+    }
+    this.position.copy(tPos).add(off);
+    if (dt > 1e-6) this.velocity.set((this.position.x - prevX) / dt, (this.position.y - prevY) / dt, (this.position.z - prevZ) / dt);
+    return L.touched;
   }
 
   _resolveGripperLatch(target) {
@@ -6145,14 +6271,18 @@ export class ArmUnit {
     }
     const cause = reason === 'oversize'
       ? 'Gripper failed: target beyond the jaw mass limit.'
-      : reason === 'no_fixture'
-        ? 'Gripper found no fixture to grab (the net may suit this target).'
-        : 'Gripper slipped off the fixture.';
+      : reason === 'unreached'
+        ? `Gripper could not reach the piece in ${Math.round(this._gripUnreachedS || 0)} s.`
+        : reason === 'no_fixture'
+          ? 'Gripper found no fixture to grab (the net may suit this target).'
+          : 'Gripper slipped off the fixture.';
     const msg = reason === 'oversize'
       ? `${this.displayName}: Gripper failed. Target beyond jaw mass limit. Returning to reload.`
-      : reason === 'no_fixture'
-        ? `${this.displayName}: Gripper found no fixture to grab. Returning; the net may suit this target.`
-        : `${this.displayName}: Gripper slipped off the fixture. Returning to reload.`;
+      : reason === 'unreached'
+        ? `${this.displayName}: Could not reach the piece in ${Math.round(this._gripUnreachedS || 0)} s. Returning.`
+        : reason === 'no_fixture'
+          ? `${this.displayName}: Gripper found no fixture to grab. Returning; the net may suit this target.`
+          : `${this.displayName}: Gripper slipped off the fixture. Returning to reload.`;
     this._endToolFailure(cause,
       { source: this.displayName, text: msg, channel: 'CMD', priority: 'warning' });
   }

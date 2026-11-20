@@ -36,6 +36,8 @@ import { bagSize } from './scoopRule.js';
 import { addDeltaVToOrbit } from './pieceDeltaV.js';
 import { DragSailSet } from './DragSailMesh.js';
 import { degToRad, radToDeg, clamp01, clamp, smoothstep01 } from '../core/MathUtil.js';
+import { gameState } from '../core/GameState.js';
+import { tauDays as spinTauDays, decayedRate as spinDecayedRate } from '../systems/SpinDecay.js';
 
 // Honour Constants.DEBRIS.INTERACTIVE_COUNT/BACKGROUND_COUNT so hybrid-mode tests can inject.
 const INTERACTIVE_COUNT = (Constants.DEBRIS && Constants.DEBRIS.INTERACTIVE_COUNT) || 800;
@@ -3919,6 +3921,8 @@ export class DebrisField {
           mesh.instanceMatrix.needsUpdate = true;
         }
       }
+      // DECISIONS §70 row 2: spin ages by the ship days she is away. `init` is the spawn spin (a laser's lowering leaves it high, so the despin bonus still pays on return).
+      d._spinStamp = { rate: d.tumbleRate || 0, day: DebrisField._shipDayNow(), init: d._initialTumbleRate > 0 ? d._initialTumbleRate : (d.tumbleRate || 0) };
       this._fieldStored.set(`${d.fieldId}|${d.fieldRow}`, d);
       stored++;
     }
@@ -3961,7 +3965,158 @@ export class DebrisField {
     const d = this._fieldStored.get(key);
     if (!d) return null;
     this._fieldStored.delete(key);
-    return d.alive ? null : d;
+    if (d.alive) return null;
+    const st = d._spinStamp;
+    d._spinStamp = null;
+    if (st) DebrisField._ageReturningSpin(d, st.rate, st.day, fieldId, this._fieldSource, false, st.init);
+    return d;
+  }
+
+  /** The ship day now (`gameState.shipDays`; 0 when unset). */
+  static _shipDayNow() {
+    const d = gameState.shipDays;
+    return Number.isFinite(d) && d > 0 ? d : 0;
+  }
+
+  /**
+   * Where a field's spin decays: the field's height (its table row; a place that is no field: 500 km) and her orbit's tilt.
+   * @param {string} fieldId @param {object} [fieldSource] the FieldRegistry (for her tilt) @returns {{altKm: number, incDeg: number}}
+   */
+  static _spinEnv(fieldId, fieldSource) {
+    const list = Constants.FIELDS && Constants.FIELDS.LIST;
+    const f = Array.isArray(list) ? list.find((x) => x.id === fieldId) : null;
+    const tilt = fieldSource && typeof fieldSource.startTiltDeg === 'function' ? fieldSource.startTiltDeg() : null;
+    return { altKm: f && Number.isFinite(f.altKm) ? f.altKm : 500, incDeg: Number.isFinite(tilt) ? tilt : 51.6 };
+  }
+
+  /**
+   * A piece comes back from a field after ship days away: its spin is `rate` · exp(−days/τ) (SpinDecay), and that is its new spawn
+   * spin (`_initialTumbleRate` too, so waiting never pays the despin bonus). Nothing changes when no ship day passed (a Stay
+   * re-seats at once). `_spinReturn` carries was/now to the end of the spawn loop, which re-applies it after an authored spin and
+   * says the arrival line. The value set here is provisional: the layout may still change the piece's type or mover flag, so
+   * `_applyReturnSpins` works τ out again from the final piece (`fieldId` and `days` ride in `_spinReturn` for that).
+   * `force` (a saved live piece, whose stamp is today) sets the saved spin even when no day has passed.
+   * `init` is the spawn spin saved with the piece (`_initialTumbleRate`; a laser lowers `tumbleRate` and leaves it high): it
+   * is aged by the same factor as the rate, so natural decay lowers both and the despin bonus still pays after a laser. Missing
+   * or not above zero (an old two-value entry): the spawn spin is the rate, as before.
+   * @returns {boolean} true when the spin changed
+   */
+  static _ageReturningSpin(d, rate, stampDay, fieldId, fieldSource, force = false, init = rate) {
+    const days = Math.max(0, DebrisField._shipDayNow() - stampDay);
+    if (!(rate > 0) || (!(days > 0) && !force)) { d._spinReturn = null; return false; }
+    const env = DebrisField._spinEnv(fieldId, fieldSource);
+    const now = spinDecayedRate(rate, days, spinTauDays(d, env.altKm, env.incDeg));
+    const initWas = init > 0 ? init : rate;
+    d.tumbleRate = now;
+    d._initialTumbleRate = initWas * (now / rate);
+    d._spinReturn = { was: rate, now, days, fieldId, init: initWas };
+    return true;
+  }
+
+  /**
+   * Ship days passed while pieces stayed live (a wait, a finish burn): every live field piece loses spin by the gap since the
+   * last time this ran. Never per frame. Called by GameFlowManager after it adds ship days.
+   * @returns {number} how many pieces slowed
+   */
+  ageLivePieces() {
+    const today = DebrisField._shipDayNow();
+    const last = Number.isFinite(this._spinAgedDay) ? this._spinAgedDay : today;
+    this._spinAgedDay = today;
+    const days = today - last;
+    if (!(days > 0)) return 0;
+    let n = 0;
+    for (const d of this.debrisList) {
+      if (!d.alive || d.fieldId == null || !(d.tumbleRate > 0)) continue;
+      const env = DebrisField._spinEnv(d.fieldId, this._fieldSource);
+      const k = spinDecayedRate(1, days, spinTauDays(d, env.altKm, env.incDeg));
+      d.tumbleRate *= k;
+      if (d._initialTumbleRate > 0) d._initialTumbleRate *= k;
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * The spins for the save: `{"<fieldId>|<row>": [rate rad/s, ship day, spawn spin rad/s]}` (an old save has two values); null when there are none. Stored pieces (the fields she
+   * left) carry their stamp; the live pieces of the field she is at carry their current spin and today's ship day, so a save made
+   * there keeps what a wait or a return took off. A live entry replaces a stored one for the same key (it is newer).
+   * @returns {Object<string, number[]>|null}
+   */
+  exportStoredSpins() {
+    const out = {};
+    let any = false;
+    for (const [key, d] of this._fieldStored) {
+      const st = d._spinStamp;
+      if (!st || !(st.rate > 0)) continue;
+      out[key] = [st.rate, st.day, st.init > 0 ? st.init : st.rate];
+      any = true;
+    }
+    const today = DebrisField._shipDayNow();
+    for (const d of this.debrisList) {
+      if (!d.alive || d.fieldId == null || d.fieldRow == null || d.isBag === true || !(d.tumbleRate > 0)) continue;
+      out[`${d.fieldId}|${d.fieldRow}`] = [d.tumbleRate, today, d._initialTumbleRate > 0 ? d._initialTumbleRate : d.tumbleRate];
+      any = true;
+    }
+    return any ? out : null;
+  }
+
+  /**
+   * Load the saved spins (after a reload the in-memory store is empty): a returning row with an entry takes that spin, decayed to
+   * the ship day then. Replaces any earlier import. Malformed entries are dropped; an old save passes `{}`.
+   * @param {Object<string, number[]>} map
+   */
+  importStoredSpins(map) {
+    this._importedSpins = new Map();
+    this._spinAgedDay = undefined;
+    if (!map || typeof map !== 'object') return;
+    for (const [key, v] of Object.entries(map)) {
+      if (Array.isArray(v) && Number.isFinite(v[0]) && v[0] > 0 && Number.isFinite(v[1])) this._importedSpins.set(key, { rate: v[0], day: v[1], init: Number.isFinite(v[2]) && v[2] > 0 ? v[2] : v[0] });
+    }
+  }
+
+  /**
+   * A row's piece chosen after a reload (no stored piece): it takes the imported spin for (field, row), decayed to now. The entry
+   * is used up. Does nothing for a piece that came from the store (`_spinReturn` already set) except use up the entry.
+   */
+  _noteImportedSpin(d, fieldPlan, row) {
+    if (!this._importedSpins || this._importedSpins.size === 0) return;
+    const key = `${fieldPlan.fieldId}|${row}`;
+    const e = this._importedSpins.get(key);
+    if (!e) return;
+    this._importedSpins.delete(key);
+    if (d._spinReturn) return;
+    DebrisField._ageReturningSpin(d, e.rate, e.day, fieldPlan.fieldId, this._fieldSource, true, e.init);
+  }
+
+  /**
+   * End of a field layout: a returning piece's slowed spin is set again (an authored row spin was written over it while the piece
+   * was placed, and the layout may have changed its type or mover flag, so τ is worked out again from the final piece), and one
+   * comms line says so when any spin fell 20 % or more: the fastest of the pieces that slowed, now and was. The line gives one
+   * decimal under 10°/s and is skipped when the two printed numbers would be equal.
+   * @param {Array<object|null>} pieces the pieces just laid out
+   */
+  _applyReturnSpins(pieces) {
+    this._spinAgedDay = DebrisField._shipDayNow();     // the pieces are live from this ship day: `ageLivePieces` counts from here
+    const fmt = (rad) => { const deg = radToDeg(rad); return deg < 10 ? deg.toFixed(1) : String(Math.round(deg)); };
+    let top = null;
+    for (const d of pieces || []) {
+      const r = d && d._spinReturn;
+      if (!r) continue;
+      d._spinReturn = null;
+      if (r.days > 0) {
+        const env = DebrisField._spinEnv(r.fieldId, this._fieldSource);
+        r.now = spinDecayedRate(r.was, r.days, spinTauDays(d, env.altKm, env.incDeg));
+      }
+      d.tumbleRate = r.now;
+      d._initialTumbleRate = (r.init > 0 ? r.init : r.was) * (r.now / r.was);   // the spawn spin ages by the same factor as the rate
+      if (r.now <= r.was * 0.8 && fmt(r.now) !== fmt(r.was) && (!top || r.was > top.was)) top = r;
+    }
+    if (!top) return;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'HOUSTON',
+      text: `Spins here have slowed while you were away: fastest slowed piece now ${fmt(top.now)}°/s (was ${fmt(top.was)}°/s).`,
+      priority: 'info',
+    });
   }
 
   /** A new run: stored pieces go back to the pool (alive, ordinary debris) and no piece keeps a field tag (a stale tag
@@ -3974,6 +4129,8 @@ export class DebrisField {
       d._fieldStored = false;
     }
     this._fieldStored.clear();
+    if (this._importedSpins) this._importedSpins.clear();   // a new run keeps no saved spins of the old one
+    this._spinAgedDay = undefined;
     for (const d of this.debrisList) {
       if (d._heavySpare) { this._parkHeavySpare(d); continue; }   // stored, claimed in the sky or caught: back in the pool, claimable again
       if (d.fieldId != null) { d.fieldId = null; d.fieldRow = null; }
@@ -4137,6 +4294,7 @@ export class DebrisField {
         || (spec.high ? claim.call(this, desiredType(spec), spec.material, spec.missionSat ? 'mission' : 'high')
           : (pickFar(spec) || pickAny(farOther) || pickAny(fallbackCandidates)));
       if (!chosen) break; // ran out of candidates entirely
+      if (fieldPlan) (this._noteImportedSpin || DebrisField.prototype._noteImportedSpin).call(this, chosen, fieldPlan, rowOf(i));   // a reload's saved spin (§70 row 2)
       usedIds.add(chosen.id);
       assigned[i] = chosen;
     }
@@ -4372,6 +4530,7 @@ export class DebrisField {
       console.log(`[DebrisField] Welcome field: repositioned ${placed} debris near player (mission ${this._currentMissionNumber}, profile: ${profile.label})`);
     }
     (this._syncMoversLeft || DebrisField.prototype._syncMoversLeft).call(this);   // tell the coach what movers this layout holds
+    (this._applyReturnSpins || DebrisField.prototype._applyReturnSpins).call(this, assigned);   // slowed spins stand over an authored row spin; the arrival line (§70 row 2)
 
     // Mission 1 only: hide all non-welcome interactive debris so the pilot sees a tight ≤1.5 km cluster, not catalog debris
     // drifting through at multi-km range. Marked _hiddenForMission1 so _onMissionStart() can restore them.

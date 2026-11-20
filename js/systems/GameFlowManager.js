@@ -781,6 +781,8 @@ export class GameFlowManager {
       // The game date's first-start day and the storm calendar's seed (SunStorms.js); an older save has neither and is stamped on first use.
       gameState.skyStartMs = Number.isFinite(save.skyStartMs) ? save.skyStartMs : null;
       gameState.skySeed = Number.isFinite(save.skySeed) ? save.skySeed : null;
+      // DECISIONS §70 row 2: the stored pieces' spins (an old save has none: pieces return as they always did)
+      if (this._refs.debrisField && typeof this._refs.debrisField.importStoredSpins === 'function') this._refs.debrisField.importStoredSpins(save.fieldSpins || {});
       // Ship wear (ShipWear.js): the worn parts come back; a save without it wears nothing on its first frame (wearShipDays =
       // shipDays). ResourceSystem.restore (above) set the wings to 1: they start at their age.
       shipWear.restore(save.shipWear, gameState.shipDays);
@@ -2173,6 +2175,8 @@ export class GameFlowManager {
     if (fieldsSave) {
       saveData.fields = fieldsSave;
       if (gameState.shipDays > 0) saveData.shipDays = gameState.shipDays;
+      const spins = this._refs.debrisField && typeof this._refs.debrisField.exportStoredSpins === 'function' ? this._refs.debrisField.exportStoredSpins() : null;
+      if (spins) saveData.fieldSpins = spins;   // DECISIONS §70 row 2: the spins of the pieces she left, with the ship day each was left
     }
     // Plan sky-1116: the game date's first-start day and the storm calendar's seed, once stamped (SunStorms.js); no key before, so older and test saves are unchanged.
     if (Number.isFinite(gameState.skyStartMs)) saveData.skyStartMs = gameState.skyStartMs;
@@ -4417,6 +4421,7 @@ export class GameFlowManager {
     }
     player.billBurnGas(fb.dvMps);
     gameState.shipDays += fb.days;
+    this._refs?.debrisField?.ageLivePieces?.();      // DECISIONS §70 row 2: the days away slow the pieces still here
     if (typeof reg.setPlane === 'function') reg.setPlane(after);                    // she is in the object's plane now (route-1109 lane D): the satellites' is the tilt back
     gameState.stationNodeGapDeg = 0;
     gameState.stationJoined = true;
@@ -4472,7 +4477,7 @@ export class GameFlowManager {
     const began = trip.beginWait(() => {
       const leg = trip.lastLeg;
       trip.lastLeg = null;
-      if (leg) { gameState.shipDays += leg.days; this._advanceStationGap(leg); }
+      if (leg) { gameState.shipDays += leg.days; this._advanceStationGap(leg); this._refs?.debrisField?.ageLivePieces?.(); }
       this._stationHandOver();                                // route-1101 J5: a wait that lines her up at the station field with a part aboard
       const f = reg.fieldById(row.stationFieldId);
       const atStation = !!f && reg.currentId() === f.id;      // she waited at the station field itself: nothing to fly

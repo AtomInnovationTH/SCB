@@ -131,6 +131,7 @@ class PersistenceManager {
         // time the trips have added. Written only when the caller has them (flag on), so a flag-off save is byte-identical.
         // An old save loads as "fresh, at the start field".
         ...(data.fields != null ? { fields: data.fields } : {}),
+        ...(data.fieldSpins != null && typeof data.fieldSpins === 'object' ? { fieldSpins: data.fieldSpins } : {}),   // DECISIONS §70 row 2: spins of the stored pieces
         ...(Number.isFinite(data.shipDays) && data.shipDays > 0 ? { shipDays: data.shipDays } : {}),
         // The game date and the storm calendar (js/systems/SunStorms.js, plan sky-1116): the real date of her first start (ms) and the calendar's
         // seed. Written only once stamped (outside training), so every older save and every test save is byte-identical.

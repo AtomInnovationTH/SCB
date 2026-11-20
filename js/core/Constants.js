@@ -1001,12 +1001,19 @@ export const Constants = {
   // EPM magnetic-grapple tuning (archive/EPIC10_DEEP_ANALYSIS.md). Heterogeneous-spacecraft model (§13 Q4):
   // real sats / rocket bodies have steel bolts / brackets even when the hull is Al or Ti.
   MAGNETIC_GRAPPLE: {
-    CONTACT_RANGE_M:        0.5,    // EPM contact window (touch −Y face to ≤0.5 m)
+    CONTACT_RANGE_M:        0.5,    // legacy EPM contact window to the piece's CENTRE; no longer read (contact is the piece's surface, see HEAD_OFFSET_M)
     HOLD_FORCE_N:           50,     // EPIC10
     MAX_DEBRIS_MASS_KG:     500,    // EPIC10
     ENERGIZE_PULSE_S:       0.3,    // pole-face blue flash 1.0→0.0 over 0.3 s
     RELEASE_PULSE_S:        0.2,    // red flash 1.0→0.0 over 0.2 s
-    CLOSE_TIMEOUT_S:        6.0,    // max CLOSING duration before MAGNETIC_GRIP_FAILED
+    // Real-speed close-in (DECISIONS §70 row 1, owner 2026-11-08: "a few cm/s"), shared by the magnet and the gripper
+    // (ArmUnit._latchClose): her cold-gas jet speeds her up and brakes her at her true m/s^2, in the piece's frame, so she
+    // touches at V_TOUCH_MS. Replaces the old lerp (about 1 m/s into the window) and CLOSE_TIMEOUT_S 6.0 (12 m now takes 13-34 s).
+    V_TOUCH_MS:             0.05,   // m/s at contact (coordinator's pick inside "a few cm/s"; est, owner may veto)
+    SLOW_ZONE_M:            0.30,   // m: she is at V_TOUCH_MS from here to contact (est)
+    HEAD_OFFSET_M:          0.10,   // m: magnet pole face past her face (the gripper's equivalent is GRIPPER_GRAPPLE.REACH_M); contact = piece surface + half her body (WEAVER_BODY y) + this (est)
+    TIMEOUT_FACTOR:         2,      // close-in timeout = TIMEOUT_FACTOR x the law's closed-form time + TIMEOUT_PAD_S
+    TIMEOUT_PAD_S:          5,
     GRIP_DWELL_S:           0.4,    // dwell on contact before the P_GRIP roll
     P_GRIP_FERROUS:         0.95,   // pure-ferromagnetic target (steel hull)
     P_GRIP_FASTENERS:       0.40,   // §13 Q4 — heterogeneous target latches onto bolts/brackets
@@ -1015,11 +1022,11 @@ export const Constants = {
 
   // 3-jaw gripper tuning (reserved; archive/V3 Octopus.md).
   GRIPPER_GRAPPLE: {
-    REACH_M:            0.30,   // jaws extend 30 cm beyond −Y face
+    REACH_M:            0.30,   // jaws extend 30 cm beyond −Y face (past her face, not from her centre; `_latchClose` adds half her body)
     GRIP_DIAMETER_M:    0.050,  // 50 mm aperture
     GRIP_FORCE_N:       30,
     EXTEND_TIME_S:      0.3,    // jaws extend, audible servo click
-    SEEK_TIME_S:        0.4,    // raycast for a fixture within ±15° of −Y
+    SEEK_TIME_S:        0.4,    // least time in SEEK once she touches the piece (fixture check), before the jaws close
     CLOSE_TIME_S:       1.2,    // spiral cam closes 50→0 mm
     RATCHET_HOLD:       true,   // zero-power lock once closed
     P_GRIP_FIXTURED:    0.90,   // target has docking port / strut / antenna stub
