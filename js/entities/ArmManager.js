@@ -19,12 +19,14 @@ import { seatHullClear, seatHullPrime } from '../systems/SeatHullClear.js';
 import { armProfile, profileClearAt, profileValid, startProfile, stepProfile, kitFor, kitStep } from '../systems/HoldWingClear.js';
 // a pending BIG piece leaves the ledger when its rack drops it (reset), and is never 'paid' for the unload
 import { bigPieces } from '../systems/BigPieces.js';
+import { kitHolds } from '../systems/SpinDecay.js';   // the spin kit's "does it hold here" test (lane K)
 import { strutTipFoulsCorridor, strutLocalDirection, bestStrutAlpha } from './ArmDockBasis.js';
 import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController, openingStrutEase } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit, planeTurnLeftRad } from './ArmUnit.js';
 import { CW_FLIGHT } from './DaughterCW.js';   // the long fetch's aim tolerance (sky-1116)
+import { TimeAuthority } from '../systems/TimeAuthority.js';   // the one clock's last world step (`armNearPiece` looks half a frame ahead)
 import { DebrisField } from './DebrisField.js';
 import { clearRackCell, berthAnchorLocalInto, catchHomeDistM, homeShapeKey, isInspectOnlyMass } from './CaptureNet.js';
 import { noseBucketFor, noseRadiatorsOk, noseWindowSpans } from './NoseRoute.js';
@@ -461,7 +463,14 @@ const _HIGH_RISK_ROT_STATES = new Set([
 // and not yet home: from the clamp release (LAUNCHING, so the clock is at real speed when the spring lets her go) to the end of the
 // latch (DOCKING; "<name> is home" is said when it ends). NOT out: DOCKED, RELOADING, HOLDING_CATCH (parked at the strut tip holding a catch:
 // home, no live tether), CARRY_PREP and SCANNING (both start docked and stay on the strut), EXPENDED (lost; nothing will come home, so the
-// clock must not stay slow for her). Detached daughters (`isDetached`) are not out either: they never come home.
+// clock must not stay slow for her). A detached daughter (`isDetached`, cut free: she never comes home) is out only while she flies to her
+// piece (`_DETACHED_OUT_STATES`) or is near it (`armNearPiece`), so the far-leg cap and the near clamp hold for her too (plan debris-1
+// Fix C1-1 F1); parked with her catch forever (GRAPPLED), adrift or deorbiting she is neither, and the clock does not stay slow for her.
+const _DETACHED_OUT_STATES = new Set([
+  ARM_STATES.LAUNCHING,         // (a detach starts from TRANSIT or later; listed for completeness)
+  ARM_STATES.TRANSIT,           // flying out to her piece, cut free
+  ARM_STATES.APPROACH,          // arriving at it
+]);
 const _OUT_ARM_STATES = new Set([
   ARM_STATES.UNDOCKING,         // legacy separation from the core
   ARM_STATES.LAUNCHING,         // clamp release then the spring: from here she is leaving
@@ -485,6 +494,50 @@ const _OUT_ARM_STATES = new Set([
   ARM_STATES.CARRY_HANDOFF,
   ARM_STATES.CARRY_BACK,
 ]);
+// "A daughter is NEAR her piece" for the one clock (owner 2026-11-18 / 11-20, DECISIONS §70 row 10; plan debris-1 D6; `ArmManager.anyNear`):
+// real speed from 400 m before the piece until she holds it. Near = working at the piece, or flying to it within `CW_FLIGHT.HANDOFF_M`
+// (`_NEAR_IF_CLOSE`). NOT near: GRAPPLED / HAULING / REELING (she holds a catch: the haul or reel home runs at the field's rate),
+// RETURNING / DOCKING (she turned home), every home state, carries, trawls, ADRIFT. A detached daughter (cut free, `isDetached`) is near by
+// the same rule (plan debris-1 Fix C1-1 F1: she still flies to her piece and catches it, so real time near it holds for her too).
+const _NEAR_ARM_STATES = new Set([
+  ARM_STATES.APPROACH,          // arriving at her piece (the old controller's last stretch)
+  ARM_STATES.STATION_KEEP,      // holding beside it (incl. an inspection's arc)
+  ARM_STATES.NETTING,           // casting at it: the net's flight is at the piece
+  ARM_STATES.MAGNETIC_GRAPPLE,  // closing in at 5 cm/s and the latch
+  ARM_STATES.GRIPPER_GRAPPLE,   // the same with the jaws
+  ARM_STATES.PAD_CONTACT,       // the pad at the piece
+]);
+// Near only within `CW_FLIGHT.HANDOFF_M` of her target piece's centre (the range the curved flight hands over at, `_cwStep`), so a
+// piece within 400 m is near from the clamp release. Hand-flown with no target: never near.
+const _NEAR_IF_CLOSE = new Set([
+  ARM_STATES.LAUNCHING,         // clamp release and spring: near when the piece is within 400 m of her
+  ARM_STATES.TRANSIT,           // flying out: near from 400 m
+]);
+
+/**
+ * Is this daughter near her piece (see `_NEAR_ARM_STATES`)? Pure on the arm; `ArmManager.anyNear` and tests use it.
+ * @param {object} arm an ArmUnit (state, isDetached, position, target)
+ * @returns {boolean}
+ */
+export function armNearPiece(arm) {
+  if (!arm) return false;
+  if (_NEAR_ARM_STATES.has(arm.state)) return true;
+  if (!_NEAR_IF_CLOSE.has(arm.state) || !arm.target || !arm.position) return false;
+  const tp = typeof arm._getTargetScenePos === 'function' ? arm._getTargetScenePos() : arm.target._scenePosition;
+  if (!tp) return false;
+  const M = Constants.SCENE_UNITS_PER_METER;
+  const d = arm.position.distanceTo(tp);
+  // half a frame ahead (Fix C1-1 F4): her closing speed (true m/s, relative to the piece's drift when known) x half a far-leg frame's
+  // world seconds (`lastFarStepS`), so real time starts within half a frame of travel of 400 m, not up to a whole 40x frame inside it
+  let ahead = 0;
+  if (arm.velocity && d > 0) {
+    const v = arm.velocity, dr = arm._smoothDriftVel;
+    const vx = v.x - (dr ? dr.x : 0), vy = v.y - (dr ? dr.y : 0), vz = v.z - (dr ? dr.z : 0);
+    const close = ((tp.x - arm.position.x) * vx + (tp.y - arm.position.y) * vy + (tp.z - arm.position.z) * vz) / d / (M * TimeAuthority.armScale());
+    if (close > 0) ahead = close * 0.5 * TimeAuthority.lastFarStepS();
+  }
+  return d / M - ahead <= CW_FLIGHT.HANDOFF_M;
+}
 // Arm states where the daughter parks AT her strut tip -> drum 'ready'. Mirrors ArmUnit._updateTether's hidden-line set
 // (DOCKED/DOCKING/RELOADING/HOLDING_CATCH) minus EXPENDED, whose cartridge maps to 'empty'. CARRY_PREP is docked too (her line
 // is wound, the strut and radiators are moving); the three states where she is out ('deployed') are not listed.
@@ -5408,7 +5461,9 @@ export class ArmManager {
     // never burns it): in the loaded and the empty mass.
     const indiumStoreKg = (this._resourceSystem && Number.isFinite(this._resourceSystem.indiumStoreKg)) ? Math.max(0, this._resourceSystem.indiumStoreKg) : 0;
     // The drag sails in her stock (§33 row 11 "her mass is live") are carried like the indium: in the loaded and the empty mass.
-    const dragSailKg = (this._resourceSystem && typeof this._resourceSystem.dragSailMassKg === 'function') ? this._resourceSystem.dragSailMassKg() : 0;
+    // The spin kits in her stock (plan debris-1 lane K) weigh what they weigh: carried like the sails, in the same term (a daughter that took one carries its kilogram herself).
+    const spinKitKg = (this._resourceSystem && typeof this._resourceSystem.spinKitMassKg === 'function') ? this._resourceSystem.spinKitMassKg() : 0;
+    const dragSailKg = ((this._resourceSystem && typeof this._resourceSystem.dragSailMassKg === 'function') ? this._resourceSystem.dragSailMassKg() : 0) + spinKitKg;
     // Plan hold-mass-1106 (§33 row 11): the hold's metal (melted metal, small-catch metals, cargo-burned ion fuels) and the part kept for the station weigh what
     // they weigh: carried like the indium store, in the loaded and the empty mass and in the engine's dry term. Not in the cargo clamps: the hold is inside the bus.
     const holdMassKg = this.getHoldMassKg();
@@ -5557,8 +5612,19 @@ export class ArmManager {
     const arms = this.arms;
     for (let i = 0; i < arms.length; i++) {
       const a = arms[i];
-      if (!a.isDetached && _OUT_ARM_STATES.has(a.state)) return true;
+      if (a.isDetached ? (_DETACHED_OUT_STATES.has(a.state) || armNearPiece(a)) : _OUT_ARM_STATES.has(a.state)) return true;
     }
+    return false;
+  }
+
+  /**
+   * True while ANY daughter is near her piece (DECISIONS §70 row 10: "Real time from 400 m before the piece until she holds it";
+   * `armNearPiece`, one reason per state above). main.js feeds it to the TimeAuthority every frame: any near → the world at real speed.
+   * @returns {boolean}
+   */
+  anyNear() {
+    const arms = this.arms;
+    for (let i = 0; i < arms.length; i++) if (armNearPiece(arms[i])) return true;
     return false;
   }
 
@@ -6313,6 +6379,28 @@ export class ArmManager {
   }
 
   /**
+   * Plan debris-1 lane K (DECISIONS §70 row 7): wrap the launch so the daughter takes one spin kit from the mother's stock at the spring, when she
+   * carries a magnet and a gripper, her target is a big piece with a steel spot (`kitHolds`) with no kit on it yet, and the stock has one. The kit
+   * is her kilogram from then (`ArmUnit._massKg`), the mother's minus one; a launch that does not fire gives it back. Other modes and targets: no kit.
+   * @returns {() => boolean} `fire`, or `fire` wrapped
+   */
+  _takeKitAtLaunch(arm, mode, target, fire) {
+    const rs = this._resourceSystem;
+    if (mode !== 'target' || !target || !rs || typeof rs.takeSpinKit !== 'function') return fire;
+    return () => {
+      let took = false;
+      const tools = arm.toolset || [];
+      if (!arm._kitAboard && tools.includes('MAGNET') && tools.includes('GRIPPER') && !target.spinKit && kitHolds(target) && rs.spinKits >= 1 && rs.takeSpinKit()) {
+        arm.takeKit(() => rs.returnSpinKit());
+        took = true;
+      }
+      const ok = fire();
+      if (!ok && took) arm._giveBackKit();
+      return ok;
+    };
+  }
+
+  /**
    * The ONE seam every ArmManager launch call site goes through.
    * @param {ArmUnit} arm
    * @param {string} mode — 'ceremony' | 'target' | 'freefly' | 'trawl' (for diagnostics)
@@ -6328,6 +6416,7 @@ export class ArmManager {
     if (i < 0) return !!fire();
     const claimed = (mode === 'target' || mode === 'ceremony') && target ? target : null;
     arm._claimTarget = claimed;
+    fire = this._takeKitAtLaunch(arm, mode, target, fire);   // lane K: a daughter with magnet and gripper takes a spin kit for a big steel piece, at the spring
     const guarded = !claimed ? fire : () => {
       const why = this._releaseBlock(arm, claimed);
       if (why) {

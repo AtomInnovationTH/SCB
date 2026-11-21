@@ -37,7 +37,7 @@ function weaverLaserDesc() {
 }
 
 /**
- * Upgrade definitions — 49 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 50 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins this header to them).
  * Each carries a `trl` (NASA TRL 1-9) and optional `trlRationale` for the badge. TRL is display-only — NEVER used in gating.
  * Exported for the Node test harness (test-TRL.js).
@@ -244,6 +244,13 @@ export const UPGRADES = [
     desc: 'Heat-shielded capsule with its own small solid motor (Stardust-size shell, STAR 6B). Packs a kept part and drops it home; used up on the drop.',
     effect: 'reentryCapsule', value: 1, maxLevel: Infinity, consumable: true,
     trl: 7, trlRationale: 'Stardust\'s 46 kg capsule returned its samples in 2006; the STAR 6B is a catalogue solid motor; this pairing has not flown as one unit.' },
+  // Spin kit (DECISIONS §70 row 7, plan debris-1 lane K): a count in her stock (ResourceSystem.spinKits); its mass is part of her live mass; a
+  // daughter with a magnet and a gripper takes one at launch for a big piece with a steel spot. Offered (the sail row beside it is not sold).
+  { id: 'spin_kit', cat: 'Daughters', name: `Spin kit, ${Constants.SPIN_KIT.massKg} kg`,
+    cost: Constants.SPIN_KIT.priceCr,
+    desc: `Clips onto a big piece; its magnet pushes against Earth's field so the spin slows over a day or two. Come back for the catch. One use. Its mass (${Constants.SPIN_KIT.massKg} kg) counts in yours.`,
+    effect: 'spinKit', value: 1, maxLevel: Infinity, consumable: true,
+    trl: 4, trlRationale: 'Magnetic detumbling by flipping dipoles is flown on small satellites (B-dot) and studied for derelicts; a clip-on kit for a tumbling stage is not yet demonstrated' },
   { id: 'hazmat_handler', cat: 'Daughters', name: 'Hazmat Handler', cost: 1200,
     desc: 'Recover hydrazine → cold gas', effect: 'hazmatRecovery', value: true, maxLevel: 1,
     trl: 2, trlRationale: 'On-orbit hazmat recovery from derelicts is fully speculative' },
@@ -1025,6 +1032,7 @@ export class ShopScreen {
           ${consumableFull && upgrade.effect === 'coldGasResupply' ? `<div style="font-size:0.65rem;color:#ff6644;">Cold-gas tank full</div>` : ''}
           ${consumableFull && upgrade.effect === 'indiumCartridge' ? `<div style="font-size:0.65rem;color:#ff6644;">Indium store full</div>` : ''}
           ${consumableFull && upgrade.effect === 'reentryCapsule' ? `<div style="font-size:0.65rem;color:#ff6644;">Capsule bay full (${Constants.PART_CAPSULE.MAX_ABOARD} aboard)</div>` : ''}
+          ${consumableFull && upgrade.effect === 'spinKit' ? `<div style="font-size:0.65rem;color:#ff6644;">Kit rack full (${Constants.SPIN_KIT.MAX_ABOARD} aboard)</div>` : ''}
           ${REPLACE_EFFECT_PART[upgrade.effect] ? `<div style="font-size:0.65rem;color:${consumableFull ? '#ff6644' : '#ffcc44'};">${Math.round(shipWear.wornFraction(REPLACE_EFFECT_PART[upgrade.effect], this._resourceSystem) * 100)}% worn${consumableFull ? ': nothing to replace' : ''}</div>` : ''}
           ${consumableFull && daughterNetType ? `<div style="font-size:0.65rem;color:#ff6644;">No docked daughter has room</div>` : ''}
           ${upgrade.requiresAll && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${upgrade.requiresAll.map(id => UPGRADES.find(u => u.id === id)?.name || id).join(' + ')}</div>` : ''}
@@ -1195,7 +1203,7 @@ export class ShopScreen {
         return;
       }
       // Nor for nitrogen with no room in the cold-gas tank (free < 0.1 kg), nor a cartridge the indium store cannot take
-      if ((upgrade.effect === 'coldGasResupply' || upgrade.effect === 'indiumCartridge' || upgrade.effect === 'reentryCapsule') && noRoomFor(upgrade, this._resourceSystem)) {
+      if ((upgrade.effect === 'coldGasResupply' || upgrade.effect === 'indiumCartridge' || upgrade.effect === 'reentryCapsule' || upgrade.effect === 'spinKit') && noRoomFor(upgrade, this._resourceSystem)) {
         audioSystem.playDeny();
         if (upgrade.effect === 'indiumCartridge') {            // one plain line: the store takes whole cartridges only
           eventBus.emit(Events.COMMS_MESSAGE, {

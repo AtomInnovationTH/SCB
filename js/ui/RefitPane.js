@@ -229,7 +229,7 @@ export class RefitPane {
       return { kind: 'needs', text: `replaced by ${String(by).replace(/ Engine Gas$/, '')}` };
     }
     if (consumableFull(shop, ctx.res)) {
-      return { kind: 'needs', text: shop.effect === 'indiumCartridge' ? 'store full' : (shop.effect === 'reentryCapsule' ? 'bay full' : (/^replace/.test(shop.effect) ? 'as new' : 'tank full')) };
+      return { kind: 'needs', text: shop.effect === 'indiumCartridge' ? 'store full' : (shop.effect === 'reentryCapsule' ? 'bay full' : (shop.effect === 'spinKit' ? 'rack full' : (/^replace/.test(shop.effect) ? 'as new' : 'tank full'))) };
     }
     if (ctx.prereqsMet && !ctx.prereqsMet(shop)) {
       const ids = [];

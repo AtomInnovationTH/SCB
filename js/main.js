@@ -6464,16 +6464,20 @@ function gameLoop(timestamp) {
     workbenchOpen: _worldHoldOpen, alertActive: _alertActive,
     gameplay: gameState.isGameplay(),   // the full-screen shop (ladder off) pauses the trip's clock like the drawer
   });
-  // ONE CLOCK WHILE A DAUGHTER IS OUT (owner 2026-11-08/09, DECISIONS §70 row 6; §79 row 3): while any daughter is away from the mother
-  // the target is clamped to real speed on every floor (floors 1-2 from 10x, floor 3 from 40x, floors 4-5 from the slider's step), and
-  // the floor's cap or the slider's step returns through the ordinary ramp once she is home. `anyOut` is the one predicate
-  // (ArmManager). A burning trip keeps its own rates (its daughters fly ship-relative carries), and with the ladder off the clock is
-  // pinned at the base rate as before; `setArmRealClock` tells the arms the same thing (her plan and readouts use `armScale`).
+  // ONE CLOCK, REAL TIME ONLY NEAR THE PIECE (owner 2026-11-20, DECISIONS §70 rows 6 and 10; plan debris-1 D6): while any daughter is
+  // near her piece (`anyNear`: from 400 m out until she holds a catch) the target is clamped to real speed on every floor; while one is
+  // out but none is near the world runs at the field's rate (10x floors 1-2, 40x floor 3, floors 4-5 min(slider step, 10x): `outCap`);
+  // the floor's cap or the slider's step returns through the ordinary ramp once all are home. A burning trip keeps its own rates (its
+  // daughters fly ship-relative carries), and with the ladder off the clock is pinned at the base rate as before; `setArmRealClock`
+  // tells the arms the same thing (their motion then steps on the world's seconds, `TimeAuthority.armDt`).
   const _tripBurnNow = isTripBurning();
   const _daughterClock = _ladderActive && !_tripBurnNow;
   const _daughterOut = _daughterClock && !!(armManager && armManager.anyOut && armManager.anyOut());
+  const _daughterNear = _daughterOut && !!(armManager.anyNear && armManager.anyNear());
   TimeAuthority.setArmRealClock(_daughterClock);
   _taFrameArgs.daughterOut = _daughterOut;
+  _taFrameArgs.daughterNear = _daughterNear;
+  _taFrameArgs.outCap = (_mapFloor != null && FloorContract.TIME_RULES.MAP_CLOCK_FLOORS.includes(_mapFloor)) ? TimeAuthority.FIELD_CAP : Infinity;
   timeAuthority.update(_taFrameArgs);
   const dtWorld = timeAuthority.dtWorld;
   // The map clock slider's row: on floors 4-5 only; dimmed with the trip's own speed while a transfer trip burns (D4: a trip

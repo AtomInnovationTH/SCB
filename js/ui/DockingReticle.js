@@ -777,7 +777,7 @@ export class DockingReticle {
   /** @private AIM state — the live Capture Odds Strip. */
   _drawOddsStripAim(ctx, cx, cy) {
     const arm = this._arm;
-    const toolset = arm.toolset || [];
+    const toolset = (typeof arm.availableTools === 'function' ? arm.availableTools() : arm.toolset) || [];
     if (toolset.length === 0) return;
 
     const HUD = Constants.TOOL_HUD || {};
@@ -807,7 +807,7 @@ export class DockingReticle {
     ctx.fillText(armLabel, left + 8, top + 5);
 
     // Fixed columns in cycle order (the eye learns positions)
-    const colW = HUD.COL_WIDTH_PX || 48;
+    const colW = Math.min(HUD.COL_WIDTH_PX || 48, (boxW - 8) / Math.max(1, toolset.length));   // four tools (a spin kit aboard) still fit the box
     const stripW = toolset.length * colW;
     const stripLeft = left + (boxW - stripW) / 2;
     const oddsY = top + headerH + oddsRowH / 2;
@@ -1052,7 +1052,7 @@ export class DockingReticle {
    * the colour-coded capture phase (CONTACT → … → SECURING) once the net reaches the target. */
   _drawOddsStripInFlight(ctx, cx, cy) {
     const arm = this._arm;
-    const toolset = arm.toolset || [];
+    const toolset = (typeof arm.availableTools === 'function' ? arm.availableTools() : arm.toolset) || [];
     if (toolset.length === 0) return;
     const HUD = Constants.TOOL_HUD || {};
     const boxH = 14 + 14 + 16 + 6;
@@ -1066,7 +1066,7 @@ export class DockingReticle {
     ctx.fillText(armLabel, left + 8, top + 5);
 
     // Dim labels only: no stale odds during flight
-    const colW = HUD.COL_WIDTH_PX || 48;
+    const colW = Math.min(HUD.COL_WIDTH_PX || 48, (boxW - 8) / Math.max(1, toolset.length));
     const stripLeft = left + (boxW - toolset.length * colW) / 2;
     ctx.font = `9px ${FONT}`;
     ctx.textAlign = 'center';
@@ -1248,7 +1248,7 @@ export class DockingReticle {
     if (fit.fit === 'TOO_WIDE') {
       // Only advise GRIPPER when this arm carries one (the Spinner doesn't: point at the Weaver)
       const toolset = (Constants.DAUGHTER_TOOLSETS && Constants.DAUGHTER_TOOLSETS[arm.type])
-        || arm.toolset || [];
+        || (typeof arm.availableTools === 'function' ? arm.availableTools() : arm.toolset) || [];
       if (this._glassNow()) {
         // The tool cycle has no touch control. Name REEL / SEND DAUGHTER only while their chips are up.
         const reel = this._chipUp('REEL');

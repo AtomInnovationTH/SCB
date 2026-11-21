@@ -2118,6 +2118,10 @@ export class GameFlowManager {
     const { shopScreen, resourceSystem } = this._refs;
     const scoring = scoringSystem.serialize();
     const resources = resourceSystem.serialize();
+    // A spin kit a daughter carries is out of the mother's stock (taken at launch) but not lost: a save while she is out counts it back
+    // (plan debris-1 K fix F1), so a reload (she starts docked) finds the stock whole, at most `SPIN_KIT.MAX_ABOARD`.
+    const kitsAboard = ((this._arms() || {}).arms || []).filter((a) => a && a._kitAboard === true).length;
+    if (kitsAboard > 0) resources.spinKits = Math.min(Constants.SPIN_KIT.MAX_ABOARD, (Number(resources.spinKits) || 0) + kitsAboard);
     // A game-over save carries no gas levels: CONTINUE after a game over is a fresh attempt (like retry), so the load
     // falls back to the start fill. Every other save keeps the levels.
     if (gameState.currentState === GameStates.GAME_OVER) {
@@ -2125,6 +2129,7 @@ export class GameFlowManager {
       delete resources.coldGas;
       delete resources.indiumStoreKg;   // a fresh attempt starts the indium store empty too
       delete resources.dragSails; delete resources.capsules;       // ... and with no drag sails and no reentry capsules
+      delete resources.spinKits;                                   // ... and no spin kits
     }
     const upgrades = shopScreen.getSerializableUpgrades();
 

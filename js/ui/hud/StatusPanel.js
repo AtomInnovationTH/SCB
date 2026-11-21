@@ -34,6 +34,8 @@ import { BOX_OUTLINE, BOX_OUTLINE_OFFSET } from '../RailIndicator.js';
 import { dividedByScale, onHudScaleChange } from '../HudScale.js';
 import { TouchControls } from '../TouchControls.js';
 import { radToDeg, clamp01, clamp } from '../../core/MathUtil.js';
+import { TimeAuthority } from '../../systems/TimeAuthority.js';
+import { targetSelector } from '../../systems/TargetSelector.js';
 
 /** The left column's max height on screen (px room below the top edge); divided by the HUD scale on a big screen. */
 const LEFT_COLUMN_MAX_HEIGHT = 'calc(100vh - 60px)';
@@ -208,6 +210,7 @@ export class StatusPanel {
 
     eventBus.on(Events.ARM_SELECT, () => this._renderArmPanel());
     eventBus.on(Events.ARM_DESELECT, () => this._renderArmPanel());
+    eventBus.on(Events.TARGET_SELECTED, () => this._renderArmPanel());   // the launch dial reads the selected piece (`_launchDial`)
 
     eventBus.on(Events.THROTTLE_CHANGE, (data) => {
       this._throttleLevel = data.level;
@@ -2008,6 +2011,23 @@ export class StatusPanel {
     return code;
   }
 
+  /**
+   * The launch dial's numbers (plan debris-1 Fix C1-1 F2, Fix C1-2 G3): `fly` = the speed she will launch at for the selected piece after
+   * every cap (`ArmUnit.launchSpeedFor`: every launch, straight or curved, is capped so she can brake before the piece; the cap passes every
+   * tier from about 2 km), MAX across the arms as ArmManager.getFleetLaunchSpeed; `set` = the dial's own setting (MAX of `launchSpeed`).
+   * Mocks without arms: both the setting. Read live on every render (no cached plan), and `update()` renders at 10 Hz, so it follows a
+   * drifting piece.
+   * @param {Array<object>} statuses `getAllStatus()`
+   * @param {object|null} [target] the piece (default the selected one, `targetSelector.getActiveTarget()`)
+   * @returns {{fly:number, set:number}} m/s
+   */
+  _launchDial(statuses, target = targetSelector.getActiveTarget()) {
+    const set = Math.max(...statuses.map((a) => a.launchSpeed ?? Constants.CROSSBOW_LAUNCH_SPEED_DEFAULT));
+    const arms = this._armManager && Array.isArray(this._armManager.arms) ? this._armManager.arms : null;
+    const flies = arms ? arms.filter((a) => a && typeof a.launchSpeedFor === 'function').map((a) => a.launchSpeedFor(target || null)) : [];
+    return { fly: flies.length ? Math.max(...flies) : set, set };
+  }
+
   _renderArmPanel() {
     const el = document.getElementById('hud-arms-status');
     if (!el) return;
@@ -2026,11 +2046,13 @@ export class StatusPanel {
     }
     this._updateArmsFold(statuses);   // the "N of M ready" line + the departure auto-open
 
-    // Speed-dial header: fleet launch speed (MAX across arms, as ArmManager.getFleetLaunchSpeed), the equipped spring
-    // tier's ceiling, the dial keys. Null-safe for legacy mocks; re-rendered on LAUNCH_SPEED_CHANGED (HUD.js).
-    const _spd = Math.max(...statuses.map((a) => a.launchSpeed ?? Constants.CROSSBOW_LAUNCH_SPEED_DEFAULT));
+    // Speed-dial header: the speed she will launch at for the selected piece after every cap (`_launchDial`; the dial's own setting
+    // beside it when a cap lowers it), the equipped spring tier's ceiling, the dial keys. Null-safe for legacy mocks; re-rendered by
+    // `update()` at 10 Hz (so it follows the piece's drift, Fix C1-2 G3), and on LAUNCH_SPEED_CHANGED (HUD.js) and TARGET_SELECTED.
+    const { fly: _spd, set: _set } = this._launchDial(statuses);
     const _ceil = Math.max(...statuses.map((a) => (Constants.SPRING_TIERS[a.springTier ?? 0] || {}).maxSpeed ?? 0)) || _spd;
-    const _dialHeader = `<div style="font-size:0.7rem;color:rgb(var(--hud-normal-rgb, 0 255 136) / 0.65);padding-bottom:2px;" title="Fleet launch speed — the item-100 dial. A hotter shot trades reload (∝ v²) for range.">LAUNCH ${_spd.toFixed(1)} m/s · max ${_ceil.toFixed(1)} · <span style="opacity:0.75">[;] down · ['] up</span></div>`;
+    const _setTxt = _set > _spd + 0.05 ? ` <span style="opacity:0.75" title="The dial is set higher; she must still be able to brake before the piece">(set ${_set.toFixed(1)})</span>` : '';
+    const _dialHeader = `<div style="font-size:0.7rem;color:rgb(var(--hud-normal-rgb, 0 255 136) / 0.65);padding-bottom:2px;" title="Fleet launch speed — the item-100 dial. A hotter shot trades reload (∝ v²) for range.">LAUNCH ${_spd.toFixed(1)} m/s${_setTxt} · max ${_ceil.toFixed(1)} · <span style="opacity:0.75">[;] down · ['] up</span></div>`;
 
     // List by size: Large daughters (weavers) first, then Small (spinners), with a gap between the groups.
     const sizeRank = { weaver: 0, spinner: 1 };
@@ -2079,6 +2101,7 @@ export class StatusPanel {
         return { label: 'Approaching', color: 'var(--hud-info, #00ffff)' };
       case 'NETTING': case 'GRAPPLED': case 'MAGNETIC_GRAPPLE':
       case 'GRIPPER_GRAPPLE': case 'PAD_CONTACT': case 'WEB_SHOT':
+        if (a.kitClip) return { label: 'Clipping kit', color: 'var(--hud-info, #00ffff)' };   // the spin kit's clip-on rides MAGNETIC_GRAPPLE (K fix F2)
         return { label: 'Capturing', color: 'var(--hud-info, #00ffff)' };
       case 'REELING': case 'HAULING': case 'RETURNING': case 'DOCKING': {
         // On a reel home (owner 2026-10-22: "on slow reel-in it seems like nothing is happening") the row says what
@@ -2184,7 +2207,8 @@ export class StatusPanel {
     const am = this._armManager;
     const arm = am && Array.isArray(am.arms) && Number.isInteger(idx) ? am.arms[idx] : null;
     if (!arm || arm.state !== Constants.ARM_STATES.STATION_KEEP) return false;
-    if (!Array.isArray(arm.toolset) || arm.toolset.length <= 1) return false;
+    const tools = typeof arm.availableTools === 'function' ? arm.availableTools() : arm.toolset;   // + KIT while she carries a spin kit
+    if (!Array.isArray(tools) || tools.length <= 1) return false;
     if (!Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) return false;
     let piloted = null;
     try { piloted = this._pilotedArmGetter ? this._pilotedArmGetter() : null; } catch (_e) { piloted = null; }
@@ -2229,27 +2253,33 @@ export class StatusPanel {
       e = { samples: [], targeting: key, word: null };
       this._daughterRangeCache.set(id, e);
     }
-    e.samples.push({ t: now, range: rangeM });
+    // each sample is also stamped in WORLD seconds (plan debris-1 Fix C1-1 F7): under the one clock the interval since the last sample x
+    // worldRate() now (a sample every ~0.1 s, so the rate is near-constant over one interval), real seconds off; the slope is metres per
+    // world second = her true m/s, right through the switch to 1x near a piece; a paused world adds no world time (no slope: null)
+    const kW = TimeAuthority.armClockOn() ? Math.max(0, TimeAuthority.worldRate()) : 1;
+    const prev = e.samples.length ? e.samples[e.samples.length - 1] : null;
+    e.samples.push({ t: now, w: prev ? prev.w + (now - prev.t) / 1000 * kW : 0, range: rangeM });
     const cutoff = now - RANGE_RATE_WINDOW_S * 1000;
     while (e.samples.length > 2 && e.samples[0].t < cutoff) e.samples.shift();
     const n = e.samples.length;
     if (n < 3) return null;
     const span = (now - e.samples[0].t) / 1000;
     if (span < RANGE_RATE_MIN_SPAN_S) return null;
-    // Theil-Sen: the median of the slopes between sample pairs at least RANGE_RATE_PAIR_GAP_S apart. A single wild
+    // Theil-Sen: the median of the slopes between sample pairs at least RANGE_RATE_PAIR_GAP_S (real) apart. A single wild
     // sample (a launch or origin-shift frame) cannot drag it the way it drags a least-squares fit.
     const slopes = this._rangeSlopes || (this._rangeSlopes = []);
     slopes.length = 0;
     for (let i = 0; i < n - 1; i++) {
       for (let j = i + 1; j < n; j++) {
         const dt = (e.samples[j].t - e.samples[i].t) / 1000;
-        if (dt >= RANGE_RATE_PAIR_GAP_S) slopes.push((e.samples[i].range - e.samples[j].range) / dt); // range falls while closing
+        const dw = e.samples[j].w - e.samples[i].w;
+        if (dt >= RANGE_RATE_PAIR_GAP_S && dw > 1e-9) slopes.push((e.samples[i].range - e.samples[j].range) / dw); // range falls while closing
       }
     }
     if (slopes.length === 0) return null;
     slopes.sort((x, y) => x - y);
     const m = slopes.length >> 1;
-    return slopes.length & 1 ? slopes[m] : 0.5 * (slopes[m - 1] + slopes[m]);
+    return slopes.length & 1 ? slopes[m] : 0.5 * (slopes[m - 1] + slopes[m]);   // metres per world second: her true m/s (clock off: per real s, as before)
   }
 
   /**

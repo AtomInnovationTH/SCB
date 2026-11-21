@@ -857,7 +857,7 @@ export class TargetPanel {
    * @returns {string} HTML span
    */
   _renderBestToolBadge(arm, t) {
-    const toolset = arm.toolset
+    const toolset = (typeof arm.availableTools === 'function' ? arm.availableTools() : arm.toolset)
       || (Constants.DAUGHTER_TOOLSETS && Constants.DAUGHTER_TOOLSETS[arm.type])
       || ['NET'];
     const netCount = (typeof arm.getNetInventory === 'function') ? arm.getNetInventory() : undefined;

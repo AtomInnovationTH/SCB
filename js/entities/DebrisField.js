@@ -37,7 +37,7 @@ import { addDeltaVToOrbit } from './pieceDeltaV.js';
 import { DragSailSet } from './DragSailMesh.js';
 import { degToRad, radToDeg, clamp01, clamp, smoothstep01 } from '../core/MathUtil.js';
 import { gameState } from '../core/GameState.js';
-import { tauDays as spinTauDays, decayedRate as spinDecayedRate } from '../systems/SpinDecay.js';
+import { tauDays as spinTauDays, decayedRate as spinDecayedRate, kitAgedRate, kitSlowedRate } from '../systems/SpinDecay.js';
 
 // Honour Constants.DEBRIS.INTERACTIVE_COUNT/BACKGROUND_COUNT so hybrid-mode tests can inject.
 const INTERACTIVE_COUNT = (Constants.DEBRIS && Constants.DEBRIS.INTERACTIVE_COUNT) || 800;
@@ -2284,6 +2284,8 @@ export class DebrisField {
         }
       }
 
+      // A piece wearing a spin kit slows on the world's seconds (lane K; `_kitSlowFrame` skips a held piece).
+      if (debris.spinKit) DebrisField._kitSlowFrame(debris, gameDt);
       // Tumble (frozen while the debris is captured — see _advanceTumble).
       DebrisField._advanceTumble(debris, dt, maxVisualRad);
 
@@ -3922,7 +3924,7 @@ export class DebrisField {
         }
       }
       // DECISIONS §70 row 2: spin ages by the ship days she is away. `init` is the spawn spin (a laser's lowering leaves it high, so the despin bonus still pays on return).
-      d._spinStamp = { rate: d.tumbleRate || 0, day: DebrisField._shipDayNow(), init: d._initialTumbleRate > 0 ? d._initialTumbleRate : (d.tumbleRate || 0) };
+      d._spinStamp = { rate: d.tumbleRate || 0, day: DebrisField._shipDayNow(), init: d._initialTumbleRate > 0 ? d._initialTumbleRate : (d.tumbleRate || 0), kitDay: d.spinKit ? d.spinKit.day : null };
       this._fieldStored.set(`${d.fieldId}|${d.fieldRow}`, d);
       stored++;
     }
@@ -4005,12 +4007,54 @@ export class DebrisField {
     const days = Math.max(0, DebrisField._shipDayNow() - stampDay);
     if (!(rate > 0) || (!(days > 0) && !force)) { d._spinReturn = null; return false; }
     const env = DebrisField._spinEnv(fieldId, fieldSource);
-    const now = spinDecayedRate(rate, days, spinTauDays(d, env.altKm, env.incDeg));
+    const now = DebrisField._spunRate(d, rate, days, env, stampDay);   // natural decay, and the spin kit's constant slowing when the piece wears one (lane K)
     const initWas = init > 0 ? init : rate;
+    const nat = spinDecayedRate(1, days, spinTauDays(d, env.altKm, env.incDeg));   // the spawn spin ages by the NATURAL factor only: a kit never lowers it (the despin bonus still pays)
     d.tumbleRate = now;
-    d._initialTumbleRate = initWas * (now / rate);
-    d._spinReturn = { was: rate, now, days, fieldId, init: initWas };
+    d._initialTumbleRate = initWas * nat;
+    d._spinReturn = { was: rate, now, days, fieldId, init: initWas, stampDay };
     return true;
+  }
+
+  /**
+   * A spin after `days` ship days since `stampDay`: natural decay (D2), plus the kit's constant slowing for the days it has been on
+   * (`d.spinKit = {day, dipole}`; days before it was clipped on count as natural only). The one place the store / return / wait paths get the kit's part from.
+   * @param {object} d the piece @param {number} rate rad/s at `stampDay` @param {number} days @param {{altKm:number, incDeg:number}} env
+   * @param {number} stampDay @returns {number} rad/s
+   */
+  static _spunRate(d, rate, days, env, stampDay) {
+    const kit = d && d.spinKit;
+    if (!kit || !(days > 0)) return spinDecayedRate(rate, days, spinTauDays(d, env.altKm, env.incDeg));
+    const lead = Math.max(0, (Number.isFinite(kit.day) ? kit.day : stampDay) - stampDay);   // the days before the kit went on
+    return kitAgedRate(rate, days, days - lead, d, env.altKm, env.incDeg, kit.dipole);
+  }
+
+  /**
+   * Put a spin kit on a piece (lane K, DECISIONS §70 row 7): `piece.spinKit = {day: ship day now, dipole}`. It stays on the piece and leaves with it
+   * when caught; `storeFieldPieces` and the save carry its day. Returns the spin now and the spin `days` ship days on, for the clip-on line (the
+   * kit's law at the field's height, natural decay included).
+   * @param {object} piece @param {number} dipole A·m² @param {number} [days=2]
+   * @returns {{nowRad: number, laterRad: number}}
+   */
+  static attachSpinKit(piece, dipole, days = 2) {
+    const day = DebrisField._shipDayNow();
+    piece.spinKit = { day, dipole };
+    const env = DebrisField._spinEnv(piece.fieldId, null);
+    const nowRad = piece.tumbleRate || 0;
+    return { nowRad, laterRad: DebrisField._spunRate(piece, nowRad, days, env, day) };
+  }
+
+  /**
+   * Per frame, a kit piece in play slows on the world's seconds (a field visit is hours of game time, satellites slow in hours): rate − α·t,
+   * floored (`kitSlowedRate`). A held piece is cinched and keeps its spin. The natural decay does not run inside a visit (it is ship days).
+   * The spawn spin (`_initialTumbleRate`) is not touched: the kit never lowers it.
+   * @param {object} d @param {number} worldSeconds
+   */
+  static _kitSlowFrame(d, worldSeconds) {
+    if (!(worldSeconds > 0) || !(d.tumbleRate > 0)) return;
+    if (d._capturedByArm || d._armPinned || d._captured) return;
+    const env = DebrisField._spinEnv(d.fieldId, null);
+    d.tumbleRate = kitSlowedRate(d.tumbleRate, worldSeconds, d, env.altKm, env.incDeg, d.spinKit.dipole);
   }
 
   /**
@@ -4029,15 +4073,16 @@ export class DebrisField {
       if (!d.alive || d.fieldId == null || !(d.tumbleRate > 0)) continue;
       const env = DebrisField._spinEnv(d.fieldId, this._fieldSource);
       const k = spinDecayedRate(1, days, spinTauDays(d, env.altKm, env.incDeg));
-      d.tumbleRate *= k;
-      if (d._initialTumbleRate > 0) d._initialTumbleRate *= k;
+      d.tumbleRate = d.spinKit ? DebrisField._spunRate(d, d.tumbleRate, days, env, last) : d.tumbleRate * k;   // a kit piece also loses the kit's days (lane K)
+      if (d._initialTumbleRate > 0) d._initialTumbleRate *= k;                                                  // the spawn spin ages by the natural factor only
       n++;
     }
     return n;
   }
 
   /**
-   * The spins for the save: `{"<fieldId>|<row>": [rate rad/s, ship day, spawn spin rad/s]}` (an old save has two values); null when there are none. Stored pieces (the fields she
+   * The spins for the save: `{"<fieldId>|<row>": [rate rad/s, ship day, spawn spin rad/s]}` (an old save has two values; a piece wearing a spin kit adds a fourth, the ship
+   * day the kit was clipped on: lane K). Stored pieces (the fields she
    * left) carry their stamp; the live pieces of the field she is at carry their current spin and today's ship day, so a save made
    * there keeps what a wait or a return took off. A live entry replaces a stored one for the same key (it is newer).
    * @returns {Object<string, number[]>|null}
@@ -4049,12 +4094,15 @@ export class DebrisField {
       const st = d._spinStamp;
       if (!st || !(st.rate > 0)) continue;
       out[key] = [st.rate, st.day, st.init > 0 ? st.init : st.rate];
+      if (Number.isFinite(st.kitDay)) out[key].push(st.kitDay);   // a fourth value only for a piece wearing a kit (lane K)
       any = true;
     }
     const today = DebrisField._shipDayNow();
     for (const d of this.debrisList) {
       if (!d.alive || d.fieldId == null || d.fieldRow == null || d.isBag === true || !(d.tumbleRate > 0)) continue;
-      out[`${d.fieldId}|${d.fieldRow}`] = [d.tumbleRate, today, d._initialTumbleRate > 0 ? d._initialTumbleRate : d.tumbleRate];
+      const e = [d.tumbleRate, today, d._initialTumbleRate > 0 ? d._initialTumbleRate : d.tumbleRate];
+      if (d.spinKit && Number.isFinite(d.spinKit.day)) e.push(d.spinKit.day);
+      out[`${d.fieldId}|${d.fieldRow}`] = e;
       any = true;
     }
     return any ? out : null;
@@ -4070,13 +4118,14 @@ export class DebrisField {
     this._spinAgedDay = undefined;
     if (!map || typeof map !== 'object') return;
     for (const [key, v] of Object.entries(map)) {
-      if (Array.isArray(v) && Number.isFinite(v[0]) && v[0] > 0 && Number.isFinite(v[1])) this._importedSpins.set(key, { rate: v[0], day: v[1], init: Number.isFinite(v[2]) && v[2] > 0 ? v[2] : v[0] });
+      if (Array.isArray(v) && Number.isFinite(v[0]) && v[0] > 0 && Number.isFinite(v[1])) this._importedSpins.set(key, { rate: v[0], day: v[1], init: Number.isFinite(v[2]) && v[2] > 0 ? v[2] : v[0], kitDay: Number.isFinite(v[3]) ? v[3] : null });
     }
   }
 
   /**
    * A row's piece chosen after a reload (no stored piece): it takes the imported spin for (field, row), decayed to now. The entry
    * is used up. Does nothing for a piece that came from the store (`_spinReturn` already set) except use up the entry.
+   * A saved kit day puts the kit back on the piece before the ageing, so its days count (lane K).
    */
   _noteImportedSpin(d, fieldPlan, row) {
     if (!this._importedSpins || this._importedSpins.size === 0) return;
@@ -4085,6 +4134,7 @@ export class DebrisField {
     if (!e) return;
     this._importedSpins.delete(key);
     if (d._spinReturn) return;
+    if (e.kitDay != null) d.spinKit = { day: e.kitDay, dipole: Constants.SPIN_KIT.dipoleAm2 };
     DebrisField._ageReturningSpin(d, e.rate, e.day, fieldPlan.fieldId, this._fieldSource, true, e.init);
   }
 
@@ -4103,12 +4153,14 @@ export class DebrisField {
       const r = d && d._spinReturn;
       if (!r) continue;
       d._spinReturn = null;
+      let nat = null;                                  // the natural decay factor alone: the spawn spin ages by it, never by the kit's part
       if (r.days > 0) {
         const env = DebrisField._spinEnv(r.fieldId, this._fieldSource);
-        r.now = spinDecayedRate(r.was, r.days, spinTauDays(d, env.altKm, env.incDeg));
+        r.now = DebrisField._spunRate(d, r.was, r.days, env, r.stampDay ?? DebrisField._shipDayNow() - r.days);   // keeps the kit's part (`d.spinKit`) when τ is worked out again
+        nat = spinDecayedRate(1, r.days, spinTauDays(d, env.altKm, env.incDeg));
       }
       d.tumbleRate = r.now;
-      d._initialTumbleRate = (r.init > 0 ? r.init : r.was) * (r.now / r.was);   // the spawn spin ages by the same factor as the rate
+      d._initialTumbleRate = (r.init > 0 ? r.init : r.was) * (nat != null ? nat : r.now / r.was);   // the spawn spin ages by the same natural factor as the rate
       if (r.now <= r.was * 0.8 && fmt(r.now) !== fmt(r.was) && (!top || r.was > top.was)) top = r;
     }
     if (!top) return;
@@ -4134,6 +4186,7 @@ export class DebrisField {
     for (const d of this.debrisList) {
       if (d._heavySpare) { this._parkHeavySpare(d); continue; }   // stored, claimed in the sky or caught: back in the pool, claimable again
       if (d.fieldId != null) { d.fieldId = null; d.fieldRow = null; }
+      if (d.spinKit) d.spinKit = null;                            // a new run: no piece keeps a kit (lane K)
     }
   }
 

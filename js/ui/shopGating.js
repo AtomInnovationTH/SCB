@@ -83,9 +83,14 @@ export function capsuleBayFull(res) {
   return !!res && Number.isFinite(res.capsules) && res.capsules >= Constants.PART_CAPSULE.MAX_ABOARD;
 }
 
+/** True when the spin-kit stock is at `SPIN_KIT.MAX_ABOARD` (the shop sells no more). Works on a ResourceSystem or player.resources. */
+export function spinKitBayFull(res) {
+  return !!res && Number.isFinite(res.spinKits) && res.spinKits >= Constants.SPIN_KIT.MAX_ABOARD;
+}
+
 /**
  * "This consumable has nowhere to go": engine tank full (gas resupply), cold-gas tank full (nitrogen buy), the indium store
- * cannot take a cartridge, or a new part with nothing to replace (under 1 % of its life used: ShipWear, via
+ * cannot take a cartridge, the kit stock is at `SPIN_KIT.MAX_ABOARD`, or a new part with nothing to replace (under 1 % of its life used: ShipWear, via
  * `res.getWear()`; a `res` without it, like a bare test stub, counts as "as new"). False for every other row.
  */
 export function consumableFull(upgrade, res) {
@@ -94,6 +99,7 @@ export function consumableFull(upgrade, res) {
     case 'coldGasResupply': return coldGasTankFull(res);
     case 'indiumCartridge': return indiumStoreFull(res, upgrade.value);
     case 'reentryCapsule': return capsuleBayFull(res);
+    case 'spinKit': return spinKitBayFull(res);
     case 'replaceEngine': return partAsNew(res, 'engine');
     case 'replaceBattery': return partAsNew(res, 'battery');
     case 'replaceWings': return partAsNew(res, 'wings');
@@ -124,6 +130,7 @@ export function isShopRowOffered(u, ctx) {
   if (u.id === 'reentry_capsule' && !(ctx && ctx.capsuleCity === true)) return false;
   // owner 2026-11-08 / DECISIONS §68 row 1: the drag sail comes later, so the shop sells none. The row stays in UPGRADES (an old save's purchase and its sails still load).
   if (u.id === 'drag_sail') return false;
+  // plan debris-1 lane K (DECISIONS §70 row 7): the spin kit IS sold, unlike the sail above: no gate here, no feature flag on its row.
   if (u.requiresFeature && !Constants.isFeatureEnabled(u.requiresFeature)) return false;
   if (Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED && (u.id === 'flower_pair_a' || u.id === 'flower_pair_b')) return false;
   if (Constants.WHEELS.STANDARD === true && u.id === 'reaction_wheels') return false;

@@ -178,6 +178,8 @@ export class ResourceSystem {
     this.indiumStoreKg = 0;
     // Drag sails aboard (a count; each is BIG_PIECES.SAIL.massKg of her live mass). A new run starts with none.
     this.dragSails = 0;
+    // Spin kits aboard (a count; each is SPIN_KIT.massKg of her live mass; a daughter takes one at launch). A new run starts with none.
+    this.spinKits = 0;
     // Reentry capsules aboard (a count; each is `capsuleMassKg()` of her live mass through `GameFlowManager.holdMassKg`; plan route-1107-d2 D-B3). A new run starts with none.
     this.capsules = 0;
     // Two cumulative tallies in KILOGRAMS of engine gas for the range map's "this mission" line (MissionGasTally keeps its
@@ -709,6 +711,7 @@ export class ResourceSystem {
       coldGas: this.coldGas,
       indiumStoreKg: this.indiumStoreKg,   // saved like coldGas (an old save has none and loads as 0)
       dragSails: this.dragSails,           // the sail stock (an old save has none and loads as 0)
+      spinKits: this.spinKits,             // the spin-kit stock (an old save has none and loads as 0)
       capsules: this.capsules,             // the reentry-capsule stock (an old save has none and loads as 0)
       batteryMax: this.batteryMax,
       // The base this `batteryMax` was written against. A worn battery (ShipWear, the deep-cycle fade) can sit below the new
@@ -775,6 +778,7 @@ export class ResourceSystem {
       ? clampLevel(data.indiumStoreKg, Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG)
       : 0;
     this.dragSails = Number.isFinite(data.dragSails) ? Math.max(0, Math.floor(data.dragSails)) : 0;
+    this.spinKits = Number.isFinite(data.spinKits) ? Math.min(Constants.SPIN_KIT.MAX_ABOARD, Math.max(0, Math.floor(data.spinKits))) : 0;
     this.capsules = Number.isFinite(data.capsules) ? Math.min(Constants.PART_CAPSULE.MAX_ABOARD, Math.max(0, Math.floor(data.capsules))) : 0;
     this.xenonDrawnKg = 0;   // a load starts the gas tallies again (MissionGasTally rebases)
     this.salvageGasKg = 0;
@@ -964,6 +968,36 @@ export class ResourceSystem {
     return this.dragSails;
   }
 
+  // Spin-kit stock (plan debris-1 lane K): a count aboard, SPIN_KIT.massKg each in her live mass; a daughter takes one at launch.
+
+  /** Mass of the kits aboard, kg (ArmManager.getMassBudget adds it to her live mass). */
+  spinKitMassKg() {
+    return Math.max(0, this.spinKits) * Constants.SPIN_KIT.massKg;
+  }
+
+  /** One bought spin kit goes into the stock AT THE CLICK, at most `SPIN_KIT.MAX_ABOARD`; returns the stock after the load. */
+  loadSpinKit() {
+    this.spinKits = Math.min(Constants.SPIN_KIT.MAX_ABOARD, Math.max(0, Math.floor(this.spinKits) || 0) + 1);
+    this._syncToPlayer();
+    eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'spinKit', value: 1 });
+    return this.spinKits;
+  }
+
+  /** A daughter takes one kit at launch; false when the stock is empty. */
+  takeSpinKit() {
+    if (!(this.spinKits >= 1)) return false;
+    this.spinKits = Math.max(0, Math.floor(this.spinKits) - 1);
+    this._syncToPlayer();
+    return true;
+  }
+
+  /** An unused kit comes back to stock when she docks (never above the cap). */
+  returnSpinKit() {
+    this.spinKits = Math.min(Constants.SPIN_KIT.MAX_ABOARD, Math.max(0, Math.floor(this.spinKits) || 0) + 1);
+    this._syncToPlayer();
+    return this.spinKits;
+  }
+
   /**
    * One bought reentry capsule goes into the stock AT THE CLICK, at most `PART_CAPSULE.MAX_ABOARD` (its mass counts in hers through `GameFlowManager.holdMassKg`).
    * @returns {number} the stock after the load
@@ -996,6 +1030,9 @@ export class ResourceSystem {
       case 'dragSail':
         this.loadDragSail();
         return true;   // loadDragSail synced and emitted RESOURCE_UPGRADED itself
+      case 'spinKit':
+        this.loadSpinKit();
+        return true;   // loadSpinKit synced and emitted RESOURCE_UPGRADED itself
       case 'reentryCapsule':
         this.loadCapsule();
         return true;   // loadCapsule synced and emitted RESOURCE_UPGRADED itself
@@ -1051,6 +1088,7 @@ export class ResourceSystem {
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
     this.indiumStoreKg = 0;   // a new run (retry, game-over continue) starts the indium store empty
     this.dragSails = 0;
+    this.spinKits = 0;        // ... and no spin kits
     this.capsules = 0;        // ... and no reentry capsules
 
     this.xenonDrawnKg = 0;    // the gas tallies start again (MissionGasTally rebases)

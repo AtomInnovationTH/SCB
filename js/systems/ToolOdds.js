@@ -38,6 +38,7 @@ import {
   strainBandT,
 } from '../entities/CaptureNet.js';
 import { RAD2DEG, clamp01, clamp } from '../core/MathUtil.js';
+import { kitHolds } from './SpinDecay.js';   // the spin kit's one "does it hold here" test
 import { buildLineupSnapshot, computeAimPart, computeHoldPart, computeTumblePart } from './NetLineupOdds.js';
 
 /** Preference order for ▶ tie-breaks (matches ToolRecommender). */
@@ -498,6 +499,11 @@ export function computeToolOdds(opts = {}) {
         break;
       case 'PAD':
         odds.PAD = computePadOdds(target, opts);
+        break;
+      case 'KIT':   // the spin kit (plan debris-1 lane K): no roll; it holds on a steel spot of a big piece (SpinDecay.kitHolds), never recommended (not in TOOL_PREF_ORDER)
+        odds.KIT = kitHolds(target)
+          ? { p: 1, blocker: null, hint: 'clips on, no roll. Slows the spin over days' }
+          : { p: 0, blocker: 'NO STEEL', hint: 'big pieces with a steel spot only' };
         break;
       default:
         odds[kind] = { p: null, blocker: 'OFFLINE', hint: 'unknown tool' };

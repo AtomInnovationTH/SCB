@@ -871,7 +871,8 @@ export class CommsSystem {
       : flyFirstLine(armId, (tool === 'PAD' ? 'Daughter in position. Press N to stick the pad on.'
         : tool === 'GRIPPER' ? 'Daughter in position. Press N to grip it.'
           : tool === 'MAGNET' ? 'Daughter in position. Press N to use the magnet.'
-            : 'Daughter in position. Press N to net it.'));
+            : tool === 'KIT' ? 'Daughter in position. Press N to clip the spin kit on.'
+              : 'Daughter in position. Press N to net it.'));
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
       const rawId = data?.armId;

@@ -1,10 +1,12 @@
 /**
  * DaughterCW.js - a daughter's long fetch on the real curved path (plan sky-1116, lane L-flight, Done C).
  *
- * WHY. In the game the world clock runs `TIME_SCALE_GAMEPLAY` (10) world seconds per real second, but a daughter's kinematics run on
- * REAL seconds (`position += velocity * dt`, ArmUnit.js `_updateTransit`). So her "10 m/s" is 1 m/s of true relative speed, and the
- * frame she flies in is the mother's TRANSLATING frame with the stars' axes: the piece, on its own Kepler orbit, circles in that
- * frame at the orbital rate. Today (read first, measured 2026-11-16 in the real rig, `tmp/sky1116/flight/probe1.mjs`) she feels no
+ * WHY. The world clock runs `TIME_SCALE_GAMEPLAY` (10) world seconds per real second (40 on floor 3). Under the one clock (DECISIONS
+ * §70 row 10, plan debris-1 D6; `TimeAuthority.armDt`) a daughter's kinematics step on the WORLD's seconds in TRUE units, so her
+ * "10 m/s" is 10 m/s of true relative speed; with the clock off (tests, headless, a trip) they step on real seconds in game units (her
+ * "10 m/s" is 1 m/s true). Either way the frame she flies in is the mother's TRANSLATING frame with the stars' axes: the piece, on its
+ * own Kepler orbit, circles in that frame at the orbital rate. Before this file (measured 2026-11-16 in the real rig,
+ * `tmp/sky1116/flight/probe1.mjs`) she felt no
  * gravity gradient at all and the controller (`_updateTransit`: velocity matching with an EMA drift term plus quadratic braking)
  * spends her tank following a target that moves 11 m/s per km in her units: 1 km ahead costs 33 of her 50 m/s and 150 s, 2 km runs
  * her dry. The flight below is the fix beyond `CW_FLIGHT.MIN_RANGE_M`: she is launched on the Clohessy-Wiltshire intercept (aimed
@@ -13,7 +15,7 @@
  * speed, as `RouteCost.daughterLeg` has always billed) is paid.
  *
  * FRAMES AND UNITS. Everything here is SI (metres, seconds of WORLD time, m/s of TRUE relative speed) in the scene's own axes. The
- * caller converts: a daughter's speed in game units is the true speed times `TIME_SCALE_GAMEPLAY`. The LVLH triple is x = radial out,
+ * caller converts: a daughter's speed in her units is the true speed times `TimeAuthority.armScale()` (1 under the one clock, 10 off). The LVLH triple is x = radial out,
  * y = along the track (the velocity), z = x cross y (the orbit normal); the scene's axes are a reflection of the usual ones, which
  * changes nothing here (gravity is central and the triple is built from cross products inside the scene). Rotation rate is that of
  * the mother's circular orbit.
@@ -58,6 +60,10 @@ export const CW_FLIGHT = {
   AIM_TOL_DEG: 15,
   /** ms: how long an aim-time plan (the direction the strut is turned to) is kept before it is solved again */
   AIM_REFRESH_MS: 1000,
+  /** the hand-over margin (plan debris-1 Fix C1-1 F3, D6b revised): under the one clock the curve hands her to the braking controller at
+   *  max(`HANDOFF_M`, v^2 / (2 aBrake x this) + the station-keep gate), v her speed relative to the piece, so a fast spring tier brakes with
+   *  honest thrust on the far leg (`ArmUnit._cwHandoverM`). Real time near the piece still starts at `HANDOFF_M` (D6). */
+  HANDOVER_BRAKE_MARGIN: 0.9,
 };
 
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];

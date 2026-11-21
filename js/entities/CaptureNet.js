@@ -3963,7 +3963,7 @@ export class CaptureNetSystem {
     if (net._cutNext >= plan.pieces.length - 1) return;
 
     // CUT_S GAME-seconds per cut: dt × BASE_SCALE, deliberately NOT sun-scaled (the cutter is a machine, not a plant).
-    net._cutProgressS = (net._cutProgressS || 0) + dt * TimeAuthority.BASE_SCALE;
+    net._cutProgressS = (net._cutProgressS || 0) + dt * TimeAuthority.fixedClockScale();   // BASE_SCALE; slowed only near a piece (debris-1 D6)
     if (net._cutProgressS >= (CN.CUT_S ?? 60)) {
       net._cutProgressS = 0;
       this._detachCutPiece(net);
@@ -4211,7 +4211,7 @@ export class CaptureNetSystem {
     const CHUNK_COUNT = FT.CHUNK_COUNT;
     const span = FT.digestSpanS(d.mass);
     const sunScale = this._digestSunScale ?? 1.0;
-    d._digestProgress = (d._digestProgress || 0) + dt * TimeAuthority.BASE_SCALE * sunScale;
+    d._digestProgress = (d._digestProgress || 0) + dt * TimeAuthority.fixedClockScale() * sunScale;   // slowed only near a piece (debris-1 D6)
     const t = Math.min(FEED_S, (d._digestProgress / span) * FEED_S);
     // The chop ramp reads this derived phase time (ArmManager's rack ramp reads arm._digestPhaseT: one convention).
     net._digestPhaseT = t;

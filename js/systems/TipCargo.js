@@ -1118,7 +1118,7 @@ export class TipCargo {
     const cook = Constants.isFeatureEnabled('FURNACE_COOK') || tripMelting();
     if (dt > 0 && cook) {
       const span = FT.digestSpanS(slot.massKg);
-      d._digestProgress = (d._digestProgress || 0) + dt * TimeAuthority.BASE_SCALE * this._sunScale();
+      d._digestProgress = (d._digestProgress || 0) + dt * TimeAuthority.fixedClockScale() * this._sunScale();   // slowed only near a piece (debris-1 D6)
       slot.phaseT = Math.min(FT.FEED_S, (d._digestProgress / span) * FT.FEED_S);
     }
     // A melt the trip left unfinished keeps its stage (and its size) until the next trip: the clock is off, the bag is not reset.

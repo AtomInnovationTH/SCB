@@ -1303,7 +1303,9 @@ export const Constants = {
   },
 
   // --- Reel-in / re-dock inertia (FEATURE_FLAGS.REEL_PROFILE_V2) ---
-  // All speeds are game-scale m/s applied over REAL dt (matching the legacy REELING convention; NOT game-time).
+  // All speeds are game-scale m/s (true x 10: V_CRUISE_MAX 60 = 6 m/s true) stepped on the reel's clock (`TimeAuthority.reelDt`: world
+  // seconds / BASE_SCALE: real seconds on floors 1-2 and with the one clock off, 4x on floor 3), so her true speed is the same at every
+  // rate (plan debris-1 C1, DECISIONS §70 row 10). Accelerations are game-scale m/s per reel second (true x 100).
 
   // Daughter reel-in trapezoidal velocity profile (accel → cruise → decel).
   // Replaces the constant REEL_IN_SPEED_* haul speed when the flag is ON; the
@@ -4906,6 +4908,18 @@ export const Constants = {
       pressClient: true,                                         // the good-press job's client (JobsBoard.pressRows)
       areaM2: 2.0 },    // box 1.6 x 1.0 x 0.9 m (estimate)
   ],
+  // SPIN_KIT — the clip-on magnet kit (DECISIONS §70 row 7; plan debris-1 lane K, D7). One size: a flipping magnet that pushes against Earth's
+  // field slows a big piece's spin over days (law and fit: SpinDecay.kitSlowedRate). ESTIMATES: the price is the drag sail's launch rate
+  // (~70 cr/kg) for 1 kg plus about 330 for magnet and electronics; the dipole and mass are the probe's (25 A·m² ≈ 0.5 kg, 100 ≈ 1.5 kg,
+  // tmp/debris1/epm/probe-kit.mjs). `MAX_ABOARD` caps her stock (coordinator's call; the sail has none).
+  SPIN_KIT: {
+    massKg: 1.0,
+    dipoleAm2: 50,
+    priceCr: 400,
+    MAX_ABOARD: 4,
+    FIT_C: 0.7056,               // alpha = FIT_C · dipole · B0 (Re/r)³ / I; fitted to the probe, residuals in tmp/plans/debris-1.md Log (0.7056)
+    FLOOR_ORBIT_RATES: 2,       // B-dot settles with the body turning with the local field: about twice the orbit rate (the floor)
+  },
   // BIG_PIECES — what a big piece (a HIGH_FIELD stage or satellite: `owner` set) pays when DISPOSED OF, not at the catch
   // (DECISIONS §33 row 16-17; BigPieceValues.js, OrbitLifetime.js). Estimates to tune. Metal in orbit is priced like her gas: the
   // launch price per kg (`IN_ORBIT_CR_PER_KG`, derived, never a literal). The anchor pays that plus the elevator contract's bonus per kg.
@@ -6413,8 +6427,14 @@ export const Constants = {
   // V_CAP = 10 m/s matches CROSSBOW_LAUNCH_SPEED_DEFAULT so the braking profile sqrt(2·A_BRAKE·r) is the dominant control
   // term, not the cap: a low cap saturates the profile at 2.5 m, making the arm brake immediately from the 10 m/s launch
   // speed and then crawl.
+  // Under the one clock (DECISIONS §70 row 10, plan debris-1 D6/D6b; `TimeAuthority.armDt`) these are TRUE m/s and m/s^2 over the world's
+  // seconds at every rate (1x near a piece, 10x / 40x on a far leg): her brake is MAX_ACCEL x BRAKE_FRACTION = 0.25 m/s^2 honest, so a
+  // launch, straight or curved, is capped to what she can stop from at the station-keep gate (`ArmUnit._straightLaunchCap`, Fix C1-2 G1);
+  // from about 2 km that cap passes every tier, and a curve then launches at the full spring and hands over to this controller at her
+  // braking distance (`ArmUnit._cwHandoverM`, plan debris-1 Fix C1-1 F3), whose
+  // braking impulse is held to MAX_ACCEL x BRAKE_FRACTION. With the clock off (tests, headless, a trip) they are game units on real seconds, as before.
   DAUGHTER_AUTOPILOT: {
-    MAX_ACCEL:      0.5,   // m/s² — game-feel acceleration (4× less than mother's 2.0)
+    MAX_ACCEL:      0.5,   // m/s² — her thrust limit at base mass (4× less than mother's 2.0); true under the one clock
     KP_VEL:         0.8,   // dimensionless — velocity tracking gain (same as mother)
     BRAKE_FRACTION: 0.5,   // fraction of MAX_ACCEL for along-track braking
     V_CAP:          7.1,   // m/s — fallback cap (T1 spring speed). TRANSIT uses _launchSpeedMps dynamically.

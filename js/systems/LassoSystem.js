@@ -140,6 +140,8 @@ export class LassoSystem {
         this._player = null;
 
         this.flightTimer = 0;
+        /** Lasso flight seconds at BASE_SCALE (slowed with the world near a piece): the LASSO_MAX_FLIGHT_TIME timeout. */
+        this._flightClockS = 0;
 
         this.maxFlightTime = Constants.LASSO_MAX_FLIGHT_TIME;
 
@@ -1139,9 +1141,10 @@ export class LassoSystem {
         const launchDistanceM = muzzleWorld.distanceTo(bestPos) / M;
         const { contactRadiusM, speedMps: easedApparentSpeed } = lassoFlightParams(launchDistanceM);
         this._contactRadiusScene = contactRadiusM * M;
-        this._flightSpeedScene = easedApparentSpeed * M; // scene units / real second (TIME_SCALE already folded in)
+        this._flightSpeedScene = easedApparentSpeed * M; // scene units / real second at BASE_SCALE (TIME_SCALE already folded in; `_lk` in update)
 
         this.flightTimer = 0;
+        this._flightClockS = 0;
         this._reelingIn = false;
         this._reelProgress = 0;
         this._netSpinAngle = 0;
@@ -1271,6 +1274,11 @@ export class LassoSystem {
 
 
         this.flightTimer += dt;
+        // One clock (plan debris-1 D6): the lasso's speeds are written at BASE_SCALE game s per real s; while a daughter is near a piece
+        // the world slows (`fixedClockScale` < BASE_SCALE) and so does the lasso, so its TRUE speed and reach are the same at every rate.
+        // `_flightClockS` counts its flight in those seconds for the LASSO_MAX_FLIGHT_TIME timeout (8 s at 10x = 80 world s).
+        const _lk = TimeAuthority.fixedClockScale() / TimeAuthority.BASE_SCALE;
+        this._flightClockS = (this._flightClockS || 0) + dt * _lk;
 
         const liveTargetPos = this._getLiveTargetPos(debrisField);
         if (liveTargetPos) {
@@ -1281,9 +1289,11 @@ export class LassoSystem {
         }
 
         if (this._reelingIn) {
-            this._reelProgress += dt * Constants.LASSO_REEL_SPEED;
+            // on the same clock as its flight (`_lk`: 1 as shipped, 1/10 near a daughter's piece; plan debris-1 Fix C1-1 F6), and the
+            // motor bill on it too, so the reel's true speed and its energy are the same at every rate
+            this._reelProgress += dt * _lk * Constants.LASSO_REEL_SPEED;
             this._reelProgress = Math.min(this._reelProgress, 1.0); // clamp — prevent overshoot
-            this._billReelMotor(dt);
+            this._billReelMotor(dt * _lk);
             if (this._reelProgress >= 1.0) {
                 // Catch complete: it adopts onto the nose-collar berth, or (no capture system, headless) resolves via the legacy
                 // instant path.
@@ -1479,14 +1489,14 @@ export class LassoSystem {
                 // Move at the per-shot EASED apparent speed (_flightSpeedScene folds in TIME_SCALE_GAMEPLAY at fire). Clamp the step
                 // so the net parks at contact range and waits out the min-flight gate instead of overshooting.
                 const parkDist = Math.max(0, distToTarget - this._contactRadiusScene * 0.5);
-                const step = Math.min(this._flightSpeedScene * dt, distToTarget, parkDist || distToTarget);
+                const step = Math.min(this._flightSpeedScene * dt * _lk, distToTarget, parkDist || distToTarget);
                 toTarget.normalize().multiplyScalar(step);
                 this._projOffset.add(toTarget);
             }
 
             this.projectilePos.copy(playerPos).add(this._projOffset);
 
-            if (this.flightTimer > this.maxFlightTime) {
+            if (this._flightClockS > this.maxFlightTime) {
                 this._cancelLasso();
                 return;
             }
@@ -2023,6 +2033,7 @@ export class LassoSystem {
         this.projectilePos = null;
         this.projectileVel = null;
         this.flightTimer = 0;
+        this._flightClockS = 0;
         this._reelingIn = false;
         this._reelProgress = 0;
         this._netSpinAngle = 0;

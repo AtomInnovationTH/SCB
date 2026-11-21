@@ -32,7 +32,8 @@ import { computeToolOdds, makeNetOddsLockCache, padSpinTooFast } from '../system
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { pieceLostLine } from '../systems/PieceClaim.js';
-import { bigPieces } from '../systems/BigPieces.js';   // a pending big piece is never digested on the rack
+import { bigPieces, pieceName } from '../systems/BigPieces.js';   // a pending big piece is never digested on the rack; the kit's line names the piece
+import { kitHolds } from '../systems/SpinDecay.js';   // the spin kit's one "does it hold here" test (lane K)
 import { DebrisField } from './DebrisField.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { netCellLayout } from './netCellLayout.js';
@@ -108,6 +109,10 @@ const _tintScratch  = new THREE.Color();
 const _tintTarget   = new THREE.Color();
 
 const S = Constants.ARM_STATES;
+/** Her `velocity` in TRUE units under the one clock, stepped on `armDt` (`_convertVelocityUnits`, plan debris-1 Fix C1-1 F5). */
+const _VEL_TRUE_STATES = new Set([S.LAUNCHING, S.TRANSIT, S.APPROACH, S.ADRIFT]);
+/** Her `velocity` in GAME-SCALE units (true x BASE_SCALE), stepped on `reelDt`: the haul and the return. */
+const _VEL_GAME_STATES = new Set([S.HAULING, S.RETURNING]);
 /** kg of the mother's steering gas from which a daughter's bottle refill is named in a line (t13 lane G, Decision 8: 50 g). */
 const REFILL_SAY_KG = 0.05;
 /** kg of steering gas a reel's pull must have cost for the "is home" / "secured" line to name it (t13 lane G, Decision 8: 20 g). */
@@ -1160,7 +1165,8 @@ export class ArmUnit {
     this.captures = 0;
     this._startingDistance = 0;             // distance to target at transit start (for approach beep fraction)
     this.position = new THREE.Vector3();    // world position
-    this.velocity = new THREE.Vector3();    // world velocity
+    this.velocity = new THREE.Vector3();    // world velocity, scene units per second of HER clock: under the one clock (`TimeAuthority.armDt`) true m/s x M per world second; off: game units (true x BASE_SCALE) per real second. The reel/haul/return states write game-scale speeds stepped on `reelDt` (converted at the change of family: `_convertVelocityUnits`).
+    this._velGameUnits = false;   // her velocity is in game-scale units (HAULING / RETURNING) rather than true ones (`_convertVelocityUnits`)
 
     // Tether detach state
     this.isDetached = false;
@@ -1239,6 +1245,8 @@ export class ArmUnit {
       ? Constants.DAUGHTER_TOOLSETS[type].slice()
       : ['NET'];
     this.selectedTool = 'NET';
+    this._kitAboard = false;               // plan debris-1 lane K: she carries a spin kit (`takeKit`; one kilogram of her mass, `_massKg`)
+    this._kitPhase = null;                 // 'CLOSING' | 'HOLD' while she clips the kit on (the MAGNETIC_GRAPPLE state; `_updateKitClip`)
     this._captureToolKind = 'NET';         // which verb actually secured the live catch
     // Live tool odds: refreshed at TOOL_ODDS.REFRESH_HZ during STATION_KEEP so de-spinning / closing in reads as a
     // live count-up on the reticle odds strip.
@@ -1396,7 +1404,8 @@ export class ArmUnit {
     /** Arrival order on the reels (ArmManager: first come owns the mother turn). */
     this._rhSeq = 0;
     // Reel gas (DECISIONS §34): the reel-home haul is a sim: pull-up, cruise, brake on her cold-gas jet.
-    /** Her current reel speed under REEL_HOME, game-scale m/s (per REAL s); 0 on entering REELING, held when dt is 0. */
+    /** Her current reel speed under REEL_HOME, game-scale m/s (true x BASE_SCALE) per second of the reel's clock (`TimeAuthority.reelDt`:
+     *  world s / BASE_SCALE); true m/s = this / BASE_SCALE at every rate. 0 on entering REELING, held when dt is 0. */
     this._rhReelV = 0;
     /** The jet is firing this frame (she is slowing on gas): drives the gas bill, the look-puffs and the tension readout. */
     this._rhBraking = false;
@@ -2939,7 +2948,7 @@ export class ArmUnit {
    */
   _massKg() {
     const type = this.config.type;
-    return daughterBaseMassKg(type) + daughterExtraMassKg(type, this._playerSatellite);
+    return daughterBaseMassKg(type) + daughterExtraMassKg(type, this._playerSatellite) + (this._kitAboard ? Constants.SPIN_KIT.massKg : 0);   // + the spin kit she carries (lane K)
   }
 
   /**
@@ -3188,6 +3197,7 @@ export class ArmUnit {
     // a carry in progress lets go of its tip reservation, the strut reservation and the radiator hold first
     if (this._carry) this.abortCarry('reset', { quiet: true });
     this._carryGaveUp = false;
+    this._kitAboard = false; this._kitPhase = null; this._kitReturn = null;   // a new run: no kit in her hand (the stock reset itself)
     this.state = S.DOCKED;
     this.fuel = 100;
     this._manualBurnS = 0;
@@ -3204,6 +3214,7 @@ export class ArmUnit {
     this._startingDistance = 0;
     this.position.set(0, 0, 0);
     this.velocity.set(0, 0, 0);
+    this._velGameUnits = false;
     this.isDetached = false;
     this._tetherSevered = false;
     this._severedCatch = null;
@@ -3311,7 +3322,7 @@ export class ArmUnit {
      case S.WEB_SHOT:   this._updateWebShot(dt, parentPos); break;
       case S.SCANNING:   this._updateScanning(dt); break;
       case S.STATION_KEEP: this._updateStationKeep(dt); break;
-     case S.MAGNETIC_GRAPPLE: this._updateMagneticGrapple(dt); break;
+     case S.MAGNETIC_GRAPPLE: if (this._kitPhase) this._updateKitClip(dt); else this._updateMagneticGrapple(dt); break;   // the spin kit's clip-on rides this state (lane K)
      case S.GRIPPER_GRAPPLE: this._updateGripperGrapple(dt); break;
      case S.PAD_CONTACT: this._updatePadContact(dt); break;
      case S.EXPENDED:   this._updateExpended(dt); break;
@@ -3546,6 +3557,7 @@ export class ArmUnit {
       tetherLength: Math.round(this.tetherLength),
       targetId: this.target?.id || null,
       hasCaptured: !!this.capturedDebris || this.heldCatches.length > 0,
+      kitClip: !!this._kitPhase,   // plan debris-1 K fix F2: the spin kit's clip-on runs (the status row says "Clipping kit", not "Capturing")
       captures: this.captures,
       position: this.position.clone(),
       remainingDeltaV: (this.fuel / 100) * (this.config?.totalDeltaV || 50),
@@ -3602,6 +3614,26 @@ export class ArmUnit {
     return this.target._scenePosition || null;
   }
 
+  /**
+   * @private One speed unit across her states (plan debris-1 Fix C1-1 F5). Under the one clock two families write `velocity` in
+   * different units: the flight states (`_VEL_TRUE_STATES`) hold TRUE m/s x M stepped on `armDt` (world seconds), the haul and the
+   * return (`_VEL_GAME_STATES`) GAME-SCALE m/s (true x BASE_SCALE) x M stepped on `reelDt` (world s / BASE_SCALE). Both move her the
+   * same distance per world second; only the stored number differs, by BASE_SCALE / armScale() (10 under the one clock, 1 off). On
+   * entering a state of the other family her velocity is converted, so her true speed is continuous (a recall from TRANSIT, a flat
+   * battery in HAULING -> ADRIFT, a severed line in RETURNING -> TRANSIT). States of neither family keep the unit she had
+   * (`_velGameUnits`); the older states on plain real `dt` (trawl, deorbit, web shot) are not converted (owed, as their own dt).
+   * @param {string} newState
+   */
+  _convertVelocityUnits(newState) {
+    const toGame = _VEL_GAME_STATES.has(newState), toTrue = _VEL_TRUE_STATES.has(newState);
+    if (!toGame && !toTrue) return;
+    if (toGame !== !!this._velGameUnits) {
+      const k = TimeAuthority.BASE_SCALE / TimeAuthority.armScale();
+      if (k !== 1) this.velocity.multiplyScalar(toGame ? k : 1 / k);
+    }
+    this._velGameUnits = toGame;
+  }
+
   _transitionTo(newState) {
     const old = this.state;
     if (this._cw && newState !== S.TRANSIT) this._cwClear();   // the curved flight ends with TRANSIT, whatever ended it
@@ -3615,6 +3647,7 @@ export class ArmUnit {
       this._clearRecoilKick();
     }
     this.state = newState;
+    this._convertVelocityUnits(newState);   // one speed unit across her states (Fix C1-1 F5)
     // the beside hold ends with the hold (ArmManager._tickBeside frees her slot on its next frame)
     if (old === S.STATION_KEEP && newState !== S.STATION_KEEP) { this._besideDir = null; this._besideStarted = false; }
     this.stateTimer = 0;
@@ -3628,6 +3661,7 @@ export class ArmUnit {
     eventBus.emit(Events.ARM_STATE_CHANGE, stateChange);
     if (newState === S.DOCKED || newState === S.RELOADING) {
       this._captureToolKind = 'NET';   // reset capture-verb to default
+      if (this._kitAboard) this._giveBackKit();   // an unused spin kit goes back to the mother's stock (lane K)
     }
     // fresh capture/dock cycle: re-arm the SNUG window, catch-cleared guard and re-dock arrest (REEL_PROFILE_V2)
     if (newState === S.GRAPPLED || newState === S.DOCKED || newState === S.RELOADING ||
@@ -3684,6 +3718,7 @@ export class ArmUnit {
     if (newState === S.STATION_KEEP && Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) {
       this._refreshToolRecommendation();
     }
+    if (newState !== S.MAGNETIC_GRAPPLE) this._kitPhase = null;   // a recall mid clip-on never leaves the kit's sub-FSM set for the next magnet grapple (lane K)
     // Release the tool-closing CA exemption on ANY exit from a closing state (MAGNETIC_GRAPPLE / GRIPPER_GRAPPLE /
     // PAD_CONTACT: success, failure or external recall/deorbit) so the AUTOPILOT_TARGET_LOCK set on entry can never leak.
     if ((old === S.MAGNETIC_GRAPPLE || old === S.GRIPPER_GRAPPLE || old === S.PAD_CONTACT)
@@ -3736,16 +3771,22 @@ export class ArmUnit {
     const armMass = this._massKg();
     const springK = isWeaver ? CROSSBOW_SPRING_K_WEAVER : CROSSBOW_SPRING_K_SPINNER;
 
-    const speed = Math.min(this.launchSpeed, tier.maxSpeed);
+    // D6b (plan debris-1, honest thrust): under the one clock her speeds are TRUE m/s and her brake is MAX_ACCEL x BRAKE_FRACTION
+    // (0.25 m/s^2), so a 15-25 m/s spring cannot stop inside 400 m. Every launch, straight or curved, is capped so she can brake to the
+    // station-keep gate from where the spring coast leaves her (`_straightLaunchCap`; Fix C1-2 G1: the curve's hand-over is checked only
+    // from TRANSIT, so a curve at 1.4-1.6 km on floor 3 started braking 266 m too late). From about 2 km the cap is above every tier, so a
+    // curve there launches at the full spring (Fix C1-1 F3) and brakes on the far leg from `_cwHandoverM`. The curve is planned at the
+    // capped speed (the aim, `cwAimDirection`, uses the same cap). Off (clock off: tests, headless, a trip) the cap is a no-op.
+    let speed = Math.min(this.launchSpeed, tier.maxSpeed, this._straightLaunchCap());
 
     // E = ½kd²; effective k scales as v² for variable launch speed (springK and CROSSBOW_DRAW_DISTANCE validate the
     // energy budget; the impulse itself is applied directly as velocity for numerical stability)
-    const launchVelocity = speed * M;  // Convert to game units
 
     // Long fetch (DaughterCW.js): a piece at least CW_FLIGHT.MIN_RANGE_M away is reached on the curved path. The spring still pushes
     // along the strut (the strut was turned to the plan's direction at aim time, `cwAimDirection`); the plan here only has to agree
     // with that line within CW_FLIGHT.AIM_TOL_DEG, else the old flight (nothing below changes).
     this._cwPlanAtLaunch(speed, this.launchDirection || this._worldDockDirection(this._lastParentQuat));
+    const launchVelocity = speed * M;  // Convert to game units
     if (this.launchDirection) {
       this.velocity.copy(this.launchDirection).multiplyScalar(launchVelocity);
     } else {
@@ -3803,7 +3844,7 @@ export class ArmUnit {
     const R = [parentPos.x / M, parentPos.y / M, parentPos.z / M];
     const rn = Math.hypot(R[0], R[1], R[2]);
     if (!(rn > 6.0e6 && rn < 1.0e8)) return null;   // not a position on an Earth orbit: leave it to the old controller
-    const BS = TimeAuthority.armScale();   // game s per second of her clock: BASE_SCALE as shipped, 1 under the real-speed clock (DECISIONS §70 row 6); same in every `BS` of this long fetch
+    const BS = TimeAuthority.armScale();   // her units per true unit: 1 under the one clock (true m/s per world second), BASE_SCALE off; same in every `BS` of this long fetch
     return {
       R, V: [mc.velocity.x * 1000, mc.velocity.y * 1000, mc.velocity.z * 1000],
       dd: [(this.position.x - parentPos.x) / M, (this.position.y - parentPos.y) / M, (this.position.z - parentPos.z) / M],
@@ -3832,6 +3873,48 @@ export class ArmUnit {
   }
 
   /**
+   * The speed the spring will give her at `target` now, after every cap (plan debris-1 Fix C1-1 F2, Fix C1-2 G1): the dial's speed (within
+   * her tier), at most `_straightLaunchCap(target)` on every launch, straight or curved (the cap is above every tier from about 2 km). The
+   * dial's speed with no target or with the one clock off. What the launch dial shows (StatusPanel `_launchDial`). True m/s under the clock.
+   * @param {object|null} target the piece she would be sent at
+   * @returns {number} m/s
+   */
+  launchSpeedFor(target) {
+    const s = this._cwLaunchSpeed();
+    if (!target || !TimeAuthority.armClockOn()) return s;
+    return Math.min(s, this._straightLaunchCap(target));
+  }
+
+  /**
+   * @private D6b (plan debris-1, coord): the fastest launch (straight, or a curve: Fix C1-2 G1) from which her honest brake (aBrake =
+   * MAX_ACCEL / fitMassRatio x BRAKE_FRACTION, true m/s^2) still slows her to `STATION_KEEP.ENTRY_MAX_VELOCITY` at the station-keep gate:
+   * v^2 = ENTRY_MAX^2 + 2 aBrake (d - gate - margin - v tc), d her distance to the piece's centre, gate = standoff x ENTRY_DISTANCE_MULT (the
+   * entry check in `_updateApproach`), margin 10 % of (d - gate), tc the world seconds she coasts unbraked from the spring to TRANSIT at the
+   * rate she launches at (1 for a piece within `HANDOFF_M`, else the field rate; Fix C1-1 F3: the old full-thrust catch-up hid it). The
+   * coast is counted in whole frames (Fix C1-2 G2): the spring fires on the first frame past CROSSBOW_UNDOCK_TIME and she moves a whole
+   * frame on it and on every frame to the one past CROSSBOW_RELEASE_TIME + 0.2 s, so at most RELEASE + 0.2 + 2 frames (`lastDtReal`; at
+   * 10 fps 3-4 frames, 0.3-0.4 s, where the timers alone said 0.25 s). Infinity while the one clock is off (her old game units, unchanged)
+   * or with no target (a free flight: the spring's own speed).
+   * @param {object|null} [target=this.target] the piece (the launch dial asks about the selected one before she has a target)
+   * @returns {number} true m/s (her units under the one clock)
+   */
+  _straightLaunchCap(target = this.target) {
+    if (!TimeAuthority.armClockOn() || !target) return Infinity;
+    const tp = target._scenePosition || null;
+    if (!tp) return Infinity;
+    const SK = Constants.STATION_KEEP, DAP = Constants.DAUGHTER_AUTOPILOT;
+    const standoff = clamp(((target.sizeMeter) || 1) * SK.DEFAULT_STANDOFF_MULT, SK.DEFAULT_STANDOFF, SK.MAX_STANDOFF);
+    const gate = standoff * (SK.ENTRY_DISTANCE_MULT || 2.0);
+    const d = this.position.distanceTo(tp) / M;
+    const run = Math.max(0, d - gate);
+    const aBrake = DAP.MAX_ACCEL / this._fitMassRatio() * DAP.BRAKE_FRACTION;
+    const vE = SK.ENTRY_MAX_VELOCITY;
+    const tc = (CROSSBOW_RELEASE_TIME + 0.2 + 2 * TimeAuthority.lastDtReal()) * (d <= CW_FLIGHT.HANDOFF_M ? 1 : TimeAuthority.fieldRate());
+    const b = aBrake * tc;   // v^2 + 2 b v - (vE^2 + 2 aBrake 0.9 run) = 0
+    return -b + Math.sqrt(b * b + vE * vE + 2 * aBrake * (run - 0.1 * run));
+  }
+
+  /**
    * The direction the strut must be turned to for a long fetch (>= `CW_FLIGHT.MIN_RANGE_M`): the Clohessy-Wiltshire launch direction
    * (DaughterCW.js), which is far off the line to the piece (measured 76 degrees at 2 km, 121 at 10 km). The crossbow pushes along
    * its strut, so the aim ceremony turns the strut to THIS, and the spring then pushes along it. Solved now (the world moves on, so
@@ -3842,12 +3925,12 @@ export class ArmUnit {
    * @returns {THREE.Vector3|null} unit, scene axes (a fresh copy)
    */
   cwAimDirection(target, accept = null, opts = null) {   // opts.fresh: neither read nor write the one-target cache (a pair asks about two pieces; `PairCurveAim`)
-    const speed = this._cwLaunchSpeed();
+    const speed = Math.min(this._cwLaunchSpeed(), this._straightLaunchCap(target));   // the speed she launches at (Fix C1-2 G1: the plan at launch uses the same cap)
     const kind = accept ? 1 : 0;
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const c = this._cwAimCache || (this._cwAimCache = [null, null]);
     const hit = c[kind];
-    if (!(opts && opts.fresh) && hit && hit.target === target && hit.speed === speed && now - hit.at < CW_FLIGHT.AIM_REFRESH_MS && now >= hit.at) {
+    if (!(opts && opts.fresh) && hit && hit.target === target && Math.abs(hit.speed - speed) <= 0.01 * speed && now - hit.at < CW_FLIGHT.AIM_REFRESH_MS && now >= hit.at) {   // within 1 %: the cap moves a little as the piece drifts
       return hit.dir ? hit.dir.clone() : null;
     }
     let dir = null;
@@ -3875,7 +3958,7 @@ export class ArmUnit {
     this._cwClear(true);
     const inp = this._cwEligibleInputs(this.target);
     if (!inp || !pushDir) return false;
-    const BS = TimeAuthority.armScale();
+    const BS = TimeAuthority.armScale();   // her units per true unit (1 under the one clock, BASE_SCALE off)
     const px = pushDir.x, py = pushDir.y, pz = pushDir.z, pn = Math.hypot(px, py, pz) || 1;
     const cosTol = Math.cos(CW_FLIGHT.AIM_TOL_DEG * Math.PI / 180);
     const plan = planLaunch({
@@ -3885,15 +3968,17 @@ export class ArmUnit {
     if (!plan) return false;
     this._cwTide = true;   // she feels the gradient from here to the catch (TRANSIT's curve and APPROACH's arrival: see `_cwTideKick`)
     this._cw = {
-      plan, target: this.target, T: plan.T,
-      elapsedWorld: (CROSSBOW_RELEASE_TIME + 0.2) * BS,   // the spring-to-TRANSIT frames fly the straight line (a few metres: no tide to speak of)
-      sinceReplan: 0, pending: new THREE.Vector3(), path: null, corrections: 0, a: [0, 0, 0],
+      plan, target: this.target, T: plan.T, speedPhys: speedMps / BS,   // speedPhys: her true launch speed (the spring's, after the G1 brake cap)
+      elapsedWorld: (CROSSBOW_RELEASE_TIME + 0.2) * TimeAuthority.worldRate(),   // the spring-to-TRANSIT frames fly the straight line (a few metres: no tide to speak of)
+      // one clock (Fix C1-1 F3): the first mid-course correction runs on her first curve frame. The spring pushes along the strut (up to
+      // AIM_TOL_DEG off the plan) and a fast spring's transfer can be shorter than the first REPLAN_REAL_S plus the NO_REPLAN_ORBITS tail, so
+      // the push error was never paid (floor 3, 25 m/s, 10 km: 10 m/s sideways at the hand-over, measured). Off: as before.
+      sinceReplan: TimeAuthority.armClockOn() ? CW_FLIGHT.REPLAN_REAL_S : 0, pending: new THREE.Vector3(), path: null, corrections: 0, a: [0, 0, 0],
     };
-    TimeAuthority.holdFlight(this);   // a floor under the real-speed clamp (see `TimeAuthority.holdFlight`); her plan is written against `armScale()` (BS above)
     // the path she will fly (the push the spring really gives, along the strut), drawn from the launch (the mother's frame)
     const sp = speedMps / BS / pn;
     this._cw.path = coastPath({ R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut, ud: [px * sp, py * sp, pz * sp], T: plan.T });
-    const min = Math.round(plan.T / BS / 60);
+    const min = Math.round(plan.T / TimeAuthority.fieldRate() / 60);   // screen minutes at the far leg's rate
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${this.displayName}: Long reach: aimed off the straight line to ride the curve, about ${min >= 1 ? `${min} min` : 'a minute'} out.`,
       priority: 'info',
@@ -3904,7 +3989,6 @@ export class ArmUnit {
   /** @private The flight plan and its drawn path go (a state other than TRANSIT, a new launch, a handover, a reset). `all`: the gradient too. */
   _cwClear(all = false) {
     this._cw = null;
-    TimeAuthority.releaseFlight(this);
     if (all) this._cwTide = false;
     if (this._cwLine) this._cwLine.visible = false;
   }
@@ -3932,12 +4016,33 @@ export class ArmUnit {
   _cwTideKick(dt, parentPos) {
     if (!this._cwTide || !parentPos || !(dt > 0)) return;
     const BS = TimeAuthority.armScale();
-    const k = dt * BS * BS * M;
+    const k = TimeAuthority.armWorldS(dt) * BS * M;   // a true acceleration over the frame's world seconds, in her units
     const a = tideAccel(
       [parentPos.x / M, parentPos.y / M, parentPos.z / M],
       [(this.position.x - parentPos.x) / M, (this.position.y - parentPos.y) / M, (this.position.z - parentPos.z) / M],
       this._cwKickA || (this._cwKickA = [0, 0, 0]));
     this.velocity.x += a[0] * k; this.velocity.y += a[1] * k; this.velocity.z += a[2] * k;
+  }
+
+  /**
+   * @private The range (m) at which the curve hands her to the braking controller (`_updateTransit`). Off (clock off: tests, headless, a
+   * trip): `CW_FLIGHT.HANDOFF_M`, as before. Under the one clock (plan debris-1 Fix C1-1 F3, D6b revised): max(`HANDOFF_M`,
+   * v^2 / (2 aBrake x `HANDOVER_BRAKE_MARGIN`) + gate), v her speed relative to the piece (true m/s; `_smoothDriftVel` is the piece's exact
+   * relative velocity on a curve, `_cwExactDrift`), aBrake = MAX_ACCEL / fitMassRatio x BRAKE_FRACTION, gate the station-keep entry range:
+   * a fast spring tier starts braking with honest thrust while still on the far leg; plus the distance this frame covers (v x its world
+   * seconds), so a coarse 40x frame does not carry her past it. Real time near the piece still starts at `HANDOFF_M`.
+   * @param {number} [dt=0] real seconds of this frame
+   * @returns {number} metres
+   */
+  _cwHandoverM(dt = 0) {
+    if (!TimeAuthority.armClockOn()) return CW_FLIGHT.HANDOFF_M;
+    const SK = Constants.STATION_KEEP, DAP = Constants.DAUGHTER_AUTOPILOT;
+    const drift = this._smoothDriftVel;
+    const v = (drift ? this.velocity.distanceTo(drift) : this.velocity.length()) / M;
+    const aBrake = DAP.MAX_ACCEL / this._fitMassRatio() * DAP.BRAKE_FRACTION;
+    const standoff = clamp(((this.target && this.target.sizeMeter) || 1) * SK.DEFAULT_STANDOFF_MULT, SK.DEFAULT_STANDOFF, SK.MAX_STANDOFF);
+    const gate = standoff * (SK.ENTRY_DISTANCE_MULT || 2.0);
+    return Math.max(CW_FLIGHT.HANDOFF_M, v * v / (2 * aBrake * CW_FLIGHT.HANDOVER_BRAKE_MARGIN) + gate + v * TimeAuthority.armWorldS(dt));
   }
 
   /**
@@ -3951,10 +4056,11 @@ export class ArmUnit {
     const cw = this._cw;
     if (!cw) return false;
     if (this.target !== cw.target || !(dt > 0)) { this._cwClear(); return false; }
-    if (distScene / M <= CW_FLIGHT.HANDOFF_M) { this._cwClear(); return false; }
+    if (distScene / M <= this._cwHandoverM(dt)) { this._cwClear(); return false; }
     const BS = TimeAuthority.armScale();
-    // a true acceleration a (m/s^2) over the frame's world time dt*BS changes her speed (game units, scene/s) by a * BS^2 * dt * M
-    const kick = 0.5 * dt * BS * BS * M;
+    const W = TimeAuthority.armWorldS(dt);   // the frame's world seconds (one clock: dt x worldRate(); off: dt x BASE_SCALE, as before)
+    // a true acceleration a (m/s^2) over the frame's world time W changes her speed (her units, scene/s) by a * W * BS * M
+    const kick = 0.5 * W * BS * M;
     const Rm = [parentPos.x / M, parentPos.y / M, parentPos.z / M];
     const off = [(this.position.x - parentPos.x) / M, (this.position.y - parentPos.y) / M, (this.position.z - parentPos.z) / M];
     let a = tideAccel(Rm, off, cw.a);
@@ -3963,17 +4069,17 @@ export class ArmUnit {
     const pend = cw.pending.length();
     if (pend > 0 && !this._powerOff()) {
       const aMax = Constants.DAUGHTER_AUTOPILOT.MAX_ACCEL / this._fitMassRatio();
-      const take = Math.min(pend, aMax * M * dt * TimeAuthority.BASE_SCALE);   // her thrust law runs on her own game clock (BASE_SCALE), not the world's
+      const take = Math.min(pend, aMax * M * W);   // honest thrust (D6b): aMax true m/s^2 over the world's seconds under the one clock
       this.velocity.addScaledVector(cw.pending, take / pend);
       this._impulseDvAccum += take / M;
       cw.pending.multiplyScalar((pend - take) / pend);
     }
-    this.position.addScaledVector(this.velocity, dt);
+    this.position.addScaledVector(this.velocity, TimeAuthority.armDt(dt));
     off[0] = (this.position.x - parentPos.x) / M; off[1] = (this.position.y - parentPos.y) / M; off[2] = (this.position.z - parentPos.z) / M;
     a = tideAccel(Rm, off, cw.a);
     this.velocity.x += a[0] * kick; this.velocity.y += a[1] * kick; this.velocity.z += a[2] * kick;
-    cw.elapsedWorld += dt * BS;
-    cw.sinceReplan += dt;
+    cw.elapsedWorld += W;
+    cw.sinceReplan += TimeAuthority.reelDt(dt);   // REPLAN_REAL_S counts world seconds / BASE_SCALE (screen seconds at 10x; off: real seconds, as before)
     if (cw.sinceReplan >= CW_FLIGHT.REPLAN_REAL_S) { cw.sinceReplan = 0; this._cwReplan(parentPos); }
     if (this._cw) this._cwDrawPath(parentPos);
     return true;
@@ -3992,7 +4098,10 @@ export class ArmUnit {
     const BS = TimeAuthority.armScale();
     const period = 2 * Math.PI / Math.sqrt(Constants.MU_EARTH * 1e9 / Math.pow(Math.hypot(inp.R[0], inp.R[1], inp.R[2]), 3));
     const Trem = cw.T - cw.elapsedWorld;
-    if (Trem < CW_FLIGHT.NO_REPLAN_ORBITS * period) return;   // too near the end to re-solve; the handover is close
+    // too near the end to re-solve; the handover is close. One clock (F3): the FIRST correction (her first curve frame, the spring's aim
+    // error) is always made: a fast spring's whole transfer can sit inside this tail (25 m/s, 5 km: T 202 s < 333 s), and the solve is the
+    // plan's own (the same T less a few seconds), so it is well conditioned.
+    if (Trem < CW_FLIGHT.NO_REPLAN_ORBITS * period && !(TimeAuthority.armClockOn() && cw.corrections === 0)) return;
     const uReq = replanVelocity({ R: inp.R, V: inp.V, dd: inp.dd, dtgt: inp.dtgt, ut: inp.ut, Trem });
     if (!uReq) return;
     const dv = [uReq[0] - inp.ud[0], uReq[1] - inp.ud[1], uReq[2] - inp.ud[2]];
@@ -4131,7 +4240,7 @@ export class ArmUnit {
     }
 
     if (this._springFired) {
-      this.position.addScaledVector(this.velocity, dt);
+      this.position.addScaledVector(this.velocity, TimeAuthority.armDt(dt));   // her step on the world's seconds (one clock); off: dt
       this.tetherLength = this.position.distanceTo(parentPos) / M;
     }
 
@@ -4172,7 +4281,7 @@ export class ArmUnit {
       if (this._cw || this._cwTide) this._cwClear(true);   // she is piloted: the planned curve and the gradient are off (the player flies her)
       // Manual mode: player controls velocity. Autopilot (controller, pings, thruster audio) is skipped: the approach beep
       // and thruster hum annoyed in ARM_PILOT mode.
-      this.position.addScaledVector(this.velocity, dt);
+      this.position.addScaledVector(this.velocity, TimeAuthority.armDt(dt));   // on the world's seconds (one clock); off: dt
       this.tetherLength = this.position.distanceTo(parentPos) / M;
       if (!this.isDetached && this.tetherLength > this.config.tetherMax) {
         const dir = _tetherDir.subVectors(this.position, parentPos).normalize();
@@ -4241,12 +4350,14 @@ export class ArmUnit {
     const DAP_T = Constants.DAUGHTER_AUTOPILOT;
 
     // Orbital drift velocity (target vs parent frame). Raw finite difference is noisy (cancellation when tDelta ≈ pDelta
-    // for co-orbiting objects), so it is EMA-smoothed.
+    // for co-orbiting objects), so it is EMA-smoothed. Per second of HER clock (`armDt`: world seconds under the one clock) so it is in
+    // the units of `velocity` (scene units per world second, true m/s x M, under the one clock; scene per real second off).
+    const dtA = TimeAuthority.armDt(dt);
     let rawDriftVel = _driftRaw.set(0, 0, 0);
     if (this._prevTargetScenePos && this._prevParentPos && parentPos && dt > 0) {
       const tDelta = _driftTDelta.subVectors(targetPos, this._prevTargetScenePos);
       const pDelta = _driftPDelta.subVectors(parentPos, this._prevParentPos);
-      rawDriftVel = tDelta.sub(pDelta).divideScalar(dt);
+      rawDriftVel = tDelta.sub(pDelta).divideScalar(dtA);
     }
     if (!this._prevTargetScenePos) this._prevTargetScenePos = targetPos.clone();
     else this._prevTargetScenePos.copy(targetPos);
@@ -4271,16 +4382,32 @@ export class ArmUnit {
     const effectiveVCap = this._launchSpeedMps || DAP_T.V_CAP;
     const aMaxT = DAP_T.MAX_ACCEL / this._fitMassRatio();   // game-feel cap at her base mass; the same thrust on a fitted (heavier) daughter gives less
     const aBrakeT = aMaxT * DAP_T.BRAKE_FRACTION;
-    const vStarMT = Math.min(effectiveVCap, Math.sqrt(2 * aBrakeT * posErrM));
+    // one clock: she begins braking at v^2/(2 aBrake) plus a 10 % margin (honest thrust, D6b), the profile read where this frame will
+    // leave her (her closing speed x the frame's world seconds ahead: Fix C1-1 F3, so a coarse 40x frame does not lag the profile by
+    // aBrake x W / KP); off: the old profile exactly
+    const clockT = TimeAuthority.armClockOn();
+    const closeT = clockT ? -relVT.dot(toTarget) / (dist || 1) / M : 0;   // true m/s toward the piece
+    const profM = clockT ? 0.9 * Math.max(0, posErrM - Math.max(0, closeT) * TimeAuthority.armWorldS(dt)) : posErrM;
+    const vStarMT = Math.min(effectiveVCap, Math.sqrt(2 * aBrakeT * profM));
     const vStarT = vStarMT * M; // scene units/s
 
     const goalDirT = _goalDir.copy(toTarget).normalize();
     const velCtrlErrT = goalDirT.multiplyScalar(vStarT).add(relVT);
 
-    // Commanded impulse = KP × velCtrlErr, clamped by MAX_ACCEL × gameDt
+    // Commanded impulse = KP × velCtrlErr, clamped by MAX_ACCEL × the frame's world seconds (true m/s^2 under the one clock; off:
+    // dt x BASE_SCALE, as before)
     const dvCmdT = velCtrlErrT.multiplyScalar(DAP_T.KP_VEL);
-    const gameDtT = dt * TimeAuthority.BASE_SCALE;
+    const gameDtT = TimeAuthority.armWorldS(dt);
     const maxDvT = aMaxT * M * gameDtT;
+    // one clock (Fix C1-1 F3): the part of the impulse that slows her relative to the piece stays within aBrake (true m/s^2), so her
+    // braking is the profile's honest brake at every rate; a lag the coarse far-leg frames built is paid over several frames at the
+    // 400 m switch, not dumped at aMax. Sideways corrections keep aMax. Off: unchanged.
+    if (TimeAuthority.armClockOn()) {
+      const vr = relVT.length();
+      const brakeCap = aBrakeT * M * gameDtT;
+      const brake = vr > 1e-18 ? dvCmdT.dot(relVT) / vr : 0;   // relVT = the piece's velocity relative to her: + = slowing her
+      if (brake > brakeCap) dvCmdT.addScaledVector(relVT, -(brake - brakeCap) / vr);
+    }
     const dvMagT = dvCmdT.length();
     if (dvMagT > maxDvT && dvMagT > 1e-18) dvCmdT.multiplyScalar(maxDvT / dvMagT);
 
@@ -4290,7 +4417,7 @@ export class ArmUnit {
       // meter the APPLIED (post-clamp) impulse for impulse-priced fuel
       this._impulseDvAccum += Math.min(dvMagT, maxDvT) / M;
     }
-    this.position.addScaledVector(this.velocity, dt);
+    this.position.addScaledVector(this.velocity, dtA);
 
     // Fine-approach threshold must be >= standoff so APPROACH has room to decelerate.
     const debrisSizeT = (this.target && this.target.sizeMeter) || 1;
@@ -4310,7 +4437,7 @@ export class ArmUnit {
     if (this._manualMode) {
       // Manual mode: coast with current velocity; autopilot (controller, pings, thruster audio) is skipped (beep/hum
       // annoyed in ARM_PILOT mode).
-      this.position.addScaledVector(this.velocity, dt);
+      this.position.addScaledVector(this.velocity, TimeAuthority.armDt(dt));   // on the world's seconds (one clock); off: dt
       if (parentPos) {
         this.tetherLength = this.position.distanceTo(parentPos) / M;
         if (!this.isDetached && this.tetherLength > this.config.tetherMax) {
@@ -4383,12 +4510,13 @@ export class ArmUnit {
     const standoff = clamp(debrisSize * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT, Constants.STATION_KEEP.DEFAULT_STANDOFF, Constants.STATION_KEEP.MAX_STANDOFF);
     const distMetres = dist / M;
 
+    const dtA = TimeAuthority.armDt(dt);   // her clock's seconds (world seconds under the one clock; off: dt), as in TRANSIT
     let rawDriftVelA = _driftRaw.set(0, 0, 0);
     const targetScenePos = this._getTargetScenePos();
     if (targetScenePos && this._prevTargetScenePos && this._prevParentPos && parentPos && dt > 0) {
       const tDelta = _driftTDelta.subVectors(targetScenePos, this._prevTargetScenePos);
       const pDelta = _driftPDelta.subVectors(parentPos, this._prevParentPos);
-      rawDriftVelA = tDelta.sub(pDelta).divideScalar(dt);
+      rawDriftVelA = tDelta.sub(pDelta).divideScalar(dtA);
     }
     if (targetScenePos) {
       if (!this._prevTargetScenePos) this._prevTargetScenePos = targetScenePos.clone();
@@ -4409,7 +4537,7 @@ export class ArmUnit {
     const absExcess = Math.abs(signedExcess);
     const aMaxA = DAP_A.MAX_ACCEL / this._fitMassRatio();   // as in TRANSIT: the same thrust on a heavier daughter gives less
     const aBrakeA = aMaxA * DAP_A.BRAKE_FRACTION;
-    const vStarMA = Math.min(DAP_A.V_CAP * 0.3, Math.sqrt(2 * aBrakeA * absExcess));
+    const vStarMA = Math.min(DAP_A.V_CAP * 0.3, Math.sqrt(2 * aBrakeA * (TimeAuthority.armClockOn() ? 0.9 * absExcess : absExcess)));   // one clock: 10 % braking margin (D6b)
     const vStarA = vStarMA * M;
 
     // goalDir toward the target outside standoff, AWAY from it inside
@@ -4417,7 +4545,7 @@ export class ArmUnit {
     const posCmd = _posCmd.copy(goalDirA).multiplyScalar(signedExcess >= 0 ? vStarA : -vStarA);
     const velCtrlErrA = posCmd.add(relVA);
     const dvCmdA = velCtrlErrA.multiplyScalar(DAP_A.KP_VEL);
-    const gameDtA = dt * TimeAuthority.BASE_SCALE;
+    const gameDtA = TimeAuthority.armWorldS(dt);   // the frame's world seconds: honest aMax at every rate (off: dt x BASE_SCALE)
     const maxDvA = aMaxA * M * gameDtA;
     const dvMagA = dvCmdA.length();
     if (dvMagA > maxDvA && dvMagA > 1e-18) dvCmdA.multiplyScalar(maxDvA / dvMagA);
@@ -4432,7 +4560,7 @@ export class ArmUnit {
       this.velocity.add(dvCmdA);
       this._impulseDvAccum += Math.min(dvMagA, maxDvA) / M;
     }
-    this.position.addScaledVector(this.velocity, dt);
+    this.position.addScaledVector(this.velocity, dtA);
 
     // STATION_KEEP entry check, before netting
     if (this.target && !this._manualMode) {
@@ -4931,7 +5059,7 @@ export class ArmUnit {
     st.rate = (st.rate - lam * b * dt) * decay;
     st.t += dt;
 
-    const TS = TimeAuthority.BASE_SCALE;
+    const TS = TimeAuthority.worldClockScale();   // the spins' display scale (BASE_SCALE at home and off; the live rate, <= BASE_SCALE, while out: 1 near a piece)
     // The wrench below (theta / rate) is the STRAIN model only (it feeds the rip roll); it does not draw the catch: the spin
     // itself is real and carried (`_tickHeldSpin` advances the angle).
 
@@ -5080,7 +5208,7 @@ export class ArmUnit {
     if (d._rackArm !== this || !d._qLocalHer || !d._rackLocalM
         || (this.capturedDebris !== d && !this.heldCatches.includes(d))) { this._seatSpin = null; d._carrySpin = false; return; }
     if (!(dt > 0)) return;
-    const TS = TimeAuthority.BASE_SCALE;
+    const TS = TimeAuthority.worldClockScale();   // the drawn spin follows the spins' display scale, as `_tickHeldSpin` (BASE_SCALE at home and off)
     let left = dt;
     const I = Math.max(1e-12, st.I);
     const torque = this._coldGasThrustN() * (Constants.CAPTURE_TORQUE_SETTLE.SEAT_LEVER_M ?? 0.10);
@@ -5514,7 +5642,7 @@ export class ArmUnit {
     // reference matches (ToolOdds.makeNetOddsLockCache).
     if (this._toolOddsLockCache) this._toolOddsLockCache.valid = false;
     this._refreshToolOdds();           
-    eventBus.emit(Events.TOOL_ARMSET_CHANGED, { armId: this.id, toolset: this.toolset.slice() });
+    eventBus.emit(Events.TOOL_ARMSET_CHANGED, { armId: this.id, toolset: this.availableTools().slice() });
     eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: this.selectedTool });
   }
 
@@ -5540,7 +5668,7 @@ export class ArmUnit {
     if (!this._toolOddsLockCache) this._toolOddsLockCache = makeNetOddsLockCache();
     const odds = computeToolOdds({
       armType: this.type,
-      toolset: this.toolset,
+      toolset: this.availableTools(),
       target,
       range,
       netCount,
@@ -5562,11 +5690,22 @@ export class ArmUnit {
     }
   }
 
+  /**
+   * The tools she can cycle to right now: her class's toolset (`toolset`, static), plus `KIT` (the spin kit) while she carries one.
+   * Every place that lists or labels her tools reads this, so a kit never reads "OFFLINE" and never leaves the strip.
+   * The recommender keeps its own static list and never picks `KIT`.
+   * @returns {string[]}
+   */
+  availableTools() {
+    return this._kitAboard ? [...this.toolset, 'KIT'] : this.toolset;
+  }
+
   /** Cycle `selectedTool` through this arm's toolset (` ` ` backtick in SK). */
   cycleTool() {
-    if (!this.toolset || this.toolset.length <= 1) return this.selectedTool;
-    const i = this.toolset.indexOf(this.selectedTool);
-    const next = this.toolset[(i + 1) % this.toolset.length];
+    const tools = this.availableTools();
+    if (!tools || tools.length <= 1) return this.selectedTool;
+    const i = tools.indexOf(this.selectedTool);
+    const next = tools[(i + 1) % tools.length];
     this.selectedTool = next;
     audioSystem.playClick();
     // Re-aim: a deployed daughter swapping verbs trims attitude toward the new tool axis (one cold-gas couple, visual-only).
@@ -5587,6 +5726,7 @@ export class ArmUnit {
       case 'MAGNET':  return this.magneticGrapple();
       case 'GRIPPER': return Constants.isFeatureEnabled('WEAVER_GRIPPER') ? this.gripperGrapple() : this._toolOffline('GRIPPER');
       case 'PAD':     return Constants.isFeatureEnabled('SPINNER_PAD')    ? this.padContact()    : this._toolOffline('PAD');
+      case 'KIT':     return this.kitClip();   // the spin kit (lane K): clips on, no catch
       case 'NET':
       default:        return this.captureFromStationKeep();
     }
@@ -5820,7 +5960,10 @@ export class ArmUnit {
     }
     [this._rhReelV, this.coldGasKg, this._rhBraking, this._rhReelPhase, this._rhTensionN,
       this._rhReelMassKg, this._rhGasChecked] = keep;
-    return left > 1e-6 ? Infinity : t;
+    if (left > 1e-6) return Infinity;
+    // `t` is reel-clock seconds (`TimeAuthority.reelDt`); on screen the reel runs at the far leg's rate: x BASE_SCALE / fieldRate()
+    // (floors 1-2 the same, floor 3 a quarter). Off: unchanged.
+    return TimeAuthority.armClockOn() ? t * TimeAuthority.BASE_SCALE / TimeAuthority.fieldRate() : t;
   }
 
   /**
@@ -5858,7 +6001,7 @@ export class ArmUnit {
     if (st !== S.REELING && !(st === S.DOCKING && this._rhDockFree)) return null;
     const distM = this._strutTipDistM();
     if (distM == null) return null;
-    const BS = TimeAuthority.armScale() || 10;   // game units -> true m/s: her shown speed is true against the field (1 under the real-speed clock)
+    const BS = TimeAuthority.BASE_SCALE;   // the reel's speeds are game-scale at every rate (debris-1 C1): / BASE_SCALE = her true m/s
     if (this._rhReelStartM == null || !(this._rhReelStartM > 0)) this._rhReelStartM = distM;
     const startM = this._rhReelStartM;
     const catching = this.capturedDebris !== null;
@@ -6229,8 +6372,8 @@ export class ArmUnit {
         L.v += Math.sign(vDes - L.v) * dv;
         if (kg > 0) { this.coldGasKg = Math.max(0, this.coldGasKg - kg); this.power.markGas(); }
         if (ionS > 0) {                           // the ion's thrust seconds are billed as the ion thread bills them (FEEP + engine mark)
-          const bs = TimeAuthority.BASE_SCALE;    // `_billIonThread` multiplies by it (game seconds); these are true seconds
-          this._billIonThread(ionS / (bs > 0 ? bs : 1), mass);
+          const ionWorldS = ionS;                 // `_billIonThread` takes world seconds (debris-1 C1); these are true seconds of thrust
+          this._billIonThread(ionWorldS, mass);
         }
       }
       const stepM = Math.min(Math.max(0, L.v) * dt, Math.max(0, gap));
@@ -6244,6 +6387,100 @@ export class ArmUnit {
     this.position.copy(tPos).add(off);
     if (dt > 1e-6) this.velocity.set((this.position.x - prevX) / dt, (this.position.y - prevY) / dt, (this.position.z - prevZ) / dt);
     return L.touched;
+  }
+
+  /**
+   * She takes a spin kit from the mother's stock at launch (`ArmManager`, plan debris-1 lane K): one kilogram on her mass until it is
+   * clipped on or she docks with it unused. `giveBack` returns it to the stock.
+   * @param {() => void} [giveBack]
+   */
+  takeKit(giveBack) {
+    this._kitAboard = true;
+    this._kitReturn = typeof giveBack === 'function' ? giveBack : null;
+  }
+
+  /** @private An unused kit goes back to the stock (she docked with it, or a launch that was dropped after she took it). */
+  _giveBackKit() {
+    const back = this._kitReturn;
+    this._kitAboard = false;
+    this._kitReturn = null;
+    if (back) back();
+  }
+
+  /**
+   * The spin kit's verb (`KIT`, from STATION_KEEP; plan debris-1 lane K, DECISIONS §70 row 7): she closes in on the piece at the real latch speed
+   * (`_latchClose`, the magnet's 5 cm/s touch, timeouts and miss path), the kit snaps onto a steel spot, and she backs off to station-keep. No roll, no
+   * catch, no reel: the piece only gets its kit (`DebrisField.attachSpinKit`). A piece with no steel spot or not a big piece refuses it in place.
+   * @returns {boolean} true when the clip-on began
+   */
+  kitClip() {
+    if (this.state !== S.STATION_KEEP) return false;
+    const target = this._stationKeepTarget || this.target;
+    const say = (text, priority = 'warning') => eventBus.emit(Events.COMMS_MESSAGE, { source: this.displayName, text, channel: 'CMD', priority });
+    if (!this._kitAboard) { audioSystem.playDeny(); say('No spin kit aboard.'); return false; }
+    if (!target) { audioSystem.playDeny(); return false; }
+    if (!kitHolds(target)) { audioSystem.playDeny(); say('No steel spot to hold the kit.'); return false; }
+    if (target.spinKit) { audioSystem.playDeny(); say(`A spin kit is already on the ${pieceName(target)}.`); return false; }
+    eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'kit' });
+    this._kitPhase = 'CLOSING';
+    this._magTimer = 0;
+    this._latch = null;   // the real-speed close-in state starts fresh
+    audioSystem.playClick();
+    this._toolLockedDebrisId = target.id;   // the collision avoider exempts the piece for the whole close-in (released on any exit from this state)
+    eventBus.emit(Events.AUTOPILOT_TARGET_LOCK, { debrisId: target.id });
+    this._transitionTo(S.MAGNETIC_GRAPPLE);
+    return true;
+  }
+
+  /**
+   * @private The kit's clip-on sub-FSM (CLOSING → HOLD), run from the MAGNETIC_GRAPPLE state while `_kitPhase` is set. CLOSING is `_latchClose` with
+   * the magnet's head offset; HOLD rides with the piece for the magnet's grip dwell, then the kit is on (`_finishKitClip`).
+   */
+  _updateKitClip(dt) {
+    this._magTimer += dt;
+    const MAG = Constants.MAGNETIC_GRAPPLE;
+    const target = this._stationKeepTarget || this.target;
+    if (!target || target._captured || target.alive === false) { this._failKitClip('gone'); return; }
+    if (!target._scenePosition) return;
+    if (this._kitPhase === 'CLOSING') {
+      if (this._latchClose(target, dt, 'MAGNET')) {
+        if (this._latch.hard) { this._failKitClip('hard'); return; }   // touched faster than the pad's limit: the kit does not latch
+        this._kitPhase = 'HOLD';
+        this._magTimer = 0;
+        return;
+      }
+      if (this._magTimer >= (this._latch ? this._latch.timeoutS : MAG.TIMEOUT_PAD_S)) this._failKitClip('timeout');
+      return;
+    }
+    this._latchClose(target, dt, 'MAGNET');   // touching: she rides with the piece through the dwell
+    if (this._magTimer >= MAG.GRIP_DWELL_S) this._finishKitClip(target);
+  }
+
+  /** @private The kit is on: the piece gets it (it stays and leaves with the piece), she is lighter by its kilogram, says how the spin will go, and backs off to station-keep. */
+  _finishKitClip(target) {
+    const days = 2;   // the line's look-ahead: the card says "a day or two"
+    const q = DebrisField.attachSpinKit(target, Constants.SPIN_KIT.dipoleAm2, days);
+    this._kitAboard = false;
+    this._kitReturn = null;
+    this._kitPhase = null;
+    this._latch = null;
+    const fmt = (rad) => { const deg = radToDeg(rad); return deg < 10 ? deg.toFixed(1) : String(Math.round(deg)); };
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: this.displayName, channel: 'CMD', priority: 'info', _result: true,
+      text: `Spin kit on ${pieceName(target)}: ${fmt(q.nowRad)}\u00B0/s now, about ${fmt(q.laterRad)}\u00B0/s in ${days} days.`,
+    });
+    this._holdForRetry(target);   // she backs off to the usual stand-off with a fresh orbit frame
+  }
+
+  /** @private The clip-on did not happen (piece gone, touched too fast, timed out): the kit stays aboard; the usual failed-tool end (`_endToolFailure`). */
+  _failKitClip(reason) {
+    this._kitPhase = null;
+    this._latch = null;
+    audioSystem.playDeny();
+    const cause = reason === 'hard' ? 'Spin kit not clipped: the touch was too fast.'
+      : reason === 'timeout' ? 'Spin kit not clipped: could not reach the piece in time.'
+        : 'Spin kit not clipped: the piece is gone.';
+    this._endToolFailure(cause, { source: this.displayName, text: `${this.displayName}: ${cause} Returning.`, channel: 'CMD', priority: 'warning' });
   }
 
   _resolveGripperLatch(target) {
@@ -8776,7 +9013,7 @@ export class ArmUnit {
     toParent.normalize();
     const haulSpeed = this.config.haulSpeed * (this._beaconSpeedScale || 1);
     this.velocity.lerp(toParent.multiplyScalar(haulSpeed), 0.05);
-    this.position.addScaledVector(this.velocity, dt);
+    this.position.addScaledVector(this.velocity, TimeAuthority.reelDt(dt));   // game-scale haul speed on the reel's clock (true speed the same at every rate)
 
     // captured debris is an InstancedMesh handled by DebrisField (marked not-alive after capture): no mesh to move
 
@@ -8910,16 +9147,19 @@ export class ArmUnit {
   }
 
   /**
-   * The FEEP the ion thread burns this frame, billed at its real thrust: the Δv it gives her (thrust / mass x game
-   * seconds) against the tank's total Δv, as a percentage. Tiny (about 0.00002 % a frame) but billed, so a long haul is
-   * not free. dt 0 (a held world) bills nothing.
+   * The FEEP the ion thread burns this frame, billed at its real thrust: the Δv it gives her (thrust / mass x WORLD seconds) against
+   * the tank's total Δv, as a percentage. Tiny (about 0.00002 % a frame) but billed, so a long haul is not free. Takes world seconds
+   * explicitly (plan debris-1 C1 task 5): callers pass `TimeAuthority.armWorldS(dt)` (dt x BASE_SCALE with the one clock off, as
+   * before; dt x worldRate() on) or, from the latch close-in, the true seconds the ion fired. 0 (a held world) bills nothing.
+   * @param {number} worldS world seconds of thrust
+   * @param {number} massKg
    */
-  _billIonThread(dt, massKg) {
-    if (!(dt > 0) || !(this.fuel > 0) || this._powerOff()) return;   // a flat pack: no thread, the winch alone pulls her
+  _billIonThread(worldS, massKg) {
+    if (!(worldS > 0) || !(this.fuel > 0) || this._powerOff()) return;   // a flat pack: no thread, the winch alone pulls her
     const aTrue = this._ionThrustN() / Math.max(massKg, 1e-6);                       // m/s^2
     // propellant flow at a thrust does not depend on her mass, but the tank's Δv is quoted at her BASE mass: a fitted daughter's
     // smaller Δv per second is billed back at base mass (× live / base; 1 with no fittings)
-    const dvTrue = aTrue * dt * TimeAuthority.BASE_SCALE * this._fitMassRatio();     // m/s (base-mass equivalent) per game time of this frame
+    const dvTrue = aTrue * worldS * this._fitMassRatio();     // m/s (base-mass equivalent) over the world seconds of this frame
     const pct = dvTrue / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV) * 100;
     this.fuel = Math.max(0, this.fuel - pct);
     this.power.markEngine();
@@ -8989,7 +9229,7 @@ export class ArmUnit {
    *  No gas: no jet; the only brake is her ion thruster (v <= sqrt(V_DOCK^2 + 2 a_ion d), about V_DOCK all the way) and
    *  one line says so once per reel.
    * Sets `_rhBraking`, `_rhReelPhase`, `_rhTensionN` (true N, the line readout) and `_rhReelMassKg`. dt 0 changes nothing.
-   * @param {number} dt real seconds
+   * @param {number} dt seconds of the reel's clock (`TimeAuthority.reelDt`: world s / BASE_SCALE; real seconds with the one clock off)
    * @param {number} distM metres left to the strut tip
    * @param {number} gateM metres she may still close this frame (the line-up gate; Infinity = none)
    * @param {number} [holdGateM] metres to the hold point (`_rhHoldStep`); Infinity = none. Unlike the line-up gate it
@@ -9127,7 +9367,7 @@ export class ArmUnit {
     const ps = this._playerSatellite;
     const rs = ps && ps._resourceSystem;
     if (!rs || typeof rs.drawUpTo !== 'function') return;
-    const want = Math.min(need, G.REFILL_KG_PER_GAME_S * dt * TimeAuthority.BASE_SCALE);
+    const want = Math.min(need, G.REFILL_KG_PER_GAME_S * dt * TimeAuthority.fixedClockScale());   // BASE_SCALE game s per real s; slowed only while a daughter is near a piece (D6)
     // the mother's tank is POOL units (20 = 6 kg): she gives coldGasKgToPool(want), the bottle gains that many kg.
     // While a cold-gas turn of hers spins, the gas to stop it is not for the bottles (no line: she is not out of gas).
     let wantPool = coldGasKgToPool(want);
@@ -9210,7 +9450,7 @@ export class ArmUnit {
     if (holder && holder !== this && holder._indiumSwapT >= 0) { this._indiumSwapT = -1; return; }   // another daughter has the mechanism
     ps._indiumSwapArm = this;
     if (this._indiumSwapT < 0) this._indiumSwapT = 0;
-    this._indiumSwapT += dt * TimeAuthority.BASE_SCALE;
+    this._indiumSwapT += dt * TimeAuthority.fixedClockScale();   // game seconds: BASE_SCALE per real s, slowed only near a piece (D6)
     if (this._indiumSwapT < Constants.DAUGHTER_SUPPLY.SWAP_GAME_S) return;
 
     // the swap ends: the leftover and the store make one pool; a cartridge of min(tank, pool) goes in, the rest stays in the store
@@ -9288,7 +9528,7 @@ export class ArmUnit {
       }
     }
     if (!this._carryThread) this._carryThread = 'aft';
-    this._billIonThread(dt, this.carryMassKg());
+    this._billIonThread(TimeAuthority.armWorldS(dt), this.carryMassKg());
   }
 
   /**
@@ -9298,8 +9538,8 @@ export class ArmUnit {
    * brakes the mother feels just the line's share.
    * Called from the REAL reel update (`_updateReeling`), never from `_rhReelStep`: `_reelHomeEtaS` steps that to estimate
    * the time left, and an estimate must not move the real mother.
-   * Units: the reel runs on REAL dt with game-scale speeds; the world clock runs `TimeAuthority.armScale()` x faster (BASE_SCALE
-   * at home, 1 while she is out under the real clock, DECISIONS §70 row 6), so the line acts for dt x armScale() world seconds:
+   * Units: the reel runs on its own clock (`TimeAuthority.reelDt`: world seconds / BASE_SCALE) with game-scale speeds; the line acts
+   * for the frame's WORLD seconds, `TimeAuthority.armWorldS(dt)` (dt x worldRate() under the one clock; dt x BASE_SCALE off):
    * J = T x dt_world (true N·s), Δv = J / her live mass (as the mother-net tug).
    * @param {number} dt real seconds
    * @param {THREE.Vector3} tipWorld the strut-tip dock, world (scene units)
@@ -9314,13 +9554,13 @@ export class ArmUnit {
     const dist = f.length();
     if (!(dist > 1e-7)) return;
     f.multiplyScalar(T / dist);
-    const res = ps.applyForceAtPoint(f, tipWorld, dt * TimeAuthority.armScale(), this._pushOpts || (this._pushOpts = { source: this }));   // world seconds of this frame: BASE_SCALE at home, 1 while she is out under the real clock
+    const res = ps.applyForceAtPoint(f, tipWorld, TimeAuthority.armWorldS(dt), this._pushOpts || (this._pushOpts = { source: this }));   // world seconds of this frame
     if (res === false) this._reelPushRefused();
   }
 
   /**
    * reel-push: the daughter arrives at the strut tip with `reelSpeedGame` (game-scale m/s) and stops: her momentum goes into the
-   * mother, J = m x v (true N·s; v = reelSpeed / armScale(): BASE_SCALE at home, 1 while she is out under the real clock; 0.10 m/s true at V_DOCK at home), along her approach, at the tip. The strut
+   * mother, J = m x v (true N·s; v = reelSpeed / BASE_SCALE at every rate, debris-1 C1; 0.10 m/s true at V_DOCK), along her approach, at the tip. The strut
    * is rigid here (its give is not modelled). Flushes whatever the line left gathered.
    * @private
    */
@@ -9328,7 +9568,7 @@ export class ArmUnit {
     const ps = this._playerSatellite;
     if (this.isDetached || !ps || typeof ps.applyImpulseAtPoint !== 'function') return;
     const m = this._rhReelMassKg;
-    const v = reelSpeedGame / TimeAuthority.armScale();   // her TRUE speed: BASE_SCALE at home, 1 while she is out under the real clock
+    const v = reelSpeedGame / TimeAuthority.BASE_SCALE;   // her TRUE speed (the reel's speeds are game-scale at every rate)
     const j = (this._pushJ || (this._pushJ = new THREE.Vector3())).subVectors(tipWorld, this.position);   // her -> the tip: her approach
     const d = j.length();
     if ((m > 0) && (v > 0) && (d > 1e-9)) j.multiplyScalar(m * v / d);
@@ -9406,6 +9646,10 @@ export class ArmUnit {
 
     // Reel speed: REEL_PROFILE_V2 = trapezoidal velocity profile (power-bounded cruise ramping DOWN to a gentle dock
     // speed within DECEL_DISTANCE_M); legacy = constant REEL_IN_SPEED_* × boost.
+    // UNITS (plan debris-1 C1 task 5): `reelSpeed` and `_rhReelV` are GAME-SCALE m/s (true x BASE_SCALE: cruise 60 = 6 m/s true) and
+    // step on the reel's clock `dtR = TimeAuthority.reelDt(dt)` = world seconds / BASE_SCALE (real seconds on floors 1-2 and with the
+    // one clock off, 4x on floor 3 at 40x): her TRUE speed is the same at every rate, and the screen time follows the world's rate.
+    const dtR = TimeAuthority.reelDt(dt);
     const profileV2 = Constants.isFeatureEnabled('REEL_PROFILE_V2');
     const armMass = this._massKg();
     let reelSpeed;
@@ -9467,11 +9711,11 @@ export class ArmUnit {
       // jet - not the stateless trapezoid above. `_rhReelStep` owns the speed (and the gas, and the line readout).
       if (profileV2) {
         if (!this._rhGasChecked) this._reelPushBegin();            // the reel's first real frame (the step below sets the sentinel)
-        holdGateM = this._rhHoldStep(dt, dist / M);
-        reelSpeed = this._rhReelStep(dt, dist / M, rhGate / M, armMass, hasPayload, boostMult, holdGateM);
+        holdGateM = this._rhHoldStep(dt, dist / M);   // the hold waits for the mother: real seconds, as before
+        reelSpeed = this._rhReelStep(dtR, dist / M, rhGate / M, armMass, hasPayload, boostMult, holdGateM);
         reelSpeedScaled = reelSpeed * M;
         // her ion thread keeps the line tight the whole haul: billed at its real thrust (not while the line-up burn runs)
-        if (!this._rhLineUp) this._billIonThread(dt, this._rhReelMassKg);
+        if (!this._rhLineUp) this._billIonThread(TimeAuthority.armWorldS(dt), this._rhReelMassKg);
         this._reelPushLine(dt, dockWorldPos);
       }
       if (rhGate === 0 && dt > 0) { reelSpeed = 0; reelSpeedScaled = 0; }
@@ -9552,16 +9796,16 @@ export class ArmUnit {
     // to just below (dist_after ∈ (0, 1 cm)) left the arm parked <1 cm from the dock with the whole branch skipped forever
     // (a phase-dependent permanent REELING stall on both reel paths; V2's V_DOCK=1 m/s approach steps 16.7 mm/frame past a
     // 10 mm window). The dock check needs no normalize, so only the move branch keeps the guard.
-    let moveDistance = reelSpeedScaled * dt;
+    let moveDistance = reelSpeedScaled * dtR;
     if (rh && rhGate < moveDistance) {
       moveDistance = rhGate;
       // her speed is what she really covered when the line-up gate stopped her short of the step
-      if (profileV2 && dt > 0) this._rhReelV = Math.min(this._rhReelV, moveDistance / (M * dt));
+      if (profileV2 && dt > 0) this._rhReelV = Math.min(this._rhReelV, moveDistance / (M * dtR));
     }
     // never past the hold point (the braking law stops her there; this is the rounding backstop)
     if (rh && holdGateM !== Infinity && this._rhHold && this._rhHold.on && holdGateM * M < moveDistance) {
       moveDistance = Math.max(0, holdGateM * M);
-      if (profileV2 && dt > 0) this._rhReelV = Math.min(this._rhReelV, moveDistance / (M * dt));
+      if (profileV2 && dt > 0) this._rhReelV = Math.min(this._rhReelV, moveDistance / (M * dtR));
     }
     if (moveDistance >= dist) {
       // her arrival momentum goes into the mother (before she is snapped onto the tip)
@@ -9611,11 +9855,12 @@ export class ArmUnit {
       const MD = Constants.MOTOR_DRAW_W || {};
       const rs = this._playerSatellite && this._playerSatellite._resourceSystem;
       if (rs && typeof rs.billWatts === 'function') {
-        // Under REEL_HOME the tension is true newtons, so the line speed must be TRUE m/s too (reel speed is game-scale:
-        // / TimeAuthority.armScale(): BASE_SCALE at home, 1 while she is out). The legacy path keeps its game-scale pairing (old coefficient).
-        const lineSpeed = (rh && profileV2) ? reelSpeed / TimeAuthority.armScale() : reelSpeed;   // armScale: BASE_SCALE at home, 1 while she is out under the real clock
+        // Under REEL_HOME the tension is true newtons, so the line speed must be TRUE m/s too (reel speed is game-scale: / BASE_SCALE at
+        // every rate, debris-1 C1). Billed over the reel's clock (`dtR`: real seconds on floors 1-2, as the battery's other motors), so
+        // a reel costs the same energy on every floor. The legacy path keeps its game-scale pairing (old coefficient).
+        const lineSpeed = (rh && profileV2) ? reelSpeed / TimeAuthority.BASE_SCALE : reelSpeed;
         const mechW = Math.max(0, this.tetherTension) * lineSpeed / (MD.REEL_EFFICIENCY || 0.5);
-        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt, 'strutReel');
+        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dtR, 'strutReel');
       }
     }
 
@@ -9731,7 +9976,7 @@ export class ArmUnit {
     toParent.normalize();
     const returnSpeed = this.config.approachSpeed * (this._beaconSpeedScale || 1);
     this.velocity.lerp(toParent.multiplyScalar(returnSpeed), 0.08);
-    this.position.addScaledVector(this.velocity, dt);
+    this.position.addScaledVector(this.velocity, TimeAuthority.reelDt(dt));   // game-scale return speed on the reel's clock, as the haul
 
     this.tetherLength = this.position.distanceTo(parentPos) / M;
 
@@ -9924,7 +10169,7 @@ export class ArmUnit {
     const span = FT.digestSpanS(debris.mass);   // the ONE span-law home
     const sunScale = this._digestSunScale ?? 1.0;
     debris._digestProgress = (debris._digestProgress || 0) +
-      dt * TimeAuthority.BASE_SCALE * sunScale;
+      dt * TimeAuthority.fixedClockScale() * sunScale;   // BASE_SCALE per real s; slowed only while a daughter is near a piece (D6)
     const t = Math.min(FEED_S, (debris._digestProgress / span) * FEED_S);
     // ArmManager's chop scale-ramp reads this derived phase time.
     this._digestPhaseT = t;
@@ -10280,7 +10525,7 @@ export class ArmUnit {
    * her (1-4), or disconnect her. She drifts at the end of the tether; line and tension are handled by _updateTether.
    */
   _updateAdrift(dt) {
-    this.position.addScaledVector(this.velocity, dt * 0.5);
+    this.position.addScaledVector(this.velocity, TimeAuthority.armDt(dt) * 0.5);   // her clock (world s under the one clock): continuous with the flight she was on
     this.velocity.multiplyScalar(0.99); // slow residual drift; the tether holds her
     this.mesh.visible = true;
   }
@@ -10988,7 +11233,6 @@ export class ArmUnit {
   }
 
   dispose() {
-    TimeAuthority.releaseFlight(this);   // a disposed daughter must not hold the world's warp
     // Arms are NOT session singletons (unlike the mother): unsubscribe the net inventory listener so disposed arms don't
     // leak / react to stale emits.
     if (this._onNetInventoryChanged) {
@@ -11036,7 +11280,7 @@ export class ArmUnit {
     if (!Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) return { padWorks: false };   // N works only the net without the multi-tool
     if (isInspectOnlyMass(t.mass) || (t.mass || 0) > (Constants.SPINNER_MAX_CAPTURE_MASS ?? 50)) return { padWorks: false };
     const padChosen = this.selectedTool === 'PAD';
-    if (!padChosen && this.toolset.length <= 1) return { padWorks: false };               // no tool change to make
+    if (!padChosen && this.availableTools().length <= 1) return { padWorks: false };               // no tool change to make
     const pad = computeToolOdds({ armType: this.type, toolset: ['PAD'], target: t, padUvDoses: this._padUvCureDosesRemaining }).PAD;
     if (!(!!pad && pad.p > 0 && pad.blocker == null)) return { padWorks: false };
     const holds = holdsStation || this.state === S.STATION_KEEP;

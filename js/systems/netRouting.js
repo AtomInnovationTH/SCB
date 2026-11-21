@@ -237,12 +237,13 @@ export function netReachForMassM(mass) {
 }
 
 /** Net flight speed in apparent m/s on the NET'S OWN clock for the net N fires at this mass: the lasso flies LASSO_SPEED x
- *  the game-time scale (100 m/s), the large net LAUNCH_SPEED (10 m/s). The large net (and a daughter's) does not run on
+ *  the fixed clock (100 m/s at home and on a far leg; slowed with the world while a daughter is near a piece, `fixedClockScale`,
+ *  so its true speed is the same at every rate), the large net LAUNCH_SPEED (10 m/s). The large net (and a daughter's) does not run on
  *  the wall clock while a net ceremony slows it: per WALL second multiply by `netFlightClockScale()` (the lasso is never
  *  slowed: no ceremony starts for it). */
 export function netFlightSpeedMps(mass) {
   return classifyNetTarget(mass || 0).band === 'lasso'
-    ? Constants.LASSO_SPEED * TimeAuthority.BASE_SCALE
+    ? Constants.LASSO_SPEED * TimeAuthority.fixedClockScale()
     : (Constants.CAPTURE_NET.LARGE.LAUNCH_SPEED || 10);
 }
 

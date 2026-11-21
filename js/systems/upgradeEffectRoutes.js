@@ -61,6 +61,8 @@ export const EFFECT_ROUTES = {
   indiumCartridge: [RESOURCE_SYSTEM],
   // ── the drag sail goes into her sail stock (a count) → ResourceSystem ──
   dragSail: [RESOURCE_SYSTEM],
+  // ── the spin kit goes into her kit stock (a count) → ResourceSystem ──
+  spinKit: [RESOURCE_SYSTEM],
   // ── the reentry capsule goes into her capsule stock (a count) → ResourceSystem ──
   reentryCapsule: [RESOURCE_SYSTEM],
   // ── a new part from the resupply satellite resets that part's wear (ShipWear.replace) → ResourceSystem ──
@@ -172,6 +174,9 @@ export const RESOURCE_RESTORED_EFFECTS = new Set([
   // 'drag_sail' purchase record must not add one on a Menu Continue replay. The game never wrote one (the sail is consumable);
   // this only guards a hand-made or future record. (GAMEOVER_CONTINUE replays from a reset base, as above.)
   'dragSail',
+  // Plan debris-1 lane K: the kit is a count too; restore() sets the stock, so a 'spin_kit' purchase record (the game never writes one: the
+  // row is consumable) must not add a kit on a Menu Continue replay.
+  'spinKit',
 ]);
 
 /**

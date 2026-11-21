@@ -344,6 +344,12 @@ const FITTING_SPECS = {
     display: (row) => ({ param: 'capsules', base: 0, unit: 'capsules', op: `+${row.value}` }),
     current: (deps) => deps.resourceSystem?.capsules,
   },
+  // a spin kit goes into her kit stock (count; its mass is part of hers); shown as the stock's level
+  spin_kit: {
+    subsystem: 'BERTHS', reads: 'resourceSystem',
+    display: (row) => ({ param: 'spinKits', base: 0, unit: 'kits', op: `+${row.value}` }),
+    current: (deps) => deps.resourceSystem?.spinKits,
+  },
   hazmat_handler: {
     subsystem: 'BERTHS', reads: 'hasUpgrade',
     // RUNTIME route: no apply-time mutation; the live value IS ownership (GameFlowManager checks _hasUpgrade at salvage time)
