@@ -73,7 +73,7 @@ export class StarlinkCascadeBoss {
     if (this._disposed) return;
     if (this._onset.armed && this._onset.poll(this._depotStopPending()) != null) this._fire();
     if (!this._active) return;
-    this._windowRemainingS -= dt * (TimeAuthority.BASE_SCALE || 1);
+    this._windowRemainingS -= dt * (TimeAuthority.fixedClockScale() || 0);   // BASE_SCALE; slowed with the world near a piece (debris-1 C2)
 
     const imminentS = (Constants.STARLINK_BOSS.IMMINENT_MIN || 1) * 60;
     if (!this._imminentFired && this._windowRemainingS <= imminentS && this._windowRemainingS > 0) {

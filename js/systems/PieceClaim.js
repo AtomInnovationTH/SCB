@@ -143,7 +143,7 @@ const forInput = (desktop, glass) => (GestureHints.isGlass() ? glass : desktop);
 const nameOf = (claim) => (claim && claim.arm && claim.arm.displayName) || 'A daughter';
 
 /** The plain word for the tool N would work for this daughter; null when unknown (the line then says "tool"). */
-const TOOL_WORD = { NET: 'net', PAD: 'pad', MAGNET: 'magnet', GRIPPER: 'gripper', KIT: 'spin kit' };
+const TOOL_WORD = { NET: 'net', PAD: 'pad', MAGNET: 'magnet', GRIPPER: 'gripper', KIT: 'spin kit', MATCH: 'spin match' };
 export function toolWord(arm) {
   return (arm && TOOL_WORD[arm.selectedTool]) || null;
 }

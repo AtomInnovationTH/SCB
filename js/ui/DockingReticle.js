@@ -182,9 +182,9 @@ export class DockingReticle {
     return !!(c && typeof c.hasStepButton === 'function' && c.hasStepButton(label));
   }
 
-  /** @private the daughter-tool button on screen now ('LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER' or 'USE MAGNET'), else '' */
+  /** @private the daughter-tool button on screen now ('LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER', 'USE MAGNET', 'CLIP KIT' or 'MATCH SPIN'), else '' */
   _glassNetChip() {
-    return ['LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER', 'USE MAGNET'].find((label) => this._chipUp(label)) || '';
+    return ['LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER', 'USE MAGNET', 'CLIP KIT', 'MATCH SPIN'].find((label) => this._chipUp(label)) || '';
   }
 
   /** @private is the piloted daughter's CHANGE TOOL button on her DAUGHTERS row right now? (main.js closure -> StatusPanel.toolButtonUp) */
@@ -1243,7 +1243,7 @@ export class DockingReticle {
         z: tScene.z - arm.position.z,
       };
     }
-    const fit = assessNetFit(target, netClass, approachDir);
+    const fit = assessNetFit(target, netClass, approachDir, arm.id);   // her id: a piece she circles in step is not "DE-SPIN FIRST" to her (lane M)
 
     if (fit.fit === 'TOO_WIDE') {
       // Only advise GRIPPER when this arm carries one (the Spinner doesn't: point at the Weaver)

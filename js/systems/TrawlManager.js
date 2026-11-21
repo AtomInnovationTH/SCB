@@ -136,8 +136,9 @@ export class TrawlManager {
     if (data.player && data.player.orbit) {
       // Advance the mothership's true anomaly: angular speed = traverseSpeed (scene units/s) / orbitRadius (rad/s).
       const orbitRadius = data.player.orbit.semiMajorAxis || 66.71; // scene units
-      // Traverse runs at the base game rate, routed through the ONE authority (BASE_SCALE === Constants.TIME_SCALE_GAMEPLAY).
-      const angularIncrement = (this.traverseSpeed / orbitRadius) * dt * TimeAuthority.BASE_SCALE;
+      // Traverse runs at the base game rate, routed through the ONE authority (`fixedClockScale`: BASE_SCALE === Constants.TIME_SCALE_GAMEPLAY at
+      // home and on a far leg; slowed with the world while a daughter is near a piece, plan debris-1 C2).
+      const angularIncrement = (this.traverseSpeed / orbitRadius) * dt * TimeAuthority.fixedClockScale();
       data.player.orbit.trueAnomaly += angularIncrement;
       if (data.player.orbit.trueAnomaly > 2 * Math.PI) {
         data.player.orbit.trueAnomaly -= 2 * Math.PI;

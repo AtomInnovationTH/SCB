@@ -4940,6 +4940,17 @@ export const Constants = {
     FIT_C: 0.7056,               // alpha = FIT_C · dipole · B0 (Re/r)³ / I; fitted to the probe, residuals in tmp/plans/debris-1.md Log (0.7056)
     FLOOR_ORBIT_RATES: 2,       // B-dot settles with the body turning with the local field: about twice the orbit rate (the floor)
   },
+  // SPIN_MATCH — she circles a slow spinner in step with it and catches it at zero relative spin (DECISIONS §70 row 4; plan debris-1 lane M,
+  // D8 and M-a..M-i). Physics, no tuning: she holds her place in the piece's rotating frame at radius rho from its spin axis, which needs the
+  // centripetal push m·w²·rho from her jet (so w_max = sqrt(F / (m·rho))), billed as cold gas at the jet's own Isp, plus the one-off spin-up
+  // m·w·rho and the move onto the circle. ESTIMATES (coordinator's calls): the clearances, the 6 m ceiling and the reserve.
+  SPIN_MATCH: {
+    RHO_CLEAR_M: 0.5,           // rho >= the piece's half-size + this (research rule, docs/research/2026-11-detumble-methods.md:120)
+    LINE_CLEAR_M: 0.25,         // her line must clear the piece's half-size by this over a whole lap (M-b): rho·|cos a| >= r + this
+    RHO_MAX_M: 6,               // a radius past this is refused with the "line would wrap" line (M-b)
+    MIN_RATE_DEG_S: 0.2,        // a piece turning slower than this has nothing to match
+    RESERVE_S: 10,              // she starts only if the bottle covers the spin-up, the spin-down and this many seconds of holding
+  },
   // BIG_PIECES — what a big piece (a HIGH_FIELD stage or satellite: `owner` set) pays when DISPOSED OF, not at the catch
   // (DECISIONS §33 row 16-17; BigPieceValues.js, OrbitLifetime.js). Estimates to tune. Metal in orbit is priced like her gas: the
   // launch price per kg (`IN_ORBIT_CR_PER_KG`, derived, never a literal). The anchor pays that plus the elevator contract's bonus per kg.

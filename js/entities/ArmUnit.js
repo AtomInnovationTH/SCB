@@ -34,6 +34,7 @@ import { daughterDisplayName } from '../core/daughterNames.js';
 import { pieceLostLine } from '../systems/PieceClaim.js';
 import { bigPieces, pieceName } from '../systems/BigPieces.js';   // a pending big piece is never digested on the rack; the kit's line names the piece
 import { kitHolds } from '../systems/SpinDecay.js';   // the spin kit's one "does it hold here" test (lane K)
+import { spinMatchOffer, relativeSpinRad, matchRadiusM, gasRateKgS, spinStepKg, guidedStep, GUIDE, fmtDegS } from '../systems/SpinMatch.js';   // spin matching (lane M)
 import { DebrisField } from './DebrisField.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { netCellLayout } from './netCellLayout.js';
@@ -109,6 +110,11 @@ const _tintScratch  = new THREE.Color();
 const _tintTarget   = new THREE.Color();
 
 const S = Constants.ARM_STATES;
+/** The states a spin match (plan debris-1 lane M, M-g) survives: holding station and the four catch tools' close-ins; any other state ends it. */
+const MATCH_STATES = new Set([S.STATION_KEEP, S.NETTING, S.MAGNETIC_GRAPPLE, S.GRIPPER_GRAPPLE, S.PAD_CONTACT]);
+const _matchTmp = new THREE.Vector3();
+const _matchGoalP = new THREE.Vector3(), _matchGoalV = new THREE.Vector3(), _matchGoalA = new THREE.Vector3();
+const _matchGoal = { p: _matchGoalP, v: _matchGoalV, a: _matchGoalA };   // the circle point she is flown to, as `SpinMatch.guidedStep` reads it (Debris 4 M fix, N3)
 /** Her `velocity` in TRUE units under the one clock, stepped on `armDt` (`_convertVelocityUnits`, plan debris-1 Fix C1-1 F5). */
 const _VEL_TRUE_STATES = new Set([S.LAUNCHING, S.TRANSIT, S.APPROACH, S.ADRIFT]);
 /** Her `velocity` in GAME-SCALE units (true x BASE_SCALE), stepped on `reelDt`: the haul and the return. */
@@ -1247,6 +1253,8 @@ export class ArmUnit {
     this.selectedTool = 'NET';
     this._kitAboard = false;               // plan debris-1 lane K: she carries a spin kit (`takeKit`; one kilogram of her mass, `_massKg`)
     this._kitPhase = null;                 // 'CLOSING' | 'HOLD' while she clips the kit on (the MAGNETIC_GRAPPLE state; `_updateKitClip`)
+    this._spinMatch = null;                // plan debris-1 lane M: while she circles a piece in step with its spin (`spinMatchStart`, `_updateSpinMatch`); its own flag, not the selection
+    this._matchLeave = null;               // Debris 4 M fix N1: after a match ends at the piece she flies back to the hold band on her real jet ({ rel, v, goal }; `_stepMatchLeave`), never a one-frame jump
     this._captureToolKind = 'NET';         // which verb actually secured the live catch
     // Live tool odds: refreshed at TOOL_ODDS.REFRESH_HZ during STATION_KEEP so de-spinning / closing in reads as a
     // live count-up on the reticle odds strip.
@@ -3198,6 +3206,8 @@ export class ArmUnit {
     if (this._carry) this.abortCarry('reset', { quiet: true });
     this._carryGaveUp = false;
     this._kitAboard = false; this._kitPhase = null; this._kitReturn = null;   // a new run: no kit in her hand (the stock reset itself)
+    if (this._spinMatch) this._endSpinMatch('reset');   // a new run: no circle, and the piece's flags go (lane M)
+    this._matchLeave = null;
     this.state = S.DOCKED;
     this.fuel = 100;
     this._manualBurnS = 0;
@@ -3298,6 +3308,11 @@ export class ArmUnit {
        }
      }
    }
+
+   // Spin matching (plan debris-1 lane M, M-g): once per frame, BEFORE the state's own update, so every catch tool's close-in runs in
+   // the piece's rotating frame (it turns `_latch.off` and `_padOffset`, which those updates re-add to the piece's position); it ends
+   // the match when she leaves the states a catch runs in (caught, recalled, adrift).
+   if (this._spinMatch) this._updateSpinMatch(dt);
 
    switch (this.state) {
      case S.DOCKED:     this._updateDocked(dt, parentPos, parentQuat); break;
@@ -3558,6 +3573,7 @@ export class ArmUnit {
       targetId: this.target?.id || null,
       hasCaptured: !!this.capturedDebris || this.heldCatches.length > 0,
       kitClip: !!this._kitPhase,   // plan debris-1 K fix F2: the spin kit's clip-on runs (the status row says "Clipping kit", not "Capturing")
+      spinMatch: !!this._spinMatch,   // plan debris-1 lane M: she circles a piece in step (the status row says "Matching spin")
       captures: this.captures,
       position: this.position.clone(),
       remainingDeltaV: (this.fuel / 100) * (this.config?.totalDeltaV || 50),
@@ -3647,6 +3663,8 @@ export class ArmUnit {
       this._clearRecoilKick();
     }
     this.state = newState;
+    if (this._spinMatch && !MATCH_STATES.has(newState)) this._endSpinMatch('left');   // she left the states a match survives (caught, recalled, adrift): lane M
+    if (this._matchLeave && newState !== S.STATION_KEEP && newState !== S.NETTING) this._matchLeave = null;   // the flight back to the hold belongs to the hold (N1)
     this._convertVelocityUnits(newState);   // one speed unit across her states (Fix C1-1 F5)
     // the beside hold ends with the hold (ArmManager._tickBeside frees her slot on its next frame)
     if (old === S.STATION_KEEP && newState !== S.STATION_KEEP) { this._besideDir = null; this._besideStarted = false; }
@@ -4788,6 +4806,13 @@ export class ArmUnit {
     let goalX = targetPos.x + _ox * _Rscene;
     let goalY = targetPos.y + _oy * _Rscene;
     let goalZ = targetPos.z + _oz * _Rscene;
+    // Circling the piece in step (plan debris-1 lane M): her goal is her place on the circle in the piece's rotating frame (`_spinMatch.off`,
+    // kept turning with the piece by `_updateSpinMatch`), not the standoff sphere of the frozen frame.
+    if (this._spinMatch) {
+      goalX = targetPos.x + this._spinMatch.off.x;
+      goalY = targetPos.y + this._spinMatch.off.y;
+      goalZ = targetPos.z + this._spinMatch.off.z;
+    }
 
     // §11.4 net-fire recoil: while the kick transient is live the hold goal is displaced by the recoil offset (the daughter
     // is shoved off the hold sphere and eased back as the RCS nulls it; the step also bills the recovery surcharge).
@@ -4808,11 +4833,16 @@ export class ArmUnit {
       return;
     }
 
-    // Lerp world position to goal (group.position synced from this.position in update())
-    const lerp = SK.STATIONKEEP_LERP_RATE;
-    this.position.x += (goalX - this.position.x) * lerp;
-    this.position.y += (goalY - this.position.y) * lerp;
-    this.position.z += (goalZ - this.position.z) * lerp;
+    // Lerp world position to goal (group.position synced from this.position in update()). After a spin match she instead flies back to the hold
+    // band on her real jet (`_stepMatchLeave`, Debris 4 M fix N1): no goal sphere, so nothing to snap to.
+    if (this._matchLeave) {
+      this._stepMatchLeave(dt, targetPos);
+    } else {
+      const lerp = this._spinMatch ? 1 : SK.STATIONKEEP_LERP_RATE;   // on the circle she sits exactly on her place (the circle moves every frame)
+      this.position.x += (goalX - this.position.x) * lerp;
+      this.position.y += (goalY - this.position.y) * lerp;
+      this.position.z += (goalZ - this.position.z) * lerp;
+    }
 
     const isManeuver = Math.abs(this._thetaRate) > 0.01 ||
                        Math.abs(this._phiRate) > 0.01 ||
@@ -4835,6 +4865,354 @@ export class ArmUnit {
     this._thetaRate = 0;
     this._phiRate = 0;
     this._radiusRate = 0;
+  }
+
+  // ── Spin matching (plan debris-1 lane M; DECISIONS §70 row 4; the pure rules are systems/SpinMatch.js) ──────────────────────────────────
+
+  /** @private The piece's spin axis in scene axes, unit (0,1,0) when it has none. */
+  _matchAxis(target) {
+    const a = target && target.tumbleAxis;
+    const v = new THREE.Vector3(a && a.x || 0, a && a.y || 0, a && a.z || 0);
+    return v.lengthSq() < 1e-12 ? v.set(0, 1, 0) : v.normalize();
+  }
+
+  /** @private Her place on the circle nearest her, in the piece's own frame at spin angle `ang`: her offset with the axis part removed, scaled to rho (metres -> scene units). */
+  _matchCircleBody(offScene, axis, ang, rho) {
+    const b = offScene.clone().applyAxisAngle(axis, -ang);
+    const p = b.clone().addScaledVector(axis, -b.dot(axis));
+    if (p.lengthSq() < 1e-20) {   // straight above a pole of the spin: any direction across the axis
+      p.set(1, 0, 0).addScaledVector(axis, -axis.x);
+      if (p.lengthSq() < 1e-12) p.set(0, 0, 1);
+    }
+    return { body: b, circle: p.normalize().multiplyScalar(rho * M) };
+  }
+
+  /**
+   * @private What spin matching would take right now, in numbers (`SpinMatch.spinMatchOffer`): the start check, the start line and the MATCH column
+   * of the odds strip all read this. Her real jet (the gas jet while the bottle holds gas, else her ion thrust), her mass with her gas, her line's
+   * direction (the mother's side; none once she is detached) and the move onto the circle.
+   * @param {object} target
+   * @returns {object|null} the offer (SpinMatch.spinMatchOffer's shape) plus `gasMode`, null with no target
+   */
+  _spinMatchOffer(target) {
+    if (!target) return null;
+    const CG = Constants.DAUGHTER_COLD_GAS || {};
+    const bottle = Math.max(0, this.coldGasKg || 0);
+    const gasMode = bottle > (CG.EMPTY_KG ?? 1e-5);
+    const thrustN = this._powerOff() ? 0 : (gasMode ? this._coldGasThrustN() : this._ionThrustN());
+    const massKg = this._massKg() + bottle;
+    const tPos = target._scenePosition;
+    const axis = this._matchAxis(target);
+    let cosA = null;
+    const mp = this.isDetached ? null : (this._frameParentPos || this._prevParentPos);
+    if (mp && tPos) {
+      const u = new THREE.Vector3(mp.x - tPos.x, mp.y - tPos.y, mp.z - tPos.z);
+      if (u.lengthSq() > 1e-20) cosA = axis.dot(u.normalize());
+    }
+    const sizeMeter = target.sizeMeter || 0;
+    let pathM = 0;
+    if (tPos) {
+      const { rho } = matchRadiusM(sizeMeter, cosA);
+      const { body, circle } = this._matchCircleBody(this.position.clone().sub(tPos), axis, 0, rho);
+      pathM = body.distanceTo(circle) / M;
+    }
+    const o = spinMatchOffer({ omegaRad: target.tumbleRate, sizeMeter, axisDotLine: cosA, massKg, thrustN, gasKg: bottle, gasMode, pathM });
+    o.gasMode = gasMode;
+    return o;
+  }
+
+  /** The key on MATCH: starts the circle, or (while it runs) stops it. */
+  spinMatchToggle() {
+    if (this._spinMatch) { this._endSpinMatch('stopped'); return true; }
+    return this.spinMatchStart();
+  }
+
+  /**
+   * Start circling the piece in step with its spin (STATION_KEEP only). Refused in place, with a line, when it is too fast for her jet (omega_max),
+   * her line would wrap it, it is not turning, or the bottle cannot cover the spin-up, the spin-down and `RESERVE_S` of holding.
+   * @returns {boolean}
+   */
+  spinMatchStart() {
+    if (this.state !== S.STATION_KEEP || this._spinMatch) return false;
+    if (this._inspectOnlyRefuses()) return false;
+    const target = this._stationKeepTarget || this.target;
+    const tPos = target && target._scenePosition;
+    const say = (text, priority = 'warning') => eventBus.emit(Events.COMMS_MESSAGE, { source: this.displayName, text: `${this.displayName}: ${text}`, channel: 'CMD', priority });
+    if (!tPos) { audioSystem.playDeny(); return false; }
+    const o = this._spinMatchOffer(target);
+    if (!o.ok) {
+      audioSystem.playDeny();
+      say(o.reason === 'fast' ? `Too fast to circle: ${fmtDegS(o.omegaRad)}\u00B0/s; she can match up to ${fmtDegS(o.omegaMaxRad)}\u00B0/s.`
+        : o.reason === 'wrap' ? 'Her line would wrap the piece: its spin axis lies across the line.'
+        : o.reason === 'gas' ? 'Not enough gas to circle it.'
+        : o.reason === 'no_jet' ? 'No jet to hold the circle.'
+        : 'It is barely turning: nothing to match.');
+      return false;
+    }
+    const axis = this._matchAxis(target);
+    // She starts at rest where she holds, 4 / 8 / 12 m out: `rel` and `relV` are her place and velocity in the piece-centred frame that does not turn
+    // (scene units, per world second), flown on her real jet by `_updateSpinMatch` until she is on her place of the circle (Debris 4 M fix, N3).
+    const m = this._spinMatch = {
+      target, axis, rho: o.rho, lastAngle: target.tumbleAngle || 0, lastState: this.state, phase: 'MOVE', t: 0,
+      rel: this.position.clone().sub(tPos), relV: new THREE.Vector3(), off: this.position.clone().sub(tPos), body1: null,
+      rate: 0, rateW: 0, lastT: tPos.clone(), pv: new THREE.Vector3(), gasMode: o.gasMode,
+    };
+    this._matchBeginMove(m, tPos);
+    if (this._matchLeave) { m.relV.copy(this._matchLeave.v); this._matchLeave = null; }   // started again while she was still flying back: she begins with the speed she has
+    target._spinMatchedBy = this.id;    // every catch tool's spin reader now reads her frame (`relativeSpinRad`)
+    target._trueSpinDraw = true;        // and the piece is drawn at its true spin: she stays on one spot of it
+    this._refreshToolOdds();
+    say(o.gasMode ? `Circling in step at ${fmtDegS(o.omegaRad)}\u00B0/s: about ${Math.max(1, Math.round(o.holdMin))} min of gas.` : `Circling in step at ${fmtDegS(o.omegaRad)}\u00B0/s on the ion thruster.`, 'info');
+    return true;
+  }
+
+  /**
+   * @private (Re)start the flight onto the circle from where she is (Debris 4 M fix, N3): her place on the circle in the piece's own frame is fixed
+   * (`body1`: the point of the circle nearest her), and `_updateSpinMatch` flies her to it on her real jet. `coRotating` = she is already turning with
+   * the piece (a move back after a tool missed), else she starts at rest in the world.
+   */
+  _matchBeginMove(m, tPos, coRotating = false) {
+    const ang = m.target.tumbleAngle || 0;
+    m.rel.copy(this.position).sub(tPos);
+    const { circle } = this._matchCircleBody(m.rel, m.axis, ang, m.rho);
+    m.body1 = circle;
+    if (coRotating) m.relV.crossVectors(m.axis, m.rel).multiplyScalar(m.rateW);
+    else m.relV.set(0, 0, 0);
+    m.t = 0; m.phase = 'MOVE';
+  }
+
+  /** @private Pay for `dvScene` of delta-v (scene units per world second) at her mass: the gas jet's `m·dv / (Isp·g0)`, or the ion thread's thrust seconds with the bottle empty. */
+  _matchBillDv(dvScene, mass) {
+    const dv = dvScene / M;
+    if (!(dv > 0)) return;
+    const CG = Constants.DAUGHTER_COLD_GAS || {};
+    if (this.coldGasKg > (CG.EMPTY_KG ?? 1e-5)) {
+      this.coldGasKg = Math.max(0, this.coldGasKg - spinStepKg(mass, dv, 1));
+      this.power.markGas();
+    } else if (this._ionThrustN() > 0) {
+      this._billIonThread(mass * dv / this._ionThrustN(), mass);
+    }
+  }
+
+  /**
+   * @private The gas she must keep to leave the circle the way `_stepMatchLeave` flies it (Debris 4 M fix, N1): stop her tangential speed (w·rho) and
+   * go out to the hold band, bang-bang on her jet, times 1.2. She ends the match when the bottle falls to this, never at empty: with only the ion
+   * thread left she could not stop (1.8e-4 m/s² against 0.2 m/s: 20 minutes and over 100 m of drift).
+   */
+  _matchLeaveReserveKg(m, tPos) {
+    const w = Math.abs(m.target.tumbleRate || 0);
+    const rhoM = this._matchRhoNowM(m, tPos);
+    const dM = this.position.distanceTo(tPos) / M;
+    const holdM = clamp(dM, this._minHoldM(), this._rMax);
+    const mass = this._massKg() + Math.max(0, this.coldGasKg);
+    const a = this._coldGasThrustN() / Math.max(mass, 1e-6);
+    const goOutDv = a > 0 ? 2 * Math.sqrt(a * Math.max(0, holdM - dM)) : 0;
+    return 1.2 * spinStepKg(mass, 1, 1) * (w * rhoM + goOutDv);
+  }
+
+  /** @private Her jet's true acceleration now, scene units / s² (the gas jet while the bottle holds gas, else the ion thruster), and her mass with her gas. */
+  _matchJetS() {
+    const CG = Constants.DAUGHTER_COLD_GAS || {};
+    const mass = this._massKg() + Math.max(0, this.coldGasKg);
+    const gas = this.coldGasKg > (CG.EMPTY_KG ?? 1e-5);
+    const thrust = this._powerOff() ? 0 : (gas ? this._coldGasThrustN() : this._ionThrustN());
+    return { mass, aMaxS: thrust / Math.max(mass, 1e-6) * M, gas };
+  }
+
+  /**
+   * @private Once per frame from `update`, before the state's own update (M-g). Her place in the piece's frame (`off`) turns with the piece's real
+   * `tumbleAngle` change (so it follows a pause and the draw rate alike, M-e); the close-in states' own offsets (`_latch.off`, `_padOffset`) turn with it.
+   * MOVE: she is flown onto the circle on her real jet (`SpinMatch.guidedStep`: her own acceleration never above F/m, the goal's own turning
+   * acceleration included), co-rotating only once she is there; the gas is the real delta-v she used. HOLD: the circle's own push m·w²·rho per world
+   * second (`TimeAuthority.armWorldS`). Ends the match on gas out, a piece that is gone, or a state a match does not survive.
+   * @param {number} dt real seconds
+   */
+  _updateSpinMatch(dt) {
+    const m = this._spinMatch;
+    const st = this.state, target = m.target, tPos = target && target._scenePosition;
+    if (!MATCH_STATES.has(st)) { this._endSpinMatch('left'); return; }
+    if (!target || target.alive === false || target._captured || !tPos) { this._endSpinMatch('lost'); return; }
+    const wS = TimeAuthority.armWorldS(dt);
+    const ang = target.tumbleAngle || 0;
+    const dAng = ang - m.lastAngle;
+    m.lastAngle = ang;
+    m.rate = dt > 0 ? dAng / dt : 0;
+    if (wS > 0) {
+      m.rateW = dAng / wS;                         // the piece's true turn per world second (signed: the angle's own direction)
+      m.pv.copy(tPos).sub(m.lastT).divideScalar(wS);   // and its own drift in the scene (the net leaves with it)
+    }
+    m.lastT.copy(tPos);
+    const inHold = st === S.STATION_KEEP || st === S.NETTING;
+    if (dAng !== 0) {
+      // the catch tool's own offset turns with the piece; before it has one (the gripper's jaws extending, the magnet energising) she herself turns
+      // with the piece about its axis, so she never stands still in the inertial frame while the piece goes round
+      const tool = st === S.MAGNETIC_GRAPPLE || st === S.GRIPPER_GRAPPLE;
+      if (tool && this._latch) this._latch.off.applyAxisAngle(m.axis, dAng);
+      else if (st === S.PAD_CONTACT && this._padOffset) this._padOffset.applyAxisAngle(m.axis, dAng);
+      else if (tool || st === S.PAD_CONTACT) {
+        _matchTmp.copy(this.position).sub(tPos).applyAxisAngle(m.axis, dAng);
+        this.position.copy(tPos).add(_matchTmp);
+      }
+    }
+    const w = Math.abs(target.tumbleRate || 0);
+    const CG = Constants.DAUGHTER_COLD_GAS || {};
+    m.gasMode = Math.max(0, this.coldGasKg) > (CG.EMPTY_KG ?? 1e-5);
+    // back in station-keep after a tool missed: she flies back onto the circle (she never stopped turning)
+    if (inHold && m.lastState !== S.STATION_KEEP && m.lastState !== S.NETTING) this._matchBeginMove(m, tPos, true);
+    m.lastState = st;
+    const wasHold = m.phase === 'HOLD';
+    if (m.phase === 'MOVE') {
+      if (!inHold) {
+        // a catch tool is closing in (she turns with the piece by its offsets, above): her place is where she is
+        m.rel.copy(this.position).sub(tPos);
+        m.relV.crossVectors(m.axis, m.rel).multiplyScalar(m.rateW);
+      } else if (wS > 0) {
+        const jet = this._matchJetS();
+        const vCap = Constants.STATION_KEEP.ENTRY_MAX_VELOCITY * M;
+        const n = Math.max(1, Math.ceil(wS / GUIDE.MAX_STEP_S)), h = wS / n, a0 = ang - dAng;
+        const stt = { p: m.rel, v: m.relV };
+        let dvSum = 0, res = null;
+        for (let i = 0; i < n; i++) {
+          _matchGoalP.copy(m.body1).applyAxisAngle(m.axis, a0 + dAng * i / n);
+          _matchGoalV.crossVectors(m.axis, _matchGoalP).multiplyScalar(m.rateW);
+          _matchGoalA.copy(_matchGoalP).multiplyScalar(-m.rateW * m.rateW);
+          res = guidedStep(stt, _matchGoal, jet.aMaxS, vCap, h);
+          dvSum += res.dv;
+        }
+        m.t += wS;
+        this._matchBillDv(dvSum, jet.mass);
+        if (jet.gas && this.coldGasKg <= Math.max(CG.EMPTY_KG ?? 1e-5, this._matchLeaveReserveKg(m, tPos))) { this._endSpinMatch('gas'); return; }
+        if (m.t > GUIDE.MOVE_MAX_S) { this._endSpinMatch('stuck'); return; }   // near w_max her jet has little left to catch the circle with: stop, never burn the bottle going round
+        if (res && res.err <= GUIDE.ARRIVE_M * M && res.errV <= GUIDE.ARRIVE_MS * M) {
+          m.phase = 'HOLD';
+          m.body1.copy(m.rel).applyAxisAngle(m.axis, -ang);   // her place on the circle is where she is (within a centimetre): the hold starts with no jump
+        }
+      }
+    }
+    // her place: the flight's own point while she is on her way, then her place in the piece's frame
+    if (m.phase === 'MOVE') m.off.copy(m.rel);
+    else {
+      m.off.copy(m.body1).applyAxisAngle(m.axis, ang);
+      m.rel.copy(m.off);
+      m.relV.crossVectors(m.axis, m.rel).multiplyScalar(m.rateW);
+    }
+    // the circle's own gas: the centripetal push m·w²·rho at her distance from the axis now, per world second (not while she hangs on the piece by her magnet)
+    const touching = !!(this._latch && this._latch.touched) && (st === S.MAGNETIC_GRAPPLE || st === S.GRIPPER_GRAPPLE);
+    if (wasHold && wS > 0 && w > 0 && !touching) {
+      const mass = this._massKg() + Math.max(0, this.coldGasKg);
+      const rhoNow = this._matchRhoNowM(m, tPos);
+      if (m.gasMode) {
+        this.coldGasKg = Math.max(0, this.coldGasKg - gasRateKgS(mass, w, rhoNow) * wS);
+        this.power.markGas();
+        if (this.coldGasKg <= Math.max((CG.EMPTY_KG ?? 1e-5), this._matchLeaveReserveKg(m, tPos))) { this._endSpinMatch('gas'); return; }
+      } else if (this._ionThrustN() > 0) {
+        this._billIonThread(wS * Math.min(1, mass * w * w * rhoNow / this._ionThrustN()), mass);   // on the ion thread: the thrust seconds the push takes
+      }
+    }
+  }
+
+  /**
+   * @private After a match ends at the piece (Debris 4 M fix, N1) she keeps her place and her TRUE velocity and flies back to the hold band
+   * under her real jet limit (never above `ENTRY_MAX_VELOCITY`), the delta-v billed: no frame moves her more than her speed lets her. Called from
+   * the hold's goal step (STATION_KEEP and NETTING) while `_matchLeave` is set; ends when she is at rest on the hold and rebuilds the hold's frame there.
+   * @param {number} dt real seconds
+   * @param {{x:number,y:number,z:number}} tPos the piece's scene position
+   */
+  _stepMatchLeave(dt, tPos) {
+    const L = this._matchLeave;
+    const wS = TimeAuthority.armWorldS(dt);
+    if (wS > 0) {
+      const jet = this._matchJetS();
+      const vCap = Constants.STATION_KEEP.ENTRY_MAX_VELOCITY * M;
+      const n = Math.max(1, Math.ceil(wS / GUIDE.MAX_STEP_S)), h = wS / n;
+      const stt = { p: L.rel, v: L.v };
+      let dvSum = 0, res = null;
+      for (let i = 0; i < n; i++) { res = guidedStep(stt, L.goal, jet.aMaxS, vCap, h); dvSum += res.dv; }
+      this._matchBillDv(dvSum, jet.mass);
+      this.position.set(tPos.x + L.rel.x, tPos.y + L.rel.y, tPos.z + L.rel.z);
+      this.velocity.copy(L.v);
+      if (res && res.err <= GUIDE.ARRIVE_M * M && res.errV <= GUIDE.ARRIVE_MS * M) {   // at rest on the hold: the hold takes over from here, nothing to snap
+        this._matchLeave = null;
+        this.velocity.set(0, 0, 0);
+        this._initSkFrame(tPos);
+        const dM = Math.max(1e-6, this.position.distanceTo(tPos) / M);
+        this._standoffR = dM;
+        this._standoffTargetR = dM;
+        this._standoffSettling = false;
+      }
+    } else {
+      this.position.set(tPos.x + L.rel.x, tPos.y + L.rel.y, tPos.z + L.rel.z);
+    }
+  }
+
+  /**
+   * Her velocity RELATIVE TO THE PIECE while she circles it in step (m/s per world second: her tangent speed round it, never the piece's own
+   * drift - that rides in the scene with the piece and the mother), else null. A net she fires then leaves with it added and flies free in the
+   * piece's frame (Debris 4 M fix 2, P1: `CaptureNet._updateFlight`).
+   * @param {THREE.Vector3} out
+   * @returns {THREE.Vector3|null}
+   */
+  getSpinMatchVelocityMps(out) {
+    const m = this._spinMatch;
+    if (!m) return null;
+    return out.copy(m.relV).divideScalar(M);
+  }
+
+  /** Her world seconds for a real step `dt` (the clock the piece and her velocity run on); a matched net's free flight counts time with it. */
+  spinMatchWorldS(dt) { return TimeAuthority.armWorldS(dt); }
+
+  /** @private Her distance from the piece's spin axis now, metres (the radius the push is paid at). */
+  _matchRhoNowM(m, tPos) {
+    const dx = this.position.x - tPos.x, dy = this.position.y - tPos.y, dz = this.position.z - tPos.z;
+    const along = dx * m.axis.x + dy * m.axis.y + dz * m.axis.z;
+    const px = dx - along * m.axis.x, py = dy - along * m.axis.y, pz = dz - along * m.axis.z;
+    return Math.sqrt(px * px + py * py + pz * pz) / M;
+  }
+
+  /**
+   * @private End the match: the piece reads its own spin again, her spin-down is billed (what the bottle has left of it), and in station-keep she
+   * hands over to the hold from where she is (the frame is rebuilt there and the stand-off eases out, so nothing snaps). `reason`: 'stopped' (the key
+   * again), 'gas' (the bottle ran out: she leaves on her tangent velocity, one line), 'left' (a state a match does not survive: caught, recalled,
+   * adrift), 'lost' (the piece is gone), 'reset'.
+   * @param {'stopped'|'gas'|'left'|'lost'|'reset'} reason
+   */
+  _endSpinMatch(reason) {
+    const m = this._spinMatch;
+    if (!m) return;
+    this._spinMatch = null;
+    const t = m.target;
+    const held = !!t && (this.capturedDebris === t || (Array.isArray(this.heldCatches) && this.heldCatches.includes(t)) || (this.state === S.GRAPPLED && this.target === t));
+    if (t) {
+      if (t._spinMatchedBy === this.id) t._spinMatchedBy = null;
+      if (!held) t._trueSpinDraw = false;   // a held piece keeps its true-spin draw until the seat has paid (`_tickHeldSpin`, `_tickSeatSpin` clear it)
+    }
+    const tPos = t && t._scenePosition;
+    // Leaving at the piece (Debris 4 M fix, N1): she keeps her place and her TRUE velocity (the tangent, while she was turning with it) and flies
+    // back to the hold band on her real jet, `_stepMatchLeave`, the whole stop and the move billed as the delta-v it is. No goal sphere, no snap.
+    const leaving = !!(tPos && (this.state === S.STATION_KEEP || this.state === S.NETTING) && reason !== 'reset' && reason !== 'lost');
+    if (!held && tPos && reason !== 'reset' && reason !== 'lost' && this.config && !leaving) {
+      const w = Math.abs(t.tumbleRate || 0);
+      if (w > 0 && m.gasMode !== false && this.coldGasKg > 0) {   // the spin-down (a recall or anything that is not a hold): the same tangential push as the spin-up
+        const kg = Math.min(this.coldGasKg, spinStepKg(this._massKg() + this.coldGasKg, w, this._matchRhoNowM(m, tPos)));
+        this.coldGasKg -= kg;
+        this.power.markGas();
+      }
+    }
+    if (leaving) {
+      const rel = this.position.clone().sub(tPos);
+      const dM = Math.max(1e-6, rel.length() / M);
+      const goal = { p: rel.clone().normalize().multiplyScalar(clamp(dM, this._minHoldM(), this._rMax) * M), v: new THREE.Vector3(), a: new THREE.Vector3() };
+      if (rel.lengthSq() < 1e-20) goal.p.set(0, 0, 1).multiplyScalar(this._minHoldM() * M);
+      this._matchLeave = { rel, v: m.relV.clone(), goal };
+      this.velocity.copy(m.relV);
+    }
+    if (reason === 'stopped' || reason === 'gas' || reason === 'stuck') {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: this.displayName, channel: 'CMD', priority: reason === 'stopped' ? 'info' : 'warning',
+        text: `${this.displayName}: ${reason === 'gas' ? 'Low on gas: left the circle while she could still stop. Holding station.' : reason === 'stuck' ? 'Could not get onto the circle: its spin is too close to what her jet can match. Holding station.' : 'Stopped circling. Holding station.'}`,
+      });
+    }
+    if (this._toolOddsLockCache) this._toolOddsLockCache.valid = false;
   }
 
   /**
@@ -5155,7 +5533,7 @@ export class ArmUnit {
     if (!d || d._carrySpin !== true || this._seatSpin || d._capturedByArm !== this) return;
     if (!Constants.isFeatureEnabled('CAPTURE_TORQUE_SETTLE')) return;
     if (!(d.tumbleRate > 0) || !(dt > 0)) return;
-    const maxVisualRad = degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity);
+    const maxVisualRad = d._trueSpinDraw === true ? Infinity : degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity);   // a piece she circled in step keeps its true spin drawn (lane M, D8)
     d.tumbleAngle = (d.tumbleAngle || 0) + Math.min(d.tumbleRate * TimeAuthority.worldClockScale(), maxVisualRad) * dt;   // the same draw rate as DebrisField._advanceTumble (one clock)
   }
 
@@ -5206,7 +5584,7 @@ export class ArmUnit {
     const d = st.debris;
     // the piece left her (dropped, released, digested, handed on): what it has now stays its real spin; stand down
     if (d._rackArm !== this || !d._qLocalHer || !d._rackLocalM
-        || (this.capturedDebris !== d && !this.heldCatches.includes(d))) { this._seatSpin = null; d._carrySpin = false; return; }
+        || (this.capturedDebris !== d && !this.heldCatches.includes(d))) { this._seatSpin = null; d._carrySpin = false; d._trueSpinDraw = false; return; }
     if (!(dt > 0)) return;
     const TS = TimeAuthority.worldClockScale();   // the drawn spin follows the spins' display scale, as `_tickHeldSpin` (BASE_SCALE at home and off)
     let left = dt;
@@ -5228,7 +5606,7 @@ export class ArmUnit {
     if (finished) st.w = Math.max(0, st.Lleft / I);   // 0 when the gas cancelled it all; the rate left when her bottle ran dry
     // the piece turns in HER frame about its spin axis (same visual convention as free tumble); its cell is re-laid for the new
     // attitude so the gap stays the net gap while it goes round
-    const dAng = Math.min(Math.max(0, st.w) * TS, degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity)) * dt;
+    const dAng = Math.min(Math.max(0, st.w) * TS, d._trueSpinDraw === true ? Infinity : degToRad(Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S ?? Infinity)) * dt;   // a piece she circled in step keeps its true spin drawn (lane M, D8)
     if (dAng > 0 || (finished && d._seatMemo)) {
       if (dAng > 0) d._qLocalHer.premultiply(_seatSpinQ.setFromAxisAngle(st.axisHer, dAng));
       // the spin is paid off with the 5 degree / 0.5 s rule in `seatStandoffM`; its end is one exact solve (memo dropped)
@@ -5240,7 +5618,7 @@ export class ArmUnit {
     }
     this._seatEaseStep();
     d.tumbleRate = st.w;
-    if (finished) { st.done = true; this._seatSpin = null; d.tumbleRate = st.w; }
+    if (finished) { st.done = true; this._seatSpin = null; d.tumbleRate = st.w; d._trueSpinDraw = false; }   // the seat is paid: the draw's usual cap again
   }
 
   /**
@@ -5635,7 +6013,7 @@ export class ArmUnit {
       material: target ? target.material : undefined,
       surfaceRoughness: target ? target.surfaceRoughness : undefined,
       // The pad refuses a piece spinning past PAD_CONTACT.SPIN_MAX_DEG (ToolOdds.padSpinTooFast), so the auto-pad pick must see the spin.
-      tumbleRate: target ? target.tumbleRate : undefined,
+      tumbleRate: target ? relativeSpinRad(target, this.id) : undefined,   // relative to her while she circles it in step (lane M, M-d)
     });
     this.selectedTool = rec.recommended;
     // SK entry is the lock/re-acquire seam: force the odds lock cache to rebuild even if a (pool-recycled) target
@@ -5666,15 +6044,19 @@ export class ArmUnit {
     // Per-arm lock cache: lock-stable cling factors (mode/pBase, roughness, strain) are computed once at target-lock;
     // range/presented-width/projected-spin stay live. Allocated once per arm, never per refresh (ToolOdds.makeNetOddsLockCache).
     if (!this._toolOddsLockCache) this._toolOddsLockCache = makeNetOddsLockCache();
+    const tools = this.availableTools();
     const odds = computeToolOdds({
       armType: this.type,
-      toolset: this.availableTools(),
+      toolset: tools,
       target,
       range,
       netCount,
       padUvDoses: this._padUvCureDosesRemaining,
       presentedWidthM,
       lockCache: this._toolOddsLockCache,
+      spinFrameId: this.id,   // a piece she circles in step reads 0 spin to her: every spin term below judges the relative spin (lane M, M-d)
+      matchOffer: tools.includes('MATCH') && target ? this._spinMatchOffer(target) : null,
+      matchRunning: !!this._spinMatch,
     });
     this._toolOdds = odds;
     if (target) {
@@ -5691,13 +6073,20 @@ export class ArmUnit {
   }
 
   /**
-   * The tools she can cycle to right now: her class's toolset (`toolset`, static), plus `KIT` (the spin kit) while she carries one.
-   * Every place that lists or labels her tools reads this, so a kit never reads "OFFLINE" and never leaves the strip.
-   * The recommender keeps its own static list and never picks `KIT`.
+   * The tools she can cycle to right now: her class's toolset (`toolset`, static), plus `MATCH` (spin matching, plan debris-1 lane M, M-a)
+   * while she holds station with a jet (listed ALWAYS there, whatever the piece's spin, so the list never goes stale: the strip says why
+   * it cannot be used) or is circling, plus `KIT` (the spin kit) while she carries one. Every place that lists or labels her tools reads
+   * this, so neither reads "OFFLINE" and neither leaves the strip. The recommender keeps its own static list and never picks them.
    * @returns {string[]}
    */
   availableTools() {
-    return this._kitAboard ? [...this.toolset, 'KIT'] : this.toolset;
+    const matchListed = (this.state === S.STATION_KEEP || !!this._spinMatch) && Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
+      && (!!this._spinMatch || this._coldGasThrustN() > 0);
+    if (!matchListed && !this._kitAboard) return this.toolset;
+    const tools = this.toolset.slice();
+    if (matchListed) tools.push('MATCH');
+    if (this._kitAboard) tools.push('KIT');
+    return tools;
   }
 
   /** Cycle `selectedTool` through this arm's toolset (` ` ` backtick in SK). */
@@ -5727,6 +6116,7 @@ export class ArmUnit {
       case 'GRIPPER': return Constants.isFeatureEnabled('WEAVER_GRIPPER') ? this.gripperGrapple() : this._toolOffline('GRIPPER');
       case 'PAD':     return Constants.isFeatureEnabled('SPINNER_PAD')    ? this.padContact()    : this._toolOffline('PAD');
       case 'KIT':     return this.kitClip();   // the spin kit (lane K): clips on, no catch
+      case 'MATCH':   return this.spinMatchToggle();   // match spin (lane M): starts the circle, or (while it runs) stops it
       case 'NET':
       default:        return this.captureFromStationKeep();
     }
@@ -6643,7 +7033,7 @@ export class ArmUnit {
     const mode = this._padResolvedMode;
     // Spin gate (owner 2026-11-01): past PAD_CONTACT.SPIN_MAX_DEG the pad slips, no roll. Same rule as the shown odds
     // (ToolOdds.computePadOdds calls the same padSpinTooFast), so the % on the HUD is the % rolled.
-    if (padSpinTooFast(target)) { this._failPadContact('spin'); return; }
+    if (padSpinTooFast(target, this.id)) { this._failPadContact('spin'); return; }   // her id: a piece she circles in step is judged at its spin relative to her (lane M)
     const p = mode ? (P.P_GRIP_BY_MODE[mode] ?? P.P_GRIP_NO_MODE) : P.P_GRIP_NO_MODE;
     // Test seam: `_padRollOverride` (0..1) forces a deterministic roll.
     const roll = (this._padRollOverride != null) ? this._padRollOverride : Math.random();
@@ -6876,6 +7266,11 @@ export class ArmUnit {
         let goalX = tPos.x + _ox * _Rscene;
         let goalY = tPos.y + _oy * _Rscene;
         let goalZ = tPos.z + _oz * _Rscene;
+        if (this._spinMatch) {   // circling the piece in step: she holds her place on the circle while the net flies (plan debris-1 lane M, M-g)
+          goalX = tPos.x + this._spinMatch.off.x;
+          goalY = tPos.y + this._spinMatch.off.y;
+          goalZ = tPos.z + this._spinMatch.off.z;
+        }
         // §11.4 net-fire recoil: same goal displacement as _updateStationKeep; the kick lands DURING NETTING. The step also
         // bills the recovery surcharge (NETTING's only fuel debit; flag OFF ⇒ zero, byte-identical).
         if (this._updateRecoilKick(dt)) {
@@ -6883,10 +7278,14 @@ export class ArmUnit {
           goalY += this._recoilOffsetM.y * M;
           goalZ += this._recoilOffsetM.z * M;
         }
-        const lerp = SK.STATIONKEEP_LERP_RATE;
-        this.position.x += (goalX - this.position.x) * lerp;
-        this.position.y += (goalY - this.position.y) * lerp;
-        this.position.z += (goalZ - this.position.z) * lerp;
+        if (this._matchLeave) {   // after a match she flies back to the hold on her jet, the net still in the air (Debris 4 M fix N1)
+          this._stepMatchLeave(dt, tPos);
+        } else {
+          const lerp = this._spinMatch ? 1 : SK.STATIONKEEP_LERP_RATE;
+          this.position.x += (goalX - this.position.x) * lerp;
+          this.position.y += (goalY - this.position.y) * lerp;
+          this.position.z += (goalZ - this.position.z) * lerp;
+        }
       }
     }
 

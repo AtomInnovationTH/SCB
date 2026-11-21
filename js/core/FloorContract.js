@@ -116,8 +116,9 @@ export const FloorContract = {
     /**
      * The map clock slider's steps on floors MAP_CLOCK_FLOORS (owner 2026-11-18: "Actual speed + speed slider"). `cap` is the
      * TimeAuthority target (multiples of BASE_SCALE = 10 game s per real s): pause / real time (0.1 x 10 = 1x) / 10x (her
-     * ship-view pace) / 100x / 1000x real time. The step is one more term in the target; a conjunction alert, a planned daughter
-     * flight, an open drawer and a transfer trip's own rates still win when lower (TimeAuthority.update, tripWarpArgs).
+     * ship-view pace) / 100x / 1000x real time. The step is one more term in the target; a conjunction alert, a daughter near her piece
+     * (real speed), a daughter out on the far leg (the step capped at 10x: `TimeAuthority.FIELD_CAP`), an open drawer and a transfer trip's
+     * own rates still win when lower (TimeAuthority.update, tripWarpArgs; DECISIONS §70 row 10).
      */
     MAP_CLOCK_STEPS: [
       { id: 'pause', cap: 0 },

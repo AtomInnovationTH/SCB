@@ -872,6 +872,7 @@ export class CommsSystem {
         : tool === 'GRIPPER' ? 'Daughter in position. Press N to grip it.'
           : tool === 'MAGNET' ? 'Daughter in position. Press N to use the magnet.'
             : tool === 'KIT' ? 'Daughter in position. Press N to clip the spin kit on.'
+              : tool === 'MATCH' ? 'Daughter in position. Press N to circle in step with its spin.'
               : 'Daughter in position. Press N to net it.'));
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
@@ -929,7 +930,7 @@ export class CommsSystem {
     if (due.length) this._postReleased(due);
     if (!this._active) return;
 
-    const gameDt = dt * TimeAuthority.BASE_SCALE;
+    const gameDt = dt * TimeAuthority.fixedClockScale();   // BASE_SCALE; slowed with the world near a piece (debris-1 C2)
     this._gameTime += gameDt;
 
     // post-onboarding suppression ramp (real dt; pause-safe)

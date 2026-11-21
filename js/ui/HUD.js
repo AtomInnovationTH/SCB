@@ -2822,7 +2822,7 @@ export class HUD {
   _glassStripChips() {
     const t = this.hintTicker;
     const has = (label) => !!(t && typeof t.hasStepButton === 'function' && t.hasStepButton(label));
-    const net = ['LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER', 'USE MAGNET'].find(has) || '';
+    const net = ['LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER', 'USE MAGNET', 'CLIP KIT', 'MATCH SPIN'].find(has) || '';
     return { net, reel: has('REEL') };
   }
 

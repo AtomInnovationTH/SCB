@@ -110,6 +110,9 @@ const RE_PAD_CHIP = /\b([Pp])ress N to stick the pad on\b/g;   // the daughter's
 // Her gripper and magnet are their own buttons too (the in-position comms line, CommsSystem).
 const RE_GRIP_CHIP = /\b([Pp])ress N to grip it\b/g;
 const RE_MAGNET_CHIP = /\b([Pp])ress N to use the magnet\b/g;
+// Lane K's spin kit and lane M's spin matching are tools she holds too: their in-position lines (CommsSystem) name their own buttons.
+const RE_KIT_CHIP = /\b([Pp])ress N to clip the spin kit on\b/g;
+const RE_MATCH_CHIP = /\b([Pp])ress N to circle in step with its spin\b/g;
 const RE_NEXT_CHIP = /\b([Pp])ress T for next target\b/g;   // no chip: a tap on the piece itself selects it
 // Reminder lines whose key / mouse gesture HAS a touch control, worded for it on glass (no chip: the control is the
 // glass itself): "Press T to pick the next target." -> "Tap a piece to ..."; "Scroll to zoom." -> "Pinch to zoom.";
@@ -362,6 +365,8 @@ export class GestureHints {
     return applyLines(text).replace(RE_PAD_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' STICK PAD')
       .replace(RE_GRIP_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' CLOSE GRIPPER')
       .replace(RE_MAGNET_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' USE MAGNET')
+      .replace(RE_KIT_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' CLIP KIT')
+      .replace(RE_MATCH_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' MATCH SPIN')
       .replace(RE_NEXT_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target')
       .replace(RE_PICK_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target')
       .replace(RE_ZOOM_WORDS, (tok, s) => (s === 'S' ? 'Pinch' : 'pinch') + ' to zoom')
@@ -428,7 +433,9 @@ export class GestureHints {
     const KIND = { N: 'net', D: 'daughter', A: 'autopilot', S: 'scan', R: 'reel' };
     const rest = text.replace(RE_PAD_CHIP, (tok, p, off) => { found.push([off, 'pad']); return ' '.repeat(tok.length); })
       .replace(RE_GRIP_CHIP, (tok, p, off) => { found.push([off, 'grip']); return ' '.repeat(tok.length); })
-      .replace(RE_MAGNET_CHIP, (tok, p, off) => { found.push([off, 'magnet']); return ' '.repeat(tok.length); });
+      .replace(RE_MAGNET_CHIP, (tok, p, off) => { found.push([off, 'magnet']); return ' '.repeat(tok.length); })
+      .replace(RE_KIT_CHIP, (tok, p, off) => { found.push([off, 'kit']); return ' '.repeat(tok.length); })
+      .replace(RE_MATCH_CHIP, (tok, p, off) => { found.push([off, 'match']); return ' '.repeat(tok.length); });
     rest.replace(RE_PRESS_CHIP, (tok, p, letter, toVerb, off) => { found.push([off, KIND[letter]]); return tok; });
     rest.replace(RE_LETGO_CHIP, (tok, p, tail, off) => { found.push([off, 'letgo']); return tok; });
     rest.replace(RE_READ_CHIP, (tok, p, tail, off) => { found.push([off, 'read']); return tok; });

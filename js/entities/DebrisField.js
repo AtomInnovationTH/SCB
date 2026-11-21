@@ -1850,7 +1850,10 @@ export class DebrisField {
    */
   static _advanceTumble(debris, dt, maxVisualRad) {
     if (debris._capturedByArm || debris._armPinned) return; // cinched — no tumble
-    const visualRate = Math.min(debris.tumbleRate * TimeAuthority.worldClockScale(), maxVisualRad);   // BASE_SCALE at home; the world's real speed while a daughter is out (§70 row 6)
+    // A piece a daughter is circling in step (`_trueSpinDraw`, plan debris-1 lane M, D8) turns at its TRUE spin: she stays on the same spot of it,
+    // so the draw's 10 deg/s cap (a legibility choice for pieces nobody follows) is lifted for it.
+    const cap = debris._trueSpinDraw === true ? Infinity : maxVisualRad;
+    const visualRate = Math.min(debris.tumbleRate * TimeAuthority.worldClockScale(), cap);   // BASE_SCALE at home; the world's real speed while a daughter is out (§70 row 6)
     debris.tumbleAngle += visualRate * dt;
   }
 

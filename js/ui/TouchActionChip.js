@@ -6,7 +6,7 @@
  *   · a piece is within net reach, a mother net is left, none is in flight  → LAUNCH NET  (KeyN)
  *   · the mother has no nets left, or N was refused as "out of net range"   → SEND DAUGHTER (KeyD)
  *   · a daughter holds station on the piece ("Daughter in position. Press N…")
- *     → LAUNCH NET / STICK PAD / CLOSE GRIPPER / USE MAGNET (KeyN: her tool)
+ *     → LAUNCH NET / STICK PAD / CLOSE GRIPPER / USE MAGNET / CLIP KIT / MATCH SPIN (KeyN: her tool)
  * It reuses the ticker's step-chip mechanism (HINT_POSTED step:true + press + button): a tap takes exactly the
  * keyboard's path, refusals included. It never covers a teaching-beat chip (HintTicker.hasStepChip) and takes its
  * own chip down the moment its condition ends. Driven by events and live state, never by matching comms text
@@ -40,6 +40,9 @@ const CHIPS = Object.freeze({
   // N works whichever tool she holds (ArmUnit.dispatchSelectedTool), so each tool has its own word; `net` is both nets.
   grip: Object.freeze({ text: 'Close the gripper', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'CLOSE GRIPPER' }),
   magnet: Object.freeze({ text: 'Use the magnet', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'USE MAGNET' }),
+  // Lane K's spin kit and lane M's spin matching are tools she can hold too (ArmUnit.availableTools: KIT, MATCH); N works each.
+  kit: Object.freeze({ text: 'Clip the spin kit on', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'CLIP KIT' }),
+  match: Object.freeze({ text: 'Circle in step', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'MATCH SPIN' }),
   daughter: Object.freeze({ text: 'Send a daughter', glyph: 'D', keys: Object.freeze(['KeyD']), press: 'KeyD', button: 'SEND DAUGHTER' }),
   autopilot: Object.freeze({ text: 'Autopilot in', glyph: 'A', keys: Object.freeze(['KeyA']), press: 'KeyA', button: 'AUTOPILOT' }),
   scan: Object.freeze({ text: 'Scan', glyph: 'S', keys: Object.freeze(['KeyS']), press: 'KeyS', button: 'SCAN' }),
@@ -72,16 +75,16 @@ export const BEAT_CHIPS = Object.freeze({
   ch5_burn: Object.freeze({ kind: 'throttle', needs: null }),
 });
 
-const KIND_KEY = Object.freeze({ net: 'KeyN', throw: 'KeyN', pad: 'KeyN', grip: 'KeyN', magnet: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', letgobag: 'KeyK', choose: 'KeyU', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
+const KIND_KEY = Object.freeze({ net: 'KeyN', throw: 'KeyN', pad: 'KeyN', grip: 'KeyN', magnet: 'KeyN', kit: 'KeyN', match: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', letgobag: 'KeyK', choose: 'KeyU', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
 
 /** Chip kinds that are KeyN; a daughter holding the piece decides which one is true now. */
-const N_KINDS = Object.freeze(['net', 'pad', 'grip', 'magnet']);
+const N_KINDS = Object.freeze(['net', 'pad', 'grip', 'magnet', 'kit', 'match']);
 /** Chip kinds that name HER tool (only true while she holds station). */
-const TOOL_KINDS = Object.freeze(['pad', 'grip', 'magnet']);
+const TOOL_KINDS = Object.freeze(['pad', 'grip', 'magnet', 'kit', 'match']);
 
-/** The chip kind for the tool a station-keeping daughter holds ('NET' | 'PAD' | 'GRIPPER' | 'MAGNET'; anything else = the net). */
+/** The chip kind for the tool a station-keeping daughter holds ('NET' | 'PAD' | 'GRIPPER' | 'MAGNET' | 'KIT' | 'MATCH'; anything else = the net). */
 function toolKind(tool) {
-  return tool === 'PAD' ? 'pad' : tool === 'GRIPPER' ? 'grip' : tool === 'MAGNET' ? 'magnet' : 'net';
+  return tool === 'PAD' ? 'pad' : tool === 'GRIPPER' ? 'grip' : tool === 'MAGNET' ? 'magnet' : tool === 'KIT' ? 'kit' : tool === 'MATCH' ? 'match' : 'net';
 }
 
 /** Daughter states in which N deploys a MANUAL net (ArmUnit.manualNetDeploy). */
@@ -446,7 +449,7 @@ export class TouchActionChip {
   }
 
   /**
-   * @returns {'net'|'pad'|'grip'|'magnet'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'letgobag'|'choose'|'read'|'widescan'|'throttle'|null} the chip the current state asks for (ignoring other chips on screen).
+   * @returns {'net'|'pad'|'grip'|'magnet'|'kit'|'match'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'letgobag'|'choose'|'read'|'widescan'|'throttle'|null} the chip the current state asks for (ignoring other chips on screen).
    * CHOOSE is the lowest-priority state chip: every other chip, line or beat outranks it, and it fills the gap when none is wanted.
    */
   wanted() {

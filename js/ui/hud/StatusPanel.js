@@ -2097,11 +2097,15 @@ export class StatusPanel {
         return { label: `Reloading ${Math.round((a.reloadProgress || 0) * 100)}%`, color: 'var(--hud-info, #00ffff)' };
       case 'LAUNCHING': case 'UNDOCKING': case 'TRANSIT':
         return { label: 'Heading out', color: 'var(--hud-info, #00ffff)' };
-      case 'APPROACH': case 'STATION_KEEP':
+      case 'APPROACH':
+        return { label: 'Approaching', color: 'var(--hud-info, #00ffff)' };
+      case 'STATION_KEEP':
+        if (a.spinMatch) return { label: 'Matching spin', color: 'var(--hud-info, #00ffff)' };   // she circles the piece in step with its spin (plan debris-1 lane M)
         return { label: 'Approaching', color: 'var(--hud-info, #00ffff)' };
       case 'NETTING': case 'GRAPPLED': case 'MAGNETIC_GRAPPLE':
       case 'GRIPPER_GRAPPLE': case 'PAD_CONTACT': case 'WEB_SHOT':
         if (a.kitClip) return { label: 'Clipping kit', color: 'var(--hud-info, #00ffff)' };   // the spin kit's clip-on rides MAGNETIC_GRAPPLE (K fix F2)
+        if (a.spinMatch) return { label: 'Matching spin', color: 'var(--hud-info, #00ffff)' };   // a catch tool working while she circles in step
         return { label: 'Capturing', color: 'var(--hud-info, #00ffff)' };
       case 'REELING': case 'HAULING': case 'RETURNING': case 'DOCKING': {
         // On a reel home (owner 2026-10-22: "on slow reel-in it seems like nothing is happening") the row says what

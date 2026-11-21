@@ -4,7 +4,9 @@
  * `mapClockTextFor` shows the English one. The "10x / 100x / 1000x" buttons are numbers and need no translation.
  *
  * Keys: `caption` (the label over the buttons), `pause`, `real` (the short button word for real speed), `realTitle` (the longer
- * tooltip), `trip` (the label while a transfer trip sets the speed itself), `aria` (the group's accessible name).
+ * tooltip), `trip` (the label while a transfer trip sets the speed itself), `aria` (the group's accessible name), `nearTitle` (the tooltip
+ * while a daughter is near her piece: the clock is at real speed) and `outTitle` (while one is out but none is near: the clock runs at the
+ * field's speed, 10x at most; DECISIONS §70 row 10).
  *
  * REVIEW STATUS: the six translations are model-made and have not been checked by a native speaker (DECISIONS §44 row 2).
  * Thai, Japanese, Hindi and Tamil drop letter spacing and CSS capitals (`NO_SPACING_LANGS`, §44 row 5).
@@ -13,7 +15,7 @@
  * @module ui/mapClockText
  */
 
-export const MAP_CLOCK_KEYS = Object.freeze(['caption', 'pause', 'real', 'realTitle', 'trip', 'aria']);
+export const MAP_CLOCK_KEYS = Object.freeze(['caption', 'pause', 'real', 'realTitle', 'trip', 'aria', 'nearTitle', 'outTitle']);
 
 /** Languages whose scripts join: no wide letter spacing, no CSS capitals. */
 export const NO_SPACING_LANGS = Object.freeze(['th', 'ja', 'hi', 'ta']);
@@ -21,6 +23,7 @@ export const NO_SPACING_LANGS = Object.freeze(['th', 'ja', 'hi', 'ta']);
 const EN = {
   caption: 'Time speed', pause: 'Pause', real: 'Real', realTitle: 'Real time: one game second per real second',
   trip: 'Trip speed', aria: 'How fast time runs on the map',
+  nearTitle: 'Real speed near a daughter\u2019s piece', outTitle: 'Field speed while a daughter is out',
 };
 
 export const MAP_CLOCK_TEXT = Object.freeze({
@@ -28,33 +31,39 @@ export const MAP_CLOCK_TEXT = Object.freeze({
   th: Object.freeze({
     caption: 'ความเร็วเวลา', pause: 'หยุด', real: 'จริง', realTitle: 'เวลาจริง: หนึ่งวินาทีในเกมต่อหนึ่งวินาทีจริง',
     trip: 'ความเร็วการเดินทาง', aria: 'เวลาบนแผนที่เดินเร็วแค่ไหน',
+    nearTitle: 'ความเร็วจริงเมื่ออยู่ใกล้ชิ้นขยะของยานลูก', outTitle: 'ความเร็วของสนามขณะที่ยานลูกอยู่ข้างนอก',
   }),
   ja: Object.freeze({
     caption: '時間の速さ', pause: '停止', real: '実時間', realTitle: '実時間: ゲームの1秒が現実の1秒',
     trip: '移動中の速さ', aria: '地図上の時間の速さ',
+    nearTitle: '子機が対象のゴミに近いときは実時間', outTitle: '子機が出ている間は宙域の速さ',
   }),
   es: Object.freeze({
     caption: 'Velocidad del tiempo', pause: 'Pausa', real: 'Real', realTitle: 'Tiempo real: un segundo de juego por segundo real',
     trip: 'Velocidad del viaje', aria: 'Qué tan rápido corre el tiempo en el mapa',
+    nearTitle: 'Velocidad real cerca de la pieza de una hija', outTitle: 'Velocidad del campo mientras una hija está fuera',
   }),
   pt: Object.freeze({
     caption: 'Velocidade do tempo', pause: 'Pausa', real: 'Real', realTitle: 'Tempo real: um segundo de jogo por segundo real',
     trip: 'Velocidade da viagem', aria: 'Quão rápido o tempo corre no mapa',
+    nearTitle: 'Velocidade real perto da peça de uma filha', outTitle: 'Velocidade do campo enquanto uma filha está fora',
   }),
   hi: Object.freeze({
     caption: 'समय की गति', pause: 'रुकें', real: 'असली', realTitle: 'असली समय: खेल का एक सेकंड, असली एक सेकंड',
     trip: 'यात्रा की गति', aria: 'नक्शे पर समय कितनी तेज़ चलता है',
+    nearTitle: 'बेटी यान के टुकड़े के पास असली गति', outTitle: 'बेटी यान के बाहर रहने तक क्षेत्र की गति',
   }),
   ta: Object.freeze({
     caption: 'நேரத்தின் வேகம்', pause: 'நிறுத்து', real: 'உண்மை', realTitle: 'உண்மை நேரம்: விளையாட்டின் ஒரு வினாடி = நிஜ ஒரு வினாடி',
     trip: 'பயண வேகம்', aria: 'வரைபடத்தில் நேரம் எவ்வளவு வேகமாக ஓடுகிறது',
+    nearTitle: 'மகள் கலத்தின் குப்பைத் துண்டு அருகில் உண்மை வேகம்', outTitle: 'மகள் கலம் வெளியே இருக்கும்போது பகுதியின் வேகம்',
   }),
 });
 
 /**
  * The strings for a language code; a missing or empty string (or an unknown code) shows English.
  * @param {string} [code]
- * @returns {{caption:string, pause:string, real:string, realTitle:string, trip:string, aria:string}}
+ * @returns {{caption:string, pause:string, real:string, realTitle:string, trip:string, aria:string, nearTitle:string, outTitle:string}}
  */
 export function mapClockTextFor(code) {
   const block = (typeof code === 'string' && Object.prototype.hasOwnProperty.call(MAP_CLOCK_TEXT, code)) ? MAP_CLOCK_TEXT[code] : null;

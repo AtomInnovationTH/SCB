@@ -6,8 +6,10 @@
  * The chosen step is lit. It owns no time: a pick calls `onPick(stepIndex)` and main.js's time block writes it into
  * `MapClock`, which feeds the TimeAuthority target. While a transfer trip sets the clock itself (burning), the row is dimmed and
  * cannot be picked, and the caption shows the trip's current speed instead (a trip never slows to real time). While a daughter is
- * out the clock runs at real speed (DECISIONS §70 row 6): Real is lit, 10x / 100x / 1000x are dimmed and cannot be picked (title
- * "Real speed while a daughter is out"); the choice is kept and lights again when she is home.
+ * NEAR her piece (from 400 m out until she holds it) the clock runs at real speed (DECISIONS §70 row 10): Real is lit, 10x / 100x /
+ * 1000x are dimmed and cannot be picked (title "Real speed near a daughter's piece"). While one is out but none is near the clock runs at
+ * the field's speed, 10x at most: her step or 10x is lit, 100x / 1000x are dimmed (title "Field speed while a daughter is out"). Pause
+ * can always be picked; the choice is kept and lights again when she is home. The two titles are in `mapClockText.js` (7 languages).
  *
  * Shown on floors 4 and 5 only (`setShown`). Placement is set by `setLayout({ floor, glass, radio })` from main.js; it takes
  * pointer events itself and keeps them from the game under it. DOM-guarded: with no document every method is inert. Styles are
@@ -26,13 +28,13 @@ export const BUTTON_MIN_PX = 44;
 /** What a step button says. Pause and Real are words (translated); the rest are numbers. */
 const STEP_LABELS = ['@pause', '@real', '10\u00d7', '100\u00d7', '1000\u00d7'];
 
-/** The steps above this one are dimmed and cannot be picked while a daughter is out (index 1 = Real). */
-export const OUT_MAX_STEP = 1;
-/**
- * The tooltip while a daughter is out (DECISIONS §70 row 6, §79 row 3). English only for now: it is not in `mapClockText.js` (not this
- * lane's file), so the six translations are owed there (`mapClockTextFor` would fall back to this string anyway).
- */
-export const DAUGHTER_OUT_TITLE = 'Real speed while a daughter is out';
+/** The steps above this one are dimmed and cannot be picked while a daughter is near her piece (index 1 = Real). */
+export const NEAR_MAX_STEP = 1;
+/** The steps above this one are dimmed while a daughter is out but none is near (index 2 = 10x: the field's rate, `TimeAuthority.FIELD_CAP`). */
+export const OUT_MAX_STEP = 2;
+/** The English tooltips (the words live in `mapClockText.js`, `nearTitle` / `outTitle`, all 7 languages). */
+export const DAUGHTER_NEAR_TITLE = MAP_CLOCK_TEXT.en.nearTitle;
+export const DAUGHTER_OUT_TITLE = MAP_CLOCK_TEXT.en.outTitle;
 
 /**
  * The speed a rate reads as, in game seconds per real second: "0", "1", "10", "100", "1000" (a rate between steps rounds).
@@ -89,6 +91,7 @@ export class MapClockSlider {
     this._step = 1;
     this._locked = false;
     this._out = false;
+    this._near = false;
     this._tripText = '';
     this._titles = [];
     this._lang = null;
@@ -97,12 +100,16 @@ export class MapClockSlider {
 
   /** @returns {boolean} */
   isShown() { return this._shown; }
-  /** @returns {number} the lit step: while a daughter is out a faster choice reads as Real (the choice itself is kept in MapClock) */
-  litStep() { return this._out && !this._locked && this._step > OUT_MAX_STEP ? OUT_MAX_STEP : this._step; }
+  /** @returns {number} the highest step she can pick now: Real near a piece, 10x out on the far leg, else all (a burning trip: the trip sets it) */
+  maxStep() { return this._locked ? Infinity : (this._out && this._near) ? NEAR_MAX_STEP : this._out ? OUT_MAX_STEP : Infinity; }
+  /** @returns {number} the lit step: while a daughter is out a faster choice reads as the cap (the choice itself is kept in MapClock) */
+  litStep() { return Math.min(this._step, this.maxStep()); }
   /** @returns {boolean} the row is dimmed (a trip sets the clock) */
   isLocked() { return this._locked; }
   /** @returns {boolean} a daughter is out: the faster steps are dimmed and cannot be picked */
   isDaughterOut() { return this._out && !this._locked; }
+  /** @returns {boolean} a daughter is near her piece: only Pause and Real can be picked */
+  isDaughterNear() { return this._out && this._near && !this._locked; }
 
   /** @param {boolean} on show on floors 4-5, hide elsewhere (write-on-change) */
   setShown(on) {
@@ -120,16 +127,21 @@ export class MapClockSlider {
    * @param {number} step the MapClock choice
    * @param {boolean} locked a transfer trip is burning
    * @param {string} [tripSpeed] the trip's current speed text ("100x"), shown as the caption while locked
-   * @param {boolean} [daughterOut] a daughter is out (the clock runs at real speed until she is home): Real is lit, the faster
-   *   steps are dimmed and cannot be picked; Pause still can. Her choice is not changed: it returns when she is home. A burning trip wins.
+   * @param {boolean} [daughterOut] a daughter is out: steps above 10x are dimmed and cannot be picked (her step or 10x is lit); Pause
+   *   still can. Her choice is not changed: it returns when she is home. A burning trip wins.
+   * @param {boolean} [daughterNear] a daughter is near her piece (implies out): the clock is at real speed, Real is lit and the steps above
+   *   it are dimmed
    */
-  setState(step, locked, tripSpeed = '', daughterOut = false) {
+  setState(step, locked, tripSpeed = '', daughterOut = false, daughterNear = false) {
     locked = !!locked;
-    daughterOut = !!daughterOut;
-    const changed = step !== this._step || locked !== this._locked || daughterOut !== this._out || (locked && tripSpeed !== this._tripText);
+    daughterNear = !!daughterNear;
+    daughterOut = !!daughterOut || daughterNear;
+    const changed = step !== this._step || locked !== this._locked || daughterOut !== this._out || daughterNear !== this._near
+      || (locked && tripSpeed !== this._tripText);
     this._step = step;
     this._locked = locked;
     this._out = daughterOut;
+    this._near = daughterNear;
     this._tripText = locked ? String(tripSpeed || '') : '';
     if (changed && this._root) this._paintState();
   }
@@ -177,7 +189,7 @@ export class MapClockSlider {
       b.addEventListener('click', (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
         if (this._locked) return;
-        if (this._out && i > OUT_MAX_STEP) return;   // a daughter is out: the clock is real speed, the faster steps wait for her
+        if (i > this.maxStep()) return;   // a daughter is out: the clock is real speed near her piece (10x at most on the far leg), the faster steps wait for her
         if (this._onPick) this._onPick(i);
       });
       row.appendChild(b);
@@ -217,23 +229,25 @@ export class MapClockSlider {
     if (!this._root) return;
     const t = mapClockTextFor(this._lang || this._getLanguage() || 'en');
     const out = this._out && !this._locked;
+    const maxStep = this.maxStep();
+    const why = out ? (this._near ? t.nearTitle : t.outTitle) : '';
     const cap = this._locked ? `${t.trip} ${this._tripText}`.trim() : t.caption;
     if (this._caption && this._caption.textContent !== cap) this._caption.textContent = cap;
     this._root.style.opacity = this._locked ? '0.5' : '1';
     const lit = this.litStep();
     this._buttons.forEach((b, i) => {
       const on = i === lit;
-      const wait = out && i > OUT_MAX_STEP;   // dimmed and not clickable while a daughter is out
+      const wait = i > maxStep;   // dimmed and not clickable while a daughter is out (above Real near a piece, above 10x on the far leg)
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
       b.disabled = this._locked || wait;
       b.style.opacity = wait ? '0.4' : '';
       b.style.cursor = wait ? 'not-allowed' : 'pointer';
       b.style.background = on ? 'rgba(80,150,255,0.55)' : 'rgba(20,30,50,0.9)';
       b.style.borderColor = on ? '#8fc0ff' : 'rgba(160,180,220,0.35)';
-      const title = (out && (wait || on)) ? DAUGHTER_OUT_TITLE : (this._titles[i] || '');
+      const title = (out && (wait || (on && this._step >= maxStep))) ? why : (this._titles[i] || '');
       if (b.title !== title) b.title = title;
     });
-    const rootTitle = out ? DAUGHTER_OUT_TITLE : '';
+    const rootTitle = why;
     if (this._root.title !== rootTitle) this._root.title = rootTitle;
   }
 }

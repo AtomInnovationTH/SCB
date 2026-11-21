@@ -39,6 +39,7 @@ import {
 } from '../entities/CaptureNet.js';
 import { RAD2DEG, clamp01, clamp } from '../core/MathUtil.js';
 import { kitHolds } from './SpinDecay.js';   // the spin kit's one "does it hold here" test
+import { relativeSpinRad, fmtDegS } from './SpinMatch.js';   // the spin a catch tool judges is relative to the daughter matching it (lane M, M-d)
 import { buildLineupSnapshot, computeAimPart, computeHoldPart, computeTumblePart } from './NetLineupOdds.js';
 
 /** Preference order for ▶ tie-breaks (matches ToolRecommender). */
@@ -46,7 +47,7 @@ export const TOOL_PREF_ORDER = ['NET', 'MAGNET', 'GRIPPER', 'PAD'];
 
 /** Short HUD label for a verb; single source so the reticle odds strip and the target-panel badge never disagree. */
 export function toolShortLabel(kind) {
-  return kind === 'MAGNET' ? 'MAG' : kind === 'GRIPPER' ? 'GRAB' : kind;
+  return kind === 'MAGNET' ? 'MAG' : kind === 'GRIPPER' ? 'GRAB' : kind === 'MATCH' ? 'SPIN' : kind;   // MATCH = "match spin" (lane M); KIT stays KIT
 }
 
 /**
@@ -294,8 +295,9 @@ function computeNetOdds(opts) {
   // when provided; the fresh path recomputes them into the module scratch; identical output either way.
   if (opts.motherLineup) return computeMotherLineupOdds(target, range, netClass);
   const tumbleOn = !Constants.isFeatureEnabled || Constants.isFeatureEnabled('LASER_DESPIN');
-  const tumbleRate = (tumbleOn && target && typeof target.tumbleRate === 'number')
-    ? target.tumbleRate : null;
+  const spinRad = relativeSpinRad(target, opts.spinFrameId);   // relative to the daughter circling it in step (0), else its own spin (lane M, M-d)
+  const tumbleRate = (tumbleOn && target && typeof spinRad === 'number')
+    ? spinRad : null;
   const cache = opts.lockCache || _freshNetOddsCache;
   if (cache === _freshNetOddsCache) cache.valid = false; // fresh path: recompute both phases
   refreshNetOddsLockCache(cache, target, netClass, tumbleOn);
@@ -399,12 +401,14 @@ function computeGripperOdds(target) {
  * True when the piece spins faster than the pad can hold (`PAD_CONTACT.SPIN_MAX_DEG`, 30°/s; owner 2026-11-01). The ONE rule:
  * `computePadOdds` shows 0 for it and `ArmUnit._resolvePadGrip` refuses the roll with it, so the shown odds equal the roll.
  * @param {{tumbleRate?: number}|null} target tumbleRate in rad/s (absent or non-finite = not spinning)
+ * @param {*} [frameId] the daughter judging it: a piece she circles in step spins at 0 relative to her (`relativeSpinRad`, lane M)
  * @returns {boolean}
  */
-export function padSpinTooFast(target) {
+export function padSpinTooFast(target, frameId) {
   const maxDeg = (Constants.PAD_CONTACT && Constants.PAD_CONTACT.SPIN_MAX_DEG);
-  if (!(maxDeg >= 0) || !target || typeof target.tumbleRate !== 'number' || !Number.isFinite(target.tumbleRate)) return false;
-  return Math.abs(target.tumbleRate) * RAD2DEG > maxDeg + 1e-9;   // 30°/s exactly still holds
+  const w = relativeSpinRad(target, frameId);
+  if (!(maxDeg >= 0) || !target || typeof w !== 'number' || !Number.isFinite(w)) return false;
+  return Math.abs(w) * RAD2DEG > maxDeg + 1e-9;   // 30°/s exactly still holds
 }
 
 /** PAD odds — mirrors ArmUnit._resolvePadMode/_resolvePadGrip. @private */
@@ -418,7 +422,7 @@ function computePadOdds(target, opts) {
     return { p: 0, blocker: 'FAST', hint: 'contact too fast. Ease the approach', mode: null };
   }
   // Spin gate: past SPIN_MAX_DEG the pad slips, so the odds are 0 (mode null: ToolRecommender's auto-pad pick needs a mode, and gets the spin through the tumbleRate ArmUnit passes it).
-  if (padSpinTooFast(target)) {
+  if (padSpinTooFast(target, opts.spinFrameId)) {
     return { p: 0, blocker: 'SPIN', hint: 'spinning too fast for the pad', mode: null };
   }
   const uvDoses = (typeof opts.padUvDoses === 'number') ? opts.padUvDoses : (P.UV_CURE_DOSES_Y0 || 0);
@@ -442,6 +446,25 @@ function computePadOdds(target, opts) {
 }
 
 /**
+ * MATCH odds (plan debris-1 lane M): not a roll. `p` is 1 while she can circle the piece in step, 0 with the one word that says why
+ * not (FAST / WRAP / NO SPIN / NO GAS / NO JET), null when ArmUnit gave no offer (a mock, or no target). `offer` is
+ * `SpinMatch.spinMatchOffer`'s answer; `running` says she is circling it now (the same key stops it).
+ * @private
+ */
+function computeMatchOdds(offer, running) {
+  if (!offer) return { p: null, blocker: 'OFFLINE', hint: 'no piece to match' };
+  if (running) return { p: 1, blocker: null, hint: 'circling in step. Press again to stop' };
+  switch (offer.reason) {
+    case 'ok': return { p: 1, blocker: null, hint: `circles in step with it, ${fmtDegS(offer.omegaRad)}\u00B0/s. Nets and tools then see no spin` };
+    case 'fast': return { p: 0, blocker: 'FAST', hint: `too fast to circle: ${fmtDegS(offer.omegaRad)}\u00B0/s, she can match up to ${fmtDegS(offer.omegaMaxRad)}\u00B0/s` };
+    case 'wrap': return { p: 0, blocker: 'WRAP', hint: 'her line would wrap the piece: its spin axis lies across the line' };
+    case 'gas': return { p: 0, blocker: 'NO GAS', hint: 'not enough gas to circle it' };
+    case 'no_jet': return { p: 0, blocker: 'NO JET', hint: 'no jet to push with' };
+    default: return { p: 0, blocker: 'NO SPIN', hint: 'it is not spinning: nothing to match' };
+  }
+}
+
+/**
  * Live odds for every verb in a toolset against one target.
  * @param {object} opts
  * @param {'weaver'|'spinner'|'mother'} [opts.armType='weaver'] platform class
@@ -452,6 +475,9 @@ function computePadOdds(target, opts) {
  * @param {object} [opts.netClass] net class override (e.g. CN.LARGE for mother)
  * @param {number} [opts.netCount] net magazine count (0 → '--' EMPTY)
  * @param {number} [opts.padUvDoses] UV-cure doses remaining
+ * @param {*} [opts.spinFrameId] the daughter whose catch this is: a piece she circles in step (`piece._spinMatchedBy`) reads 0 spin to her (lane M)
+ * @param {object|null} [opts.matchOffer] `SpinMatch.spinMatchOffer` for the MATCH column (ArmUnit computes it; omitted = no column data)
+ * @param {boolean} [opts.matchRunning] she is circling the piece now
  * @param {number} [opts.contactVel] pad approach speed (m/s)
  * @param {number} [opts.presentedWidthM] orientation-aware presented width (m)
  * @param {object} [opts.lockCache] persistent per-owner NET lock cache from makeNetOddsLockCache(); omit for the fresh
@@ -487,6 +513,7 @@ export function computeToolOdds(opts = {}) {
           netCount,
           presentedWidthM: opts.presentedWidthM,
           lockCache: opts.lockCache,
+          spinFrameId: opts.spinFrameId,
           // the mother's Large Net rolls the line-up model; every daughter keeps §3.3 (net-odds-1107 D1)
           motherLineup: armType === 'mother' && netClass === Constants.CAPTURE_NET.LARGE,
         });
@@ -504,6 +531,9 @@ export function computeToolOdds(opts = {}) {
         odds.KIT = kitHolds(target)
           ? { p: 1, blocker: null, hint: 'clips on, no roll. Slows the spin over days' }
           : { p: 0, blocker: 'NO STEEL', hint: 'big pieces with a steel spot only' };
+        break;
+      case 'MATCH':   // match spin (plan debris-1 lane M): no roll; it circles the piece in step, so the catch tools see no spin. ArmUnit hands the offer in; never recommended
+        odds.MATCH = computeMatchOdds(opts.matchOffer, opts.matchRunning === true);
         break;
       default:
         odds[kind] = { p: null, blocker: 'OFFLINE', hint: 'unknown tool' };

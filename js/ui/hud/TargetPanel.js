@@ -877,6 +877,7 @@ export class TargetPanel {
       range,
       netCount,
       padUvDoses: arm._padUvCureDosesRemaining,
+      spinFrameId: arm.id,   // a piece she circles in step reads 0 spin to her, the same as her odds strip (lane M)
     });
     const best = computeBestTool(odds, toolset);
     const o = odds[best];

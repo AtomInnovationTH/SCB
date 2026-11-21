@@ -189,6 +189,17 @@ export class TimeAuthority {
   }
 
   /**
+   * The ONE slow-down factor of the world systems that keep their own clock on the fixed BASE_SCALE rate (plan debris-1 C2, DECISIONS §70
+   * row 10): `fixedClockScale() / BASE_SCALE`. 1 at home and on a far leg on every floor (those systems are unchanged); while a daughter is
+   * near her piece the world runs at real speed, so they slow with it: `min(rate, BASE_SCALE) / BASE_SCALE` = 0.1 at 1x (0 while paused).
+   * Never raises anything. Call sites multiply their own dt by it (sun elapsed, space weather, Kessler, environment, sensors); systems that
+   * multiply by `BASE_SCALE` inside (bosses, comms, trawl) read `fixedClockScale()` instead, the same number times BASE_SCALE. Never scale
+   * `_simGameDt` itself: lasso, input, coach, conjunction, dossier and subsystem events share it and are not world clocks.
+   * @returns {number} 0..1
+   */
+  static worldSlowFactor() { return TimeAuthority.fixedClockScale() / TimeAuthority.BASE_SCALE; }
+
+  /**
    * Game seconds per real second that pieces' DISPLAYED motion runs at (tumble draw, the mother's net-lead estimate, the despin hint's
    * screen time): `BASE_SCALE` (=10) as shipped and whenever she is home (the draw never followed the warp rate, so home is unchanged),
    * and the live world scale while a daughter is out, capped at BASE_SCALE (a far leg at 10x or 40x draws as at home; near a piece, 1:

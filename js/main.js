@@ -6481,15 +6481,15 @@ function gameLoop(timestamp) {
   timeAuthority.update(_taFrameArgs);
   const dtWorld = timeAuthority.dtWorld;
   // The map clock slider's row: on floors 4-5 only; dimmed with the trip's own speed while a transfer trip burns (D4: a trip
-  // keeps its rates). While a daughter is out the row shows real speed lit and the faster steps dimmed (her choice is kept and
-  // returns when she is home). Write-on-change inside; the per-frame calls are cheap.
+  // keeps its rates). Near a piece the row shows real speed lit and the steps above it dimmed; out on the far leg her step (10x at most) is lit
+  // and 100x / 1000x are dimmed (her choice is kept and returns when she is home). Write-on-change inside; the per-frame calls are cheap.
   if (_mapFloor == null) mapClock.observeFloor(null);
   if (mapClockSlider) {
     const _mapShow = _mapFloor != null && FloorContract.TIME_RULES.MAP_CLOCK_FLOORS.includes(_mapFloor);
     mapClockSlider.setShown(_mapShow);
     if (_mapShow) {
       const _tripBurn = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
-      mapClockSlider.setState(mapClock.step(), _tripBurn, _tripBurn ? mapClockSpeedText(timeAuthority.rate, TimeAuthority.BASE_SCALE) : '', _daughterOut);
+      mapClockSlider.setState(mapClock.step(), _tripBurn, _tripBurn ? mapClockSpeedText(timeAuthority.rate, TimeAuthority.BASE_SCALE) : '', _daughterOut, _daughterNear);
       mapClockSlider.setLayout({ floor: _mapFloor, glass: GestureHints.isGlass() });
     }
   }
@@ -6537,6 +6537,10 @@ function gameLoop(timestamp) {
   const _simK = _simClock.k;
   const _simN = _simClock.n, _simStepDt = _simClock.stepDt, _simStepDw = _simClock.stepDtWorld;
   const _simGameDt = _simClock.gameDt, _simGameDw = _simClock.gameDtWorld;
+  // One clock (DECISIONS §70 row 10, plan debris-1 C2): the world systems below that keep their own clock on the fixed BASE_SCALE rate slow with
+  // the orbits while a daughter is near her piece (1 at home and on a far leg: unchanged). The factor multiplies each system's own dt at its
+  // call site; `_simGameDt` itself stays whole (lasso, input, coach, conjunction, dossier and subsystem events share it and are not world clocks).
+  const _worldSlow = TimeAuthority.worldSlowFactor();
   // Rail warp readout (VisualLaw.RAIL.SHOWS 'warp-readout'): the live rate, only while the ladder is engaged.
   // setRate is write-on-change and ≤ 4 Hz internally, so the per-frame call is free. × k: the player sees the speed-up
   // ("8×") while the wheels turn her (Ruling 0); k is 1 whenever the rate is not.
@@ -6659,9 +6663,10 @@ function gameLoop(timestamp) {
   // _updateAutoExposure also key off dt, so exposure stops adapting while held. _worldHeld only turns true once the
   // ~0.6 s world-clock ramp to 0 finishes, so the sun runs at full rate through the ramp and then stops.
   // The sun runs on GAME time (dt × SimClock k): while the wheels turn her at 8× the battery's sun and the eclipse
-  // predictor (SunLight.directionAt, same unit as the orbit's dt) keep pace with the orbit. Earth's clouds and the stars
-  // are scenery on the wall clock.
-  const sunDir = sunLight.update(_worldHeld ? 0 : _simGameDt, player.getPosition());
+  // predictor (SunLight.directionAt, same unit as the orbit's dt) keep pace with the orbit. Near a piece the orbit runs at real speed, so the
+  // sun's ELAPSED clock slows by `_worldSlow` with it (the third argument: only the elapsed increment, not the eclipse blend or exposure).
+  // Earth's clouds and the stars are scenery on the wall clock.
+  const sunDir = sunLight.update(_worldHeld ? 0 : _simGameDt, player.getPosition(), _worldSlow);
   earth.setSunDirection(sunDir);
   earth.update(_worldHeld ? 0 : dt);
   // Bloom gate — skips the whole UnrealBloom mip chain on frames where nothing can cross the threshold. NOT
@@ -6834,7 +6839,8 @@ function gameLoop(timestamp) {
     else { try { resourceSystem.discardHeldFrame(); const _heat = resourceSystem.getThermalSource(); if (_heat) _heat.skipHeld(); } catch (e) { console.error('[GameLoop] thermal (held):', e); } }
     }
     try { if (missionGasTally) missionGasTally.update(); } catch (e) { console.error('[GameLoop] missionGasTally:', e); }
-    // Scan timers and cooldowns: game time (one call).
+    // Scan timers and cooldowns: game time (one call). The ship's own instrument, on the same clock as the
+    // analysis bill above: NOT slowed near a piece (coord, Debris 4 review; weather feeds sensors every frame).
     try { sensorSystem.update(_simGameDt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] sensorSystem:', e); }
     // The wings hint stays until the wings are out. Outside the held-world guard on
     // purpose: it is a screen row, not a fate clock, and it must go the frame the wings are out.
@@ -6850,7 +6856,7 @@ function gameLoop(timestamp) {
         worldHeld: _worldHeld,   // the characterising clocks run on game time and wait with the world
       });
     } catch (e) { console.error('[GameLoop] dossierSystem:', e); }
-    if (!_worldHeld) { try { kesslerSystem.update(_simGameDt); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); } }
+    if (!_worldHeld) { try { kesslerSystem.update(_simGameDt * _worldSlow); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); } }
 
     // Trawl manager (game time: it advances the mother's anomaly)
     try {
@@ -6894,7 +6900,7 @@ function gameLoop(timestamp) {
     try { codexSystem.update(dt); } catch (e) { console.error('[GameLoop] codexSystem:', e); }
     if (!_worldHeld) {
       try {
-        spaceWeatherSystem.update(_simGameDt, {
+        spaceWeatherSystem.update(_simGameDt * _worldSlow, {
           playerOrbit: player.getOrbitalElements(),
           sunDirection: sunDir,
         });
@@ -6904,7 +6910,7 @@ function gameLoop(timestamp) {
     // Environment hazards (AO, MMOD, Safe-Mode, Radiation, Battery DOD)
     // Held world: no erosion, no MMOD roll, no DOD tick while the clock is 0. Game time (dt × SimClock k).
     if (environmentSystem && !_worldHeld) {
-      try { environmentSystem.update(_simGameDt); } catch (e) { console.error('[GameLoop] environmentSystem:', e); }
+      try { environmentSystem.update(_simGameDt * _worldSlow); } catch (e) { console.error('[GameLoop] environmentSystem:', e); }
     }
 
     // Subsystem events (spacecraft subsystem ambiance), game time

@@ -957,13 +957,18 @@ export class SunLight {
    * Both clocks scale by SimClock k (game time ×8 while the wheels turn her), so
    * "real seconds" here means the frame dt × k: game seconds before BASE_SCALE.
    *
+   * One clock (plan debris-1 C2, DECISIONS §70 row 10): `aheadRealS` is scaled by the CURRENT `TimeAuthority.worldSlowFactor()`, so a
+   * prediction made while a daughter is near her piece assumes the near rate holds (0.1: the sun advances `ahead × 0.1 × BASE_SCALE`, the
+   * orbit `ahead × rate × BASE_SCALE` with rate 0.1: they stay together). 1 at home and on a far leg: unchanged. With `ahead` 0 (update())
+   * the factor has no effect; the live sun slows through `update`'s third argument.
+   *
    * @param {number} aheadRealS  real seconds ahead (0 = now)
    * @param {THREE.Vector3|{x:number,y:number,z:number}} [out]  written and
    *   returned (a plain {x,y,z} is written directly); absent → new THREE.Vector3
    * @returns {THREE.Vector3|{x:number,y:number,z:number}} the unit direction
    */
   directionAt(aheadRealS, out) {
-    const ahead = Number.isFinite(aheadRealS) ? aheadRealS : 0;
+    const ahead = Number.isFinite(aheadRealS) ? aheadRealS * TimeAuthority.worldSlowFactor() : 0;
     // Stylized ~92-min circle: phase starts at _sunPhase0 (today's declination),
     // yawed by _sunYaw0 (today's sub-solar longitude); see _seedSkyFromClock().
     const angularSpeed = (2 * Math.PI) / this.sunOrbitPeriod;
@@ -989,10 +994,12 @@ export class SunLight {
    * @param {number} dt — game frame delta (s): the real frame dt × SimClock k (k = 1 except while the wheels turn
    *   the ship at 8×), so the sun keeps pace with the orbit; 0 while the world is held
    * @param {THREE.Vector3} [cameraPos] — player camera position for eclipse check
+   * @param {number} [timeFactor=1] — `TimeAuthority.worldSlowFactor()` (main.js): scales ONLY the sun's elapsed increment (the sun's position
+   *   in the sky), not the eclipse blend or the exposure adaptation, which stay on `dt` (plan debris-1 C2)
    * @returns {THREE.Vector3} current sun direction (normalized)
    */
-  update(dt, cameraPos) {
-    this.elapsedTime += dt;
+  update(dt, cameraPos, timeFactor = 1) {
+    this.elapsedTime += dt * timeFactor;
 
     this.directionAt(0, this.sunDirection);
 

@@ -31,6 +31,7 @@ import { pickScoopMembers, scoopLine } from './scoopRule.js';
 import { bigPieces, pieceName } from '../systems/BigPieces.js';
 import * as THREE from 'three';
 import { RAD2DEG, degToRad, clamp01, clamp, lerp } from '../core/MathUtil.js';
+import { relativeSpinRad } from '../systems/SpinMatch.js';   // the spin a daughter's net judges is relative to her when she circles the piece in step (lane M, M-d)
 
 const _heldNeck = { x: 0, y: 0, z: 0 };   // scratch: a daughter's held-net neck (scene units)
 
@@ -825,9 +826,10 @@ export function isInspectOnlyMass(mass) {
  *   tumbleRate?:number, type?:string, tumbleAxis?:object, tumbleAngle?:number}|null} target
  * @param {{DIAMETER?:number, MAX_CAPTURE_MASS?:number}|null} netClass
  * @param {{x:number,y:number,z:number}|null} [approachDir] — launcher→target direction
+ * @param {*} [frameId] — the daughter whose net this is: a piece she circles in step spins at 0 relative to her (`relativeSpinRad`, lane M)
  * @returns {{ fit: 'OK'|'TOO_WIDE'|'TOO_HEAVY'|'DESPIN_FIRST'|'ASPECT', label: string }}
  */
-export function assessNetFit(target, netClass, approachDir = null) {
+export function assessNetFit(target, netClass, approachDir = null, frameId = undefined) {
   if (!target || !netClass) return { fit: 'OK', label: 'NET \u2713' };
   const size = target.sizeMeter || 0;
   const mass = target.mass || 0;
@@ -859,8 +861,9 @@ export function assessNetFit(target, netClass, approachDir = null) {
   if (overCatchLimit(mass, netClass)) return { fit: 'TOO_HEAVY', label: 'TOO BIG TO CATCH' };
   if (mass > cap) return { fit: 'TOO_HEAVY', label: 'TOO HEAVY' };
   const P = Constants.NET_TUMBLE_PENALTY || { IN_SPEC_DEG: 10 };
-  const tumbleDeg = (target.tumbleRate != null)
-    ? Math.abs(target.tumbleRate) * RAD2DEG : 0;
+  const spinRad = relativeSpinRad(target, frameId);
+  const tumbleDeg = (spinRad != null)
+    ? Math.abs(spinRad) * RAD2DEG : 0;
   if (tumbleDeg > (P.IN_SPEC_DEG ?? 10)) return { fit: 'DESPIN_FIRST', label: 'DE-SPIN FIRST' };
   return { fit: 'OK', label: 'NET \u2713' };
 }
@@ -1383,6 +1386,7 @@ export class NetProjectile {
     // Ceremony time-dilation (archive/CEREMONY_REDESIGN.md §5, §6 R1): scales THIS projectile's internal dt only;
     // world dt is unaffected. CeremonyTimeScale.get() === 1.0 when the flag is off or no ceremony is active.
     const scale = FEATURE_FLAGS.NET_CEREMONY ? CeremonyTimeScale.get() : 1.0;
+    this._rawDt = dt;   // the world's step, before the ceremony slows this net's own clock (a matched net's free flight keeps the piece's clock, `_updateFlight`)
     dt = dt * scale;
 
     this.stateTimer += dt;
@@ -1411,9 +1415,10 @@ export class NetProjectile {
             // SECURE_CHECK left it and matches the empty reel-back's progress-0 value (continuous in and out).
             || this.state === STATES.MISSED)) {
       const M_NET = Constants.SCENE_UNITS_PER_METER;
-      this.position.x = anchor.x / M_NET + this.launchDirection.x * this.distanceTraveled;
-      this.position.y = anchor.y / M_NET + this.launchDirection.y * this.distanceTraveled;
-      this.position.z = anchor.z / M_NET + this.launchDirection.z * this.distanceTraveled;
+      const fo = this._freeOffM;   // a net that flew free from a matching daughter keeps where it left her (N4); null for every other net
+      this.position.x = anchor.x / M_NET + this.launchDirection.x * this.distanceTraveled + (fo ? fo.x : 0);
+      this.position.y = anchor.y / M_NET + this.launchDirection.y * this.distanceTraveled + (fo ? fo.y : 0);
+      this.position.z = anchor.z / M_NET + this.launchDirection.z * this.distanceTraveled + (fo ? fo.z : 0);
     } else if (anchor && this.state === STATES.REELING) {
       const M_NET = Constants.SCENE_UNITS_PER_METER;
       // Mother physical-reel path: _updateMotherReel owns net.position (writes the bag apex from the ship-relative pin
@@ -1533,7 +1538,30 @@ export class NetProjectile {
 
     // PROD path: sync from the launcher's co-orbiting frame so CaptureNetVisual renders the net near the ship.
     const M_NET = Constants.SCENE_UNITS_PER_METER;  // 1 m in scene units (matches ArmUnit.M)
-    const anchor = this._anchorScene();
+    let anchor = this._anchorScene();
+    // A net fired while she circles a piece in step (Debris 4 M fix, N4/P1) leaves with HER velocity relative to the piece and then flies free IN
+    // THE PIECE'S FRAME: its launch point is where her muzzle was relative to the piece when the flight began, carried along with the piece's
+    // CURRENT position (so a scene that drifts with the piece, the mother and her all at orbital speed, never leaves the net behind), and it moves
+    // on from there at the launch speed along the aim plus her velocity relative to the piece (never the piece's own drift), on the piece's clock
+    // (her world seconds), not the ceremony-scaled net clock. Everyone else's net is dragged as before.
+    const freeTgt = this.targetDebris && this.targetDebris._scenePosition;
+    if (anchor && freeTgt && this._matchedFly && this._sourceArm && typeof this._sourceArm.getSpinMatchVelocityMps === 'function') {
+      if (!this._freeOffScene) {
+        const v = this._sourceArm.getSpinMatchVelocityMps(new THREE.Vector3());
+        if (v) { this._freeOffScene = anchor.clone().sub(freeTgt); this._freeVelMps = v; this._freeT = 0; }
+        else this._matchedFly = false;
+      }
+      if (this._freeOffScene) {
+        this._freeT += typeof this._sourceArm.spinMatchWorldS === 'function' ? this._sourceArm.spinMatchWorldS(this._rawDt) : this._rawDt;
+        if (!this._freeAnchor) this._freeAnchor = new THREE.Vector3();
+        this._freeAnchor.set(
+          freeTgt.x + this._freeOffScene.x + this._freeVelMps.x * this._freeT * M_NET,
+          freeTgt.y + this._freeOffScene.y + this._freeVelMps.y * this._freeT * M_NET,
+          freeTgt.z + this._freeOffScene.z + this._freeVelMps.z * this._freeT * M_NET);
+        this._freeOffM = { x: (this._freeAnchor.x - anchor.x) / M_NET, y: (this._freeAnchor.y - anchor.y) / M_NET, z: (this._freeAnchor.z - anchor.z) / M_NET };   // metres from her live muzzle, frozen at contact
+        anchor = this._freeAnchor;
+      }
+    }
     if (anchor) {
       this.position.x = anchor.x / M_NET + this.launchDirection.x * this.distanceTraveled;
       this.position.y = anchor.y / M_NET + this.launchDirection.y * this.distanceTraveled;
@@ -2654,7 +2682,7 @@ export class NetProjectile {
       roughness:       this.targetDebris?.surfaceRoughness || 1.0,
       // A high-tumble target sheds the net: detumble it first (mother laser).
       targetTumbleRate: Constants.isFeatureEnabled('LASER_DESPIN')
-        ? (this.targetDebris?.tumbleRate ?? null)
+        ? (relativeSpinRad(this.targetDebris, this._sourceArm ? this._sourceArm.id : undefined) ?? null)   // relative to the daughter circling it in step (lane M, M-d); the mother's net has no source arm: the true spin
         : null,
     };
 
@@ -5022,6 +5050,8 @@ export class CaptureNetSystem {
     });
 
     this.activeNets.push(net);
+    // A daughter circling the piece in step (lane M, Debris 4 M fix N4): the net flies free with her velocity added (`_updateFlight`)
+    if (arm._spinMatch) net._matchedFly = true;
 
     const remaining = (typeof arm.getNetInventory === 'function') ? arm.getNetInventory() : 0;
 
