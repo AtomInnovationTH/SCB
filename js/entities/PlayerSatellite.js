@@ -5302,10 +5302,11 @@ export class PlayerSatellite extends THREE.Group {
    * in `_updateFlower` reads them), then the radiator driver, then the ball pointing (it reads the rotations the driver just set,
    * so the mirror axis is exact this frame, not one frame behind a slewing radiator).
    * @param {number} dt real seconds
+   * @param {number} [gameDt] game seconds of the frame (the sun-oven lids swing on it); missing = `dt`
    */
-  _stepFlowerAndOvens(dt) {
+  _stepFlowerAndOvens(dt, gameDt) {
     const balls = this.sunOvenBalls;
-    if (balls) balls.update(dt);
+    if (balls) balls.update(dt, gameDt);
     this._updateFlower(dt);
     if (balls) balls.aim();
   }
@@ -6816,7 +6817,7 @@ export class PlayerSatellite extends THREE.Group {
     this._animateScanFlash(dt);
     this._updateRcsPuffs(dt);
     this._updateStruts(dt);
-    this._stepFlowerAndOvens(dt);
+    this._stepFlowerAndOvens(dt, dtWorld);
 
     if (Math.random() < 0.02) {
       const currentFuel = this._resourceSystem

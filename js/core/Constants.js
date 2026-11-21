@@ -1114,6 +1114,26 @@ export const Constants = {
     CANISTER_SIDE: [-1, 1, -1, 1],        // [m] sign of y per tip
     MAST_R_M: 0.02,                 // [d] receiver mast
     SLEEVE_R_M: 0.3,                // [d] 0.6 m loading sleeve at the cap vertex
+    // Furnace 3 (plan furnace-2 step 2, DECISIONS §82): the per-tip tools and the foil lid, drawn only (no melt change). Sizes are the
+    // coordinator's (no source gives them); the owner judges the look. Frame: the ball's `rot` group, +Z the mirror axis, the aperture on it
+    // at APERTURE_FROM_CENTRE_M; the mast stands at +x, the lid folds out to -x, the plate to -y, the cable runs on the +x/+y side.
+    LID_D_M: 0.13,                  // [d] the 5-layer foil door over the aperture (research: solar-furnace-options.md :81, :121)
+    LID_T_M: 0.003,                 // [d] its thickness
+    LID_HINGE_Z_M: 0.6025,          // [d] hinge height: the shut lid's underside (z 0.601) clears an in-place plate (top z 0.598) by 3 mm
+    LID_OPEN_DEG: 188,              // [m] fold angle of the open lid: it swings UP and over, 0 = shut, 180 = flat outward, 188 = 8 deg past flat, folded down toward the receiver's shoulder. tmp/furnace3/probe-angles.mjs: cone half-angle 80.83 deg; the lid is outside it by the 2 deg margin from 186 deg (the hinge sits 10.5 mm over the aperture, so a flat lid is still just inside); 188 leaves 0.4 deg to spare and 17.7 mm to the receiver
+    LID_SWING_S: 2,                 // [d] game seconds for the lid to shut or open (an eclipse is about 2 s at the trip's 100x; true to life)
+    PLATE_D_M: 0.12,                // [d] the swap-in plate of the steel tip: a disc with a 2 cm hole over the aperture
+    PLATE_T_M: 0.004,               // [d]
+    PLATE_HOLE_D_M: 0.02,           // [d] research :81 "swap-in 2 cm plate"
+    PLATE_Z_M: 0.596,               // [d] the plate's mid-thickness and hinge height: bottom z 0.594 (2 mm proud of the aperture disc), top z 0.598
+    PLATE_OUT_DEG: 180,             // [m] fold angle of the parked plate about its -y rim (0 = in place, 180 = flat outward): the same probe, outside the cone by 2 deg past the margin, 9.9 mm off the receiver
+    PLATE_SWING_S: 2,               // [d] game seconds to swap the plate in or out (only while the lid is fully open)
+    HINGE_PIN_R_M: 0.003,           // [d] hinge posts and barrels of the lid and the plate
+    POT_D_M: 0.30,                  // [d] the pot of the titanium tip, gold foil, on the ball's axis: research :90 "closed induction pot in a 0.3 m receiver"
+    POT_H_M: 0.25,                  // [d] its centre is the receiver's sun-side pole: the top half inside the receiver, the rest out on the sun side
+    COIL_R_M: 0.157,                // [d] copper coil band round the pot's visible part (centre line radius)
+    COIL_TUBE_R_M: 0.008,           // [d]
+    CABLE_D_M: 0.005,               // [d] the pot's power cable: from the pot's side wall just above its base round the receiver to the mast, along it to the film
   },
 
   // Daughter→furnace transfer (park-the-catch delivery; ARCHITECTURE.md, Captured-debris lifecycle). A parked

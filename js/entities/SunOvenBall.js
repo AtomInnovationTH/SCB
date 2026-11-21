@@ -32,9 +32,9 @@
  * y tangential, z in-plane perpendicular = "ef", nose-ward at radiator 90 deg), scene units (positions x M).
  * Names start with `FlowerStrut` so `_flowerFold.js` classes them as radiator parts.
  *
- * Update order (`PlayerSatellite._stepFlowerAndOvens`, called from `update`): `sunOvenBalls.update(dt)` runs BEFORE
+ * Update order (`PlayerSatellite._stepFlowerAndOvens`, called from `update`): `sunOvenBalls.update(dt, gameDt)` runs BEFORE
  * `_updateFlower(dt)` (the 88 deg gate needs this frame's states), then `sunOvenBalls.aim()` runs AFTER it (pointing
- * uses this frame's radiator angle); dt is real seconds.
+ * uses this frame's radiator angle); dt is real seconds, gameDt (the frame's game seconds, a missing value = dt) drives the lid and the plate.
  */
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
@@ -344,6 +344,117 @@ export class SunOvenBalls {
     receiver.rotation.x = Math.PI;
     rot.add(receiver);
 
+    // --- Furnace 3: the tip's tool and the foil lid (drawn only; the melt is unchanged). Read from the tool table, not imported from BigMelt ---
+    const tool = (Constants.BIG_MELT && Constants.BIG_MELT.TOOLS && Constants.BIG_MELT.TOOLS.TIP_TOOL[i]) || 'ball';
+    const pinR = C.HINGE_PIN_R_M;
+    const lidR = C.LID_D_M / 2;
+    const foilMat = () => mat(new THREE.MeshStandardMaterial({ color: 0xdfe4ea, metalness: 0.95, roughness: 0.22, side: THREE.DoubleSide }));
+    const steelMat = () => mat(new THREE.MeshStandardMaterial({ color: 0x7d838c, metalness: 0.8, roughness: 0.4 }));
+    const recSurfaceZ = (r) => recCz + Math.sqrt(Math.max(0, recR * recR - r * r));       // the receiver's mirror-side surface at distance r from the axis
+    /** a post along Z from the receiver's surface (sunk 3 mm) up to z1, at (x, y) */
+    const post = (name, x, y, z1) => {
+      const z0 = recSurfaceZ(Math.hypot(x, y)) - 0.003;
+      const m = own(new THREE.Mesh(geo(new THREE.CylinderGeometry(pinR * M, pinR * M, (z1 - z0) * M, 16)), steelMat()));
+      m.rotation.x = Math.PI / 2;
+      m.position.set(x * M, y * M, ((z0 + z1) / 2) * M);
+      m.name = `FlowerStrutSunOven${name}_${i}`;
+      m.renderOrder = RO.SPACECRAFT_OPAQUE;
+      rot.add(m);
+      return m;
+    };
+
+    // lid: a 0.13 m, 3 mm foil disc on a hinge at its -x rim (axis along y), raised so the shut lid clears a plate that is in
+    const lidHinge = own(new THREE.Group());
+    lidHinge.name = `FlowerStrutSunOvenLidHinge_${i}`;
+    lidHinge.position.set(-lidR * M, 0, C.LID_HINGE_Z_M * M);
+    rot.add(lidHinge);
+    const lidGeo = geo(new THREE.CylinderGeometry(lidR * M, lidR * M, C.LID_T_M * M, 48));
+    lidGeo.rotateX(Math.PI / 2);                                       // cylinder Y -> Z: a flat disc
+    const lid = own(new THREE.Mesh(lidGeo, foilMat()));
+    lid.position.set(lidR * M, 0, 0);
+    lid.name = `FlowerStrutSunOvenLid_${i}`;
+    lid.renderOrder = RO.SPACECRAFT_OPAQUE;
+    lidHinge.add(lid);
+    post('LidPost', -lidR - 0.006, 0, C.LID_HINGE_Z_M);        // beside the hinge line, 3 mm clear of the lid's rim (a post at the rim shares a facet plane with it: z-fight)
+
+    let plate = null, plateHinge = null, plateHole = null, plateArm = null;
+    let pot = null, coil = null, cable = null;
+    if (tool === 'plate') {
+      // plate: a 0.12 m, 4 mm grey disc with a 2 cm hole on a hinge at its -y rim (axis along x): in = flat over the aperture, 2 mm proud of it
+      const pr = C.PLATE_D_M / 2;
+      plateHinge = own(new THREE.Group());
+      plateHinge.name = `FlowerStrutSunOvenPlateHinge_${i}`;
+      plateHinge.position.set(0, -pr * M, C.PLATE_Z_M * M);
+      rot.add(plateHinge);
+      const shape = new THREE.Shape();
+      shape.absarc(0, 0, pr, 0, Math.PI * 2, false);
+      const hole = new THREE.Path();
+      hole.absarc(0, 0, C.PLATE_HOLE_D_M / 2, 0, Math.PI * 2, true);
+      shape.holes.push(hole);
+      const plateGeo = geo(new THREE.ExtrudeGeometry(shape, { depth: C.PLATE_T_M, bevelEnabled: false, curveSegments: 32 }));
+      plateGeo.translate(0, pr, -C.PLATE_T_M / 2);
+      plateGeo.scale(M, M, M);
+      plate = own(new THREE.Mesh(plateGeo, steelMat()));
+      plate.name = `FlowerStrutSunOvenPlate_${i}`;
+      plate.renderOrder = RO.SPACECRAFT_OPAQUE;
+      plateHinge.add(plate);
+      // the hole, drawn dark like the aperture; it carries the glow while the plate is in
+      plateHole = own(new THREE.Mesh(geo(new THREE.CircleGeometry(C.PLATE_HOLE_D_M / 2 * M, 32)), mat(new THREE.MeshStandardMaterial({
+        color: 0x20140c, metalness: 0.4, roughness: 0.6, emissive: new THREE.Color(0xff5a1a), emissiveIntensity: 0,
+      }))));
+      plateHole.position.set(0, pr * M, -0.0015 * M);
+      plateHole.name = `FlowerStrutSunOvenPlateHole_${i}`;
+      plateHole.renderOrder = RO.SPACECRAFT_DETAIL;
+      plateHinge.add(plateHole);
+      // the hinge barrel (along x) and its post
+      const armGeo = geo(new THREE.CylinderGeometry(pinR * M, pinR * M, 0.04 * M, 16));
+      plateArm = own(new THREE.Mesh(armGeo, steelMat()));
+      plateArm.rotation.z = Math.PI / 2;                               // cylinder Y -> x
+      plateArm.name = `FlowerStrutSunOvenPlateArm_${i}`;
+      plateArm.renderOrder = RO.SPACECRAFT_OPAQUE;
+      plateHinge.add(plateArm);
+      post('PlateMount', 0, -pr, C.PLATE_Z_M);
+    } else if (tool === 'pot') {
+      // pot: a gold-foil cylinder on the axis, centred on the receiver's sun-side pole: its top half inside the receiver, the rest out on the sun
+      // side (-Z) within the receiver's own shadow (radius 0.30 m of the axis): it blocks no sunlight the receiver does not
+      const potZ = recCz - recR;
+      const potR = C.POT_D_M / 2;
+      const potGeo = geo(new THREE.CylinderGeometry(potR * M, potR * M, C.POT_H_M * M, 64));
+      potGeo.rotateX(Math.PI / 2);
+      pot = own(new THREE.Mesh(potGeo, mat(new THREE.MeshStandardMaterial({ color: 0xc9a64a, metalness: 0.85, roughness: 0.32 }))));
+      pot.position.set(0, 0, potZ * M);
+      pot.name = `FlowerStrutSunOvenPot_${i}`;
+      pot.renderOrder = RO.SPACECRAFT_OPAQUE;
+      rot.add(pot);
+      // the coil: a dull copper band round the pot's visible part; it glows orange-red while the pot melts
+      coil = own(new THREE.Mesh(geo(new THREE.TorusGeometry(C.COIL_R_M * M, C.COIL_TUBE_R_M * M, 8, 64)), mat(new THREE.MeshStandardMaterial({
+        color: 0x9a5a34, metalness: 0.7, roughness: 0.5, emissive: new THREE.Color(0xff3a0c), emissiveIntensity: 0,
+      }))));
+      coil.position.set(0, 0, (potZ - 0.05) * M);
+      coil.name = `FlowerStrutSunOvenCoil_${i}`;
+      coil.renderOrder = RO.SPACECRAFT_DETAIL;
+      rot.add(coil);
+      // the cable: a 5 mm dark tube that leaves the pot's side wall just above its base (start sunk 5 mm into the wall, so it is plainly attached),
+      // out past the coil, up the receiver's +x/+y side (7 mm off its skin) to the mast's foot, then up the mast to the film
+      const base = potZ - C.POT_H_M / 2;
+      const rho = recR + 0.007;
+      const pts = [[0.1025, 0.1025, base + 0.015], [0.1308, 0.1308, base + 0.015], [0.1308, 0.1308, -0.05]];
+      const b0 = Math.asin(0.185 / rho);                               // the arc starts where it is 0.185 m off the axis (clear of the pot's 0.15 and the coil's 0.165)
+      const b1 = degToRad(28);
+      for (let k = 0; k <= 24; k++) {                                  // 24 steps: the chord between two samples sags 0.3 mm toward the receiver
+        const t = k / 24, beta = Math.PI - b0 + (b1 - (Math.PI - b0)) * t, phi = degToRad(45 - 37 * t);
+        pts.push([rho * Math.sin(beta) * Math.cos(phi), rho * Math.sin(beta) * Math.sin(phi), recCz + rho * Math.cos(beta)]);
+      }
+      const hugX = mastX + (C.MAST_R_M + C.CABLE_D_M / 2) * Math.cos(degToRad(55)), hugY = (C.MAST_R_M + C.CABLE_D_M / 2) * Math.sin(degToRad(55));
+      pts.push([hugX, hugY, 0.6], [hugX, hugY, 0.975]);
+      const curve = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(p[0] * M, p[1] * M, p[2] * M)), false, 'centripetal');
+      cable = own(new THREE.Mesh(geo(new THREE.TubeGeometry(curve, 96, C.CABLE_D_M / 2 * M, 6, false)),
+        mat(new THREE.MeshStandardMaterial({ color: 0x202226, metalness: 0.1, roughness: 0.7 }))));
+      cable.name = `FlowerStrutSunOvenCable_${i}`;
+      cable.renderOrder = RO.SPACECRAFT_DETAIL;
+      rot.add(cable);
+    }
+
     // the ball's largest outer radius about its centre, read from the built meshes (the ring and the sleeve reach 1.0115 m, past the film's
     // 1.000 m): the envelope `fits` clears the held pieces with. Turning the ball about its centre never changes it.
     ball.updateMatrixWorld(true);
@@ -367,8 +478,11 @@ export class SunOvenBalls {
       state: 'stowed', t: 0, k: 0, kFold: 0, want: false, owner: null, gasWarned: false, glow: 0,
       d, p0, a0, qBase, qRing0, centre, anchor, azimuth: 0, aimed: false,
       ball, rot, ring, film, mirror, sleeve, recBody, mast, aperture, receiver, head, can,
+      tool, lidHinge, lid, plate, plateHinge, plateHole, plateArm, pot, coil, cable,
+      lidK: 0, plateK: 0, metal: null, toolsInit: false,
       geos, mats,
     };
+    this._poseTools(this._st[i]);
   }
 
   /** @private */
@@ -450,12 +564,93 @@ export class SunOvenBalls {
     return s ? s.receiver : null;
   }
 
-  /** Aperture glow k 0..1: 1 = aluminium at 933 K, a dull red-orange. Only visible while the ball is up. */
+  /** Aperture glow k 0..1: 1 = aluminium at 933 K, a dull red-orange. Only visible while the ball is up. A steel melt on the plate tip lights the plate's hole, a steel or titanium melt on the pot tip its coil (`setMeltMetal`). */
   setReceiverGlow(i, k) {
     const s = this._st[i];
     if (!s) return;
     s.glow = Math.min(1, Math.max(0, Number.isFinite(k) ? k : 0));
-    s.aperture.material.emissiveIntensity = 1.6 * s.glow;
+    this._applyGlow(s);
+  }
+
+  /**
+   * The metal melting on tip i now (null = nothing): the plate tip swings its plate in for 'steel' (once the lid is open), the glow of a steel or
+   * titanium melt moves to the pot's coil. The melt itself is unchanged (step 1): only the drawing follows.
+   * @param {number} i tip index
+   * @param {string|null} metal the piece's material ('steel', 'titanium', 'aluminum', ...)
+   */
+  setMeltMetal(i, metal) {
+    const s = this._st[i];
+    if (!s) return;
+    s.metal = metal || null;
+    this._applyGlow(s);
+  }
+
+  /** @returns {string|null} the metal set last by `setMeltMetal` */
+  meltMetalOf(i) {
+    const s = this._st[i];
+    return s ? s.metal : null;
+  }
+
+  /** @returns {number} lid i's opening: 0 shut .. 1 open (a missing station: 1) */
+  lidOpenK(i) {
+    const s = this._st[i];
+    return s ? s.lidK : 1;
+  }
+
+  /** @returns {number} the plate of tip i: 0 out (parked) .. 1 in place over the aperture (no plate or a missing station: 0) */
+  plateInK(i) {
+    const s = this._st[i];
+    return s ? s.plateK : 0;
+  }
+
+  /** @private the glow lands on the part that holds the melt: the aperture, the plate's hole (plate in), or the pot's coil */
+  _applyGlow(s) {
+    const g = s.glow;
+    let ap = g, hole = 0, coil = 0;
+    if (s.tool === 'plate' && s.metal === 'steel') { ap = 0; hole = g * s.plateK; }
+    else if (s.tool === 'pot' && (s.metal === 'steel' || s.metal === 'titanium')) { ap = 0; coil = g; }
+    s.aperture.material.emissiveIntensity = 1.6 * ap;
+    if (s.plateHole) s.plateHole.material.emissiveIntensity = 1.6 * hole;
+    if (s.coil) s.coil.material.emissiveIntensity = 1.4 * coil;
+  }
+
+  /** @private turn the lid and the plate to their states (`lidK`, `plateK`), eased */
+  _poseTools(s) {
+    const C = Constants.SUN_OVEN_BALL;
+    s.lidHinge.rotation.y = -degToRad(C.LID_OPEN_DEG) * smoothstep01(s.lidK);   // negative: the lid's free edge swings UP and over, never down into the receiver
+    if (s.plateHinge) s.plateHinge.rotation.x = degToRad(C.PLATE_OUT_DEG) * (1 - smoothstep01(s.plateK));
+    this._applyGlow(s);
+  }
+
+  /** @private lid and plate to their rest states at once, no swing: lid shut in Earth's shadow and open in sun, plate out */
+  _snapTools(s) {
+    s.lidK = this.ship._inShadow === true ? 0 : 1;
+    s.plateK = 0;
+    s.toolsInit = true;
+    this._poseTools(s);
+  }
+
+  /**
+   * @private one step of the lid (shut in Earth's shadow, open in sun) and the plate (in for a steel melt, once the lid is fully open), in
+   * GAME seconds. A stowed ball (and a station's first step) takes the rest state at once, so a ball that inflates in shadow starts and
+   * stays shut. The lid does not start to shut while the plate is part-way (it would sweep through it).
+   * @param {object} s station
+   * @param {number} g game seconds
+   */
+  _stepTools(s, g) {
+    if (s.state === 'stowed' || !s.toolsInit) { this._snapTools(s); return; }
+    const C = Constants.SUN_OVEN_BALL;
+    const want = this.ship._inShadow === true ? 0 : 1;
+    const plateMid = s.plateK > 0 && s.plateK < 1;
+    const lidWasOpen = s.lidK >= 1;                                    // the plate moves only through a lid that stood fully open when the step began
+    if (want > s.lidK) s.lidK = Math.min(1, s.lidK + g / C.LID_SWING_S);
+    else if (want < s.lidK && !plateMid) s.lidK = Math.max(0, s.lidK - g / C.LID_SWING_S);
+    if (s.plateHinge && lidWasOpen && s.lidK >= 1) {
+      const target = s.metal === 'steel' ? 1 : 0;
+      if (target > s.plateK) s.plateK = Math.min(1, s.plateK + g / C.PLATE_SWING_S);
+      else if (target < s.plateK) s.plateK = Math.max(0, s.plateK - g / C.PLATE_SWING_S);
+    }
+    this._poseTools(s);
   }
 
   /** @returns {number} the receiver glow set last (0..1) */
@@ -477,6 +672,7 @@ export class SunOvenBalls {
       s.want = false; s.gasWarned = false;
       s.state = 'stowed'; s.t = 0;
       this._setK(s, 0);
+      this._snapTools(s);                                  // plate out, lid at the shadow state, at once
     }
   }
 
@@ -484,7 +680,9 @@ export class SunOvenBalls {
   nodesOf(i) {
     const s = this._st[i];
     return s ? { head: s.head, canister: s.can, ball: s.ball, ring: s.ring, film: s.film, mirror: s.mirror, sleeve: s.sleeve,
-      receiverBody: s.recBody, mast: s.mast, aperture: s.aperture, receiver: s.receiver, rot: s.rot } : undefined;
+      receiverBody: s.recBody, mast: s.mast, aperture: s.aperture, receiver: s.receiver, rot: s.rot,
+      lidHinge: s.lidHinge, lid: s.lid, plateHinge: s.plateHinge, plate: s.plate, plateHole: s.plateHole, plateArm: s.plateArm,
+      pot: s.pot, coil: s.coil, cable: s.cable } : undefined;
   }
 
   // ───────────────────────────── fit (plan P34 L3-fix rule 1) ─────────────────────────────
@@ -836,11 +1034,13 @@ export class SunOvenBalls {
    * `_flowerTargetTheta`, `_petalHolds`, `_sunDirWorld`, `_inShadow`, `quaternion`, `resources.coldGas` and
    * `_nonTurnPoolBudget`. Runs before the radiator driver, so the driver sees this frame's states; the pointing is `aim()`, after it.
    * @param {number} dt real seconds
+   * @param {number} [gameDt] game seconds of the frame (the lid and the plate swing on the world clock: the eclipse is game time); a missing value is `dt`
    */
-  update(dt) {
+  update(dt, gameDt) {
     const C = Constants.SUN_OVEN_BALL;
     const ship = this.ship;
     const step = dt > 0 ? dt : 0;
+    const g = gameDt > 0 ? gameDt : (gameDt === undefined || gameDt === null ? step : 0);
     for (const s of this._st) {
       if (!s) continue;
       const theta = typeof ship.petalThetaRad === 'function' ? ship.petalThetaRad(s.az) : ship._flowerThetaRad;
@@ -858,6 +1058,7 @@ export class SunOvenBalls {
         s.t += step;
         if (s.t >= total) { s.state = 'stowed'; s.t = 0; this._setK(s, 0); } else this._setK(s, s.kFold * (1 - smoothstep01(s.t / total)));
       }
+      this._stepTools(s, g);
     }
   }
 

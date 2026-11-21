@@ -2923,6 +2923,12 @@ export class GameFlowManager {
     if (b && typeof b.setReceiverGlow === 'function') b.setReceiverGlow(i, k);
   }
 
+  /** @private Tip `i`'s melting metal for the drawing (`null` = nothing melts): the steel tip swings its plate in, the pot tip lights its coil. A no-op when the tip has no ball or the ball cannot draw it. */
+  _meltMetal(i, metal) {
+    const b = this._ballAt(i);
+    if (b && typeof b.setMeltMetal === 'function') b.setMeltMetal(i, metal);
+  }
+
   /**
    * @private Take a tip's drawing down: its part bag (a ship without balls) and its receiver glow. A real melt's ball stays
    * up and stowed or not as the work decides: only the glow goes out.
@@ -2930,6 +2936,7 @@ export class GameFlowManager {
   _meltClearTip(i) {
     const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
     if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags(i);
+    this._meltMetal(i, null);
     this._meltGlow(i, 0);
   }
 
@@ -2981,6 +2988,7 @@ export class GameFlowManager {
     const b = this._ballAt(i);
     if (!b) { if (tc && typeof tc.unreserve === 'function') tc.unreserve(i); return; }
     b.requestDown(i);
+    this._meltMetal(i, null);
     this._meltGlow(i, 0);
     if (b.stateOf(i) === 'stowed') { if (tc && typeof tc.unreserve === 'function') tc.unreserve(i); return; }   // it never came up (or is already folded)
     if (!this._meltUnreserve) this._meltUnreserve = [];
@@ -3007,6 +3015,7 @@ export class GameFlowManager {
     this._meltLiftSet(false);
     const b = this._balls();
     if (b && typeof b.setReceiverGlow === 'function') for (let i = 0; i < 4; i++) b.setReceiverGlow(i, 0);
+    if (b && typeof b.setMeltMetal === 'function') for (let i = 0; i < 4; i++) b.setMeltMetal(i, null);
   }
 
   /** @private The ship's arm manager (the daughters), or null on a stub. */
@@ -3440,6 +3449,7 @@ export class GameFlowManager {
           // the part is inside the opaque receiver: what shows is its aperture glowing (D3); no bag at the tip, so the
           // tip-bag ceiling never lowers the radiators for it
           const b = this._balls();
+          this._meltMetal(p.tip, d.material);                        // before the glow: the glow lands on the part that holds this metal (plate hole, coil or aperture)
           this._meltGlow(p.tip, typeof b.isWorking !== 'function' || b.isWorking(p.tip) ? 1 : 0);
         } else if (tc && typeof tc.showPartBag === 'function') {
           tc.showPartBag(p.tip, { type: pieceType(d), sizeM: packedSizeM(p.kg), frac: 1 - (t - p.startS) / Math.max(1, p.endS - p.startS) });
@@ -3711,7 +3721,7 @@ export class GameFlowManager {
     if (completed) this._meltAdvance(m, Math.max(0, m.burnShipS - m.pausedS) + 1e-6);   // `planBurn` accepts endS <= burn + 1e-9: a part past the paused schedule is unfinished
     const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
     if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags();
-    for (const i of m.tips) this._meltGlow(i, 0);
+    for (const i of m.tips) { this._meltMetal(i, null); this._meltGlow(i, 0); }
     // a released tip is already waiting for its oven (`requestDown` at its release); the rest are let go now: the oven folds and
     // the tip stays reserved until it is stowed (free at once without ovens or when the ball never came up). A released tip may be a carry's by now
     for (const i of m.tips) if (!m.released.has(i)) this._meltLetGo(i);
