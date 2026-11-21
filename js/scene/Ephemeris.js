@@ -62,7 +62,7 @@ export function sunEphemeris(date) {
   const declDeg = Math.asin(Math.sin(eps) * Math.sin(lam)) / DEG2RAD;
 
   const subLonEastDeg = norm180(alphaDeg - gmstDeg(d));
-  return { declDeg, subLonEastDeg, eclipticLonDeg: lambdaDeg };
+  return { declDeg, subLonEastDeg, eclipticLonDeg: lambdaDeg, raDeg: norm360(alphaDeg) };
 }
 
 /**
@@ -100,7 +100,26 @@ export function moonEphemeris(date) {
   const elongationDeg = Math.acos(clamped) / DEG2RAD;
   const illuminatedFraction = (1 - clamped) / 2;
 
-  return { declDeg, subLonEastDeg, eclipticLonDeg, eclipticLatDeg, elongationDeg, illuminatedFraction };
+  // Earth-Moon distance: the two largest terms only (Meeus ch. 47: 385001 - 20905 cos M'), good to ~1% (an estimate, not
+  // a measurement; the Moon's drawn size on floor 4 follows it).
+  const distKm = 385001 - 20905 * Math.cos(Mp);
+
+  return { declDeg, subLonEastDeg, eclipticLonDeg, eclipticLatDeg, elongationDeg, illuminatedFraction,
+    raDeg: norm360(alphaDeg), distKm };
+}
+
+/**
+ * Right ascension / declination (degrees) → unit direction in the SKY-DOT frame: the frame `SkyPropagator` (the real-sky dots on
+ * floors 4-5, `ui/RealSkyLayer`) puts its satellites in, which is the game's orbit frame (`keplerianToCartesian`): x = ECI X,
+ * y = the polar axis, z = ECI Y, azimuth atan2(z, x) = RA. NO Earth rotation (no GMST: the dots are inertial in a fixed-Earth scene)
+ * and NOT the Starfield's basis (`raDec2xyz` negates z). Use it for anything drawn among the dots; NOT for geography
+ * (`latLonToUnitVec`).
+ * @param {number} raDeg @param {number} declDeg
+ * @returns {{ x: number, y: number, z: number }} unit vector (plain object)
+ */
+export function raDecToDotFrame(raDeg, declDeg) {
+  const a = raDeg * DEG2RAD, d = declDeg * DEG2RAD;
+  return { x: Math.cos(d) * Math.cos(a), y: Math.sin(d), z: Math.cos(d) * Math.sin(a) };
 }
 
 /**

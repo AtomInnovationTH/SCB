@@ -595,7 +595,7 @@ export class SceneManager {
 
   /**
    * True while the engaged ladder floor is Earth-anchored (floor >= 4): the camera-following star shell is on, and
-   * SunLight puts the Moon and planets camera-relative too (a body 430 u from Earth's centre is up to 1730 u from a camera
+   * SunLight puts the Moon camera-relative too, drawn real, and hides the planets (a body 430 u from Earth's centre is up to 1730 u from a camera
    * 1300 u out, floor 4's outer stop: far past any sane far plane). Same predicate as the setFollowCamera call below.
    */
   isLadderSkyFollowing() {

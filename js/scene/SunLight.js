@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { createLabelTexture } from './labelTexture.js';
-import { sunEphemeris, moonEphemeris, latLonToUnitVec } from './Ephemeris.js';
+import { sunEphemeris, moonEphemeris, latLonToUnitVec, raDecToDotFrame } from './Ephemeris.js';
 import { stagedSunYaw, rotateAboutY, OPENING_SUN_TARGET_DOT } from './sunStaging.js';
 import { bodyByName, ladderBloomBodies } from './bodyCatalog.js';
 import {
@@ -684,6 +684,24 @@ export class SunLight {
     this._labelTmp = new THREE.Vector3();  // per-label offset temp
     this._sunDirView = new THREE.Vector3(); // sun dir in view space (moon shader)
     this._camQuatInv = new THREE.Quaternion(); // inverse camera quat (moon shader)
+
+    // The real Moon on floors 4-5 (owner 2026-11-21, "Hide planets, real Moon"; see _updateMoon / _placeRealMoon).
+    this._skyClock = null;                 // () => the dots' sky date, ms (main.js: realSkyLayer.skyDateMs); null = no real Moon
+    this._moonRealOn = false;              // the Moon is drawn real this frame (follow floors + a clock)
+    this._realSkyMs = NaN;                 // the clock reading the three vectors below were computed for
+    this._moonGeoU = new THREE.Vector3();  // the Moon's geocentric position, scene units, dot frame
+    this._realSunDir = new THREE.Vector3(1, 0, 0); // the real Sun's direction, dot frame (the Moon's lit side)
+    this._rmV = new THREE.Vector3();       // camera -> Moon temp
+    this._rmDir = new THREE.Vector3();     // unit camera -> Moon temp
+    this._moonR0 = 1;                      // the stylized disc's radius at MOON_DIST (set in _createMoon)
+  }
+
+  /**
+   * Hand SunLight the dots' clock (RealSkyLayer.skyDateMs): the real Moon on floors 4-5 is where the ephemeris says at that date.
+   * @param {(function(): number)|null} fn returns the sky date in ms (NaN = unknown)
+   */
+  setSkyClock(fn) {
+    this._skyClock = typeof fn === 'function' ? fn : null;
   }
 
   _createSunDisc(sceneManager) {
@@ -790,6 +808,7 @@ export class SunLight {
       maskFraction: Constants.MOON_MASK_FRACTION,
     });
     const moonGeoBuf = new THREE.CircleGeometry(moonGeo.radius, 32);
+    this._moonR0 = moonGeo.radius;
     this._moonMaterial = new THREE.ShaderMaterial({
       uniforms: {
         uMap: { value: moonTexture },
@@ -850,7 +869,7 @@ export class SunLight {
     this.moonMesh.onBeforeRender = (renderer, scene, camera) => {
       this.moonMesh.quaternion.copy(camera.quaternion);
       this._camQuatInv.copy(camera.quaternion).invert();
-      this._sunDirView.copy(this.sunDirection).applyQuaternion(this._camQuatInv);
+      this._sunDirView.copy(this._moonRealOn ? this._realSunDir : this.sunDirection).applyQuaternion(this._camQuatInv);
       this._moonMaterial.uniforms.uSunDirView.value.copy(this._sunDirView);
     };
     this.scene.add(this.moonMesh);
@@ -1028,7 +1047,7 @@ export class SunLight {
     // (no parallax toward Earth); the disc breaches the limb exactly when the
     // ocean-glint NdotL gate turns on. Origin-relative when the camera is null
     // (menu/first frames); occlusion then uses _inShadow. Only the sun is
-    // special-cased: moon/planets stay origin-centered.
+    // special-cased: moon/planets stay origin-centered (floors 1-3; on 4-5 the Moon rides the camera, real, and the planets are hidden).
     const sunPos = this.camera
       ? this._bodyPos.copy(this.sunDirection).multiplyScalar(Constants.SUN_DIST).add(this.camera.position)
       : this._bodyPos.copy(this.sunDirection).multiplyScalar(Constants.SUN_DIST);
@@ -1102,6 +1121,18 @@ export class SunLight {
   }
 
   _updateMoon() {
+    // FLOORS 4-5 (owner 2026-11-21, "Hide planets, real Moon"): the Moon is drawn REAL (real place, size, speed, phase); see
+    // _placeRealMoon. Everywhere else (floors 1-3, no clock) the stylized Moon below, unchanged.
+    const follow = this._followsCamera();
+    this._moonRealOn = !!(follow && this._refreshRealSky());
+    if (this._moonRealOn) {
+      recordFollow(this, false, [this.moonMesh, this._moonDepthMask, this._moonLabel]);   // placed from the camera each frame, not as a fixed offset
+      this._placeRealMoon();
+      return;
+    }
+    if (this.moonMesh.scale.x !== 1) this.moonMesh.scale.setScalar(1);
+    if (this._moonDepthMask && this._moonDepthMask.scale.x !== 1) this._moonDepthMask.scale.setScalar(1);
+
     // Real elongation + declination captured at startup (_seedSkyFromClock) ride
     // the sun's fast cycle, so the phase is constant all session. Near full moon
     // the elongation approaches 180° (opposite the sun): correct, the Earth
@@ -1119,8 +1150,7 @@ export class SunLight {
     // Origin-centered (not camera-relative like the sun); parallax is negligible. On the Earth-anchored floors (4, 5) the
     // camera is up to 1300 u out (500 u before 2026-11-21) and the disc 430 u from Earth's centre would sit up to 1730 u from it: past the far plane on
     // the far side (the disc vanished along a line across the view, owner 2026-11-19), so there it follows the camera, as
-    // the Sun and the star shell do.
-    const follow = this._followsCamera();
+    // the Sun and the star shell do. (With a sky clock, floors 4-5 take the real-Moon branch above; this follow path is the fallback without one.)
     const moonPos = this._bodyPos.copy(moonDir).multiplyScalar(Constants.MOON_DIST);
     if (follow) moonPos.add(this.camera.position);
     this.moonMesh.position.copy(moonPos);
@@ -1158,6 +1188,83 @@ export class SunLight {
 
     this._moonMaterial.uniforms.uOpacity.value = opacity;
     recordFollow(this, follow, [this.moonMesh, this._moonDepthMask, this._moonLabel]);
+  }
+
+  /**
+   * The real Moon's and Sun's places at the dots' sky date (floors 4-5), in the SKY-DOT frame (Ephemeris.raDecToDotFrame: the frame
+   * SkyPropagator puts the satellites in; no GMST), into `_moonGeoU` (geocentric, scene units) and `_realSunDir`. Recomputed only when the
+   * clock reading changes (a held clock costs nothing). The time moves exactly as the dots do (same world clock, so the floor-4 time slider
+   * speeds the Moon up too).
+   * @returns {boolean} false without a clock or a date: the stylized Moon stays
+   */
+  _refreshRealSky() {
+    const clock = this._skyClock;
+    if (!clock) return false;
+    const ms = clock();
+    if (!Number.isFinite(ms)) return false;
+    if (ms !== this._realSkyMs) {
+      this._realSkyMs = ms;
+      const date = new Date(ms);
+      const moon = moonEphemeris(date);
+      const sun = sunEphemeris(date);
+      const m = raDecToDotFrame(moon.raDeg, moon.declDeg);
+      this._moonGeoU.set(m.x, m.y, m.z).multiplyScalar(moon.distKm * Constants.SCENE_SCALE);
+      const s = raDecToDotFrame(sun.raDeg, sun.declDeg);
+      this._realSunDir.set(s.x, s.y, s.z);
+    }
+    return true;
+  }
+
+  /**
+   * Floors 4-5: draw the Moon at its TRUE direction from the camera, real size. The disc stays MOON_DIST (430 u) from the camera, inside
+   * the far plane (2000) at every zoom, along the camera -> real-Moon ray (so the direction and the parallax are the real ones; up to
+   * ~20° of shift from 70 u to 1300 u out), scaled so its angular radius equals asin(1737.4 km / true camera-Moon distance): about 0.26°,
+   * where the stylized disc is 0.75° (Sun parity, 1.49° across). The lit side comes from the real Sun direction (`_realSunDir`, via the
+   * shader's view-space uniform). Called from _updateMoon and again from syncFollowToCamera, after the camera's move of this frame.
+   *
+   * Hiding: Earth hides it as for every body (CPU test: the shader has no depth test), but with the Moon's own angular radius added, so no
+   * part of the disc is ever drawn over Earth, and a short limb fade (at most 1°). Drawing order: the disc has no depth test and sits in
+   * the default transparent order, so the dots (SPACECRAFT_TRANSPARENT) draw after it, over it; its depth mask (398 u, stars only)
+   * is scaled with it (it can hide a dot farther than 398 u from the camera inside its ~0.24° disc).
+   */
+  _placeRealMoon() {
+    const cam = this.camera.position;
+    const v = this._rmV.subVectors(this._moonGeoU, cam);
+    const d = v.length();
+    const dir = this._rmDir.copy(v).multiplyScalar(1 / d);
+
+    // Angular radius of the real Moon from here, and the disc's scale against the stylized disc built at MOON_DIST.
+    const realRad = Math.asin(Math.min(1, (MOON_RADIUS_KM * Constants.SCENE_SCALE) / d));
+    const s = (Constants.MOON_DIST * Math.tan(realRad)) / this._moonR0;
+    const moonPos = this._bodyPos.copy(dir).multiplyScalar(Constants.MOON_DIST).add(cam);
+    this.moonMesh.position.copy(moonPos);
+    this.moonMesh.scale.setScalar(s);
+    if (this._moonDepthMask) {
+      this._moonDepthMask.position.copy(dir).multiplyScalar(DEPTH_MASK_DIST).add(cam);
+      this._moonDepthMask.scale.setScalar(s);
+    }
+
+    // Name label: camera-relative "below", one label gap under the (small) disc.
+    if (this._moonLabel) {
+      const down = this._downTmp.set(0, -1, 0).applyQuaternion(this.camera.quaternion);
+      const gap = Constants.MOON_LABEL_OFFSET - this._moonR0;   // the stylized gap under its disc's edge
+      this._moonLabel.position.copy(moonPos).add(down.multiplyScalar(this._moonR0 * s + gap));
+    }
+
+    // Earth hides it: angle between the Earth-centre direction and the Moon's, against Earth's angular radius + the Moon's.
+    let vis = 1;
+    const camDist = cam.length();
+    if (camDist > Constants.EARTH_RADIUS) {
+      const earthRad = Math.asin(Constants.EARTH_RADIUS / camDist);
+      const toEarth = this._occToEarth.copy(cam).multiplyScalar(-1 / camDist);
+      const ang = Math.acos(Math.max(-1, Math.min(1, toEarth.dot(dir))));
+      const fadeW = Math.min(0.3 * earthRad, DEG2RAD);
+      vis = clamp((ang - (earthRad + realRad)) / fadeW, 0, 1);
+    }
+    this.moonMesh.visible = vis > 0;
+    if (this._moonDepthMask) this._moonDepthMask.visible = vis > 0;
+    if (this._moonLabel) this._moonLabel.visible = vis > 0 && !this._labelsHidden;
+    this._moonMaterial.uniforms.uOpacity.value = Constants.MOON_BASE_OPACITY * vis;
   }
 
   /**
@@ -1247,6 +1354,19 @@ export class SunLight {
   _updatePlanets() {
     if (!this._planets) return;
 
+    // Floors 4-5: the planets are not drawn at all, discs, halos and name labels (owner 2026-11-21, "Hide planets, real Moon": the
+    // stylized planets sit at fixed made-up angles, not where the real ones are). Below floor 4 they show as before.
+    if (this._followsCamera()) {
+      for (const p of this._planets) {
+        p.disc.visible = false;
+        p.glow.visible = false;
+        p.label.visible = false;
+        if (p.depthMask) p.depthMask.visible = false;
+        recordFollow(this, false, [p.disc, p.glow, p.label, p.depthMask]);
+      }
+      return;
+    }
+
     // Planets sit on the ecliptic (XZ plane) at fixed angles from the sun.
     const sunAngle = Math.atan2(this.sunDirection.z, this.sunDirection.x);
     const _pos = this._bodyPos;
@@ -1288,12 +1408,15 @@ export class SunLight {
 
   /**
    * Re-apply the camera-following bodies' offsets to the camera's pose of THIS frame: call it right after
-   * CameraSystem.update (SunLight.update ran earlier in the frame, so the Moon and planets would lag the moving camera by a
-   * frame). A no-op off floors 4-5, without a camera, or before the first update.
+   * CameraSystem.update (SunLight.update ran earlier in the frame, so a camera-following body would lag the moving camera by a
+   * frame). On floors 4-5 the real Moon is placed again from the camera's final pose (its direction has parallax); the planets are
+   * hidden there. A no-op off floors 4-5, without a camera, or before the first update.
    */
   syncFollowToCamera() {
+    if (!this.camera || !this._followsCamera()) return;
+    if (this._moonRealOn) this._placeRealMoon();   // the real Moon's direction depends on where the camera is (parallax): place it again
     const map = this._followOff;
-    if (!map || !map.size || !this.camera || !this._followsCamera()) return;
+    if (!map || !map.size) return;
     const cam = this.camera.position;
     for (const [obj, off] of map) obj.position.copy(off).add(cam);
   }
@@ -1373,8 +1496,9 @@ export class SunLight {
   }
 
   /**
-   * True while the camera is on an Earth-anchored ladder floor (4, 5): the Moon and planets then sit camera-relative like
-   * the Sun and the star shell (SceneManager.isLadderSkyFollowing), so no far plane cuts them. False without a scene
+   * True while the camera is on an Earth-anchored ladder floor (4, 5): the Moon then sits camera-relative like
+   * the Sun and the star shell (SceneManager.isLadderSkyFollowing), so no far plane cuts it, and is drawn real (_placeRealMoon);
+   * the planets are hidden (owner 2026-11-21). False without a scene
    * manager (tests) or off the ladder: origin-centred as always.
    */
   _followsCamera() {

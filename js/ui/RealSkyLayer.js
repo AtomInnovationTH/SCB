@@ -444,6 +444,17 @@ export class RealSkyLayer {
     return (base + this._sumS * 1000 - this._snapshotMs) / 1000;
   }
 
+  /**
+   * The sky's clock as a date, ms: exactly the moment `skySeconds()` counts from the snapshot (the game date + the game seconds since
+   * it last moved). The real Moon on floors 4-5 (SunLight) reads it so it is where the dots' own clock says. NaN while no date is known.
+   */
+  skyDateMs() {
+    this._syncDate();
+    const d = this._dateMs();
+    const base = Number.isFinite(d) ? d : this._snapshotMs;
+    return base + this._sumS * 1000;
+  }
+
   /** The credit line; after a year the snapshot is called old. Without the CelesTrak status join it does not claim "Working / not working: CelesTrak." */
   creditLine() {
     if (!this._sky) return '';

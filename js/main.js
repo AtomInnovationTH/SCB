@@ -2053,6 +2053,8 @@ async function init() {
     onFlyTo: (dir) => (cameraSystem ? cameraSystem.ladderTurnEarthDir(dir, { owesReturn: true }) : false),
     hideWhileActive: activeSatellites ? [activeSatellites.group] : [],
   });
+  // The real Moon on floors 4-5 (owner 2026-11-21): SunLight places it from the ephemeris at the dots' own sky time.
+  if (sunLight && typeof sunLight.setSkyClock === 'function') sunLight.setSkyClock(() => realSkyLayer.skyDateMs());
   navcomFloor = new NavcomFloor({
     realSky: realSkyLayer,
     simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // plain trip lines at the simple level
@@ -7331,7 +7333,7 @@ function updateCamera(dt, timestamp) {
 
   // Update the camera system
   cameraSystem.update(dt, playerPos, playerVel, playerQuat);
-  // Floors 4-5: the Moon and planets ride the camera; SunLight placed them before the camera moved this frame, so put them on
+  // Floors 4-5: the real Moon rides the camera (planets hidden); SunLight placed it before the camera moved this frame, so put it on
   // the camera's final pose (no one-frame lag while she zooms or drags).
   if (sunLight && typeof sunLight.syncFollowToCamera === 'function') sunLight.syncFollowToCamera();
 

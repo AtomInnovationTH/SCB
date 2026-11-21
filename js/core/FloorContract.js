@@ -248,8 +248,10 @@ export const FloorContract = {
       // The range's top is derived (F4_TOP_U = 2177 u) so z01 0.85 lands exactly on the stop.
       // Until 2026-11-19 the range was [70, 255] (free zone 85..210 u); `entryZ01` below keeps the arrivals where they were.
       // far 2000 (= floor 5's): the farthest thing drawn from the camera at 1300 u is a GEO-shell dot on the far side
-      // (421.6 + 1300 = 1721.6 u); the Moon and planets follow the camera on this floor (SunLight), as the star shell does, so
-      // their offset from the camera does not grow with the zoom. `frameMaxU` is the NAVCOM
+      // (421.6 + 1300 = 1721.6 u); the Moon rides the camera on this floor (SunLight), as the star shell does, so
+      // its offset from the camera does not grow with the zoom. Owner 2026-11-21 ("Hide planets, real Moon"): the Moon is drawn REAL on
+      // floors 4-5 (real place, size and speed at the dots' sky time, still 430 u from the camera along the true camera-Moon ray, scaled
+      // to the real angular size) and the planets are not drawn. `frameMaxU` is the NAVCOM
       // framing's own limit: the old free zone's top (70 * (255/70)^0.85 = 210.1 u), unchanged by the longer range.
       // The wheel feel is the 2026-11-18 one (fix round 1, Z3): the ladder moves z01 (a fraction of the range) per notch, so
       // `wheelStepScale` (old span 0.561 decades / new span 1.493, 0.376) keeps every notch the old 1.053x, and `wallLoFrac`
