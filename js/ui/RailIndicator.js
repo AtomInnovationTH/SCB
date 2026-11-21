@@ -48,6 +48,9 @@ export const DODGE_MIN_MS = 1000;
 
 /** Denial toast hold time (ms); the fade is the 0.3 s opacity transition. */
 const TOAST_HOLD_MS = 1800;
+/** The rail's top rung: floor 4 (the globe). Floor 5 is the page row's floor and has no rung. */
+export const RAIL_TOP_RUNG = 4;
+
 /** Blocked-notch flash duration (ms). One-shot: 1 flash ≪ 3 Hz cap. */
 const DENY_FLASH_MS = 320;
 /** VisualLaw.COLORS.CAUTION: the shared HUD warning amber (one definition). */
@@ -176,14 +179,15 @@ export class RailIndicator {
   static get INVITE_FLOOR() { return INVITE_FLOOR; }
 
   /**
-   * Pure click law (owner 2026-11-19, DECISIONS §79 row 1: floor 5 is reached by the ladder, not by zooming out): the floor 5
-   * rung is clickable while the engaged floor is 4, and the floor 4 rung while it is 5 (the way back). No other rung is.
+   * Pure click law (owner 2026-11-21, DECISIONS §81 row 1: floor 4 is the top floor, the pages are reached by a swipe, a key
+   * or a dot): the only rung that takes the pointer is floor 4's, and only while a page is open (engaged floor 5): it is the
+   * way back to the globe. There is no rung 5. No other rung is clickable.
    * @param {{floor:number}} state
    * @param {number} floorId - 1-based floor id of the rung
    */
   static notchClickable(state, floorId) {
     const f = state && state.floor;
-    return (f === 4 && floorId === 5) || (f === 5 && floorId === 4);
+    return f === 5 && floorId === RAIL_TOP_RUNG;
   }
 
   /**
@@ -232,8 +236,10 @@ export class RailIndicator {
       'z-index:35', 'pointer-events:none', 'opacity:0', `transition:${fade}`,
     ].join(';');
 
-    // column-reverse so F1 sits at the bottom, F5 at the top (elevator order).
+    // column-reverse so F1 sits at the bottom, floor 4 at the top (elevator order). No rung for floor 5: floor 4 is the top floor
+    // (owner 2026-11-21, DECISIONS §81 row 1); floor 5 is only "the page row is open" and nothing on the rail reaches it.
     for (const f of FloorContract.FLOORS) {
+      if (f.id > RAIL_TOP_RUNG) continue;
       const notch = document.createElement('div');
       notch.style.cssText = [
         'position:relative', 'min-width:96px', 'padding:2px 8px',

@@ -488,6 +488,9 @@ export class SdaChart {
 
   isVisible() { return this._visible; }
 
+  /** The chart's canvas (built on first use; null headless): the page row slides this node. */
+  element() { this._build(); return this._canvas || null; }
+
   show() {
     this._build();
     this._visible = true;

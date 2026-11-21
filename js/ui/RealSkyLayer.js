@@ -31,6 +31,7 @@ import { SkyPropagator, WGS72 } from '../systems/SkyPropagator.js';
 import { meoRadialMap, radiusPxForAltKm, chartTextBoxes, chartTextVersion } from './SdaChart.js';
 import { cardFields, CLASS_COLORS, CLASS_NAMES, CLS_STARLINK, isStarlinkRow } from './RealSkyCard.js';
 import { StorageKeys } from '../core/StorageKeys.js';
+import { LOOK_IDS, buildLook, ringTextureBytes, dotTextureBytes, lookFromSearch, installSkyLookHooks, measureClutter } from './SkyLook.js';
 
 export { CLASS_COLORS };
 
@@ -149,6 +150,20 @@ export class RealSkyLayer {
     this._hoverScr = { x: 0, y: 0 };    // scratch for _screenOf (no allocation per frame)
     this._hoverShown = { ring: false, label: false, rx: NaN, ry: NaN, lx: NaN, ly: NaN };   // last written ring / label state: a style is written only on change
     this._cursorOn = false;
+    // floor 4 look study (lane sky-look-1121, dev host only: `?look=<id>`, `window.__skyLook(id)`, `window.__skyLookStats()`). Variant '0' = today's
+    // scene, built exactly as before; the other variants add Points beside it (one per dot size, one for rings) and hide the original.
+    const lookLoc = deps.location !== undefined ? deps.location : globalThis.location;
+    this._lookWant = lookFromSearch(lookLoc);   // the variant to build when the data arrives ('0' on a public host)
+    this._lookId = '0';
+    this._lookData = null;              // buildLook() of the current variant (also made for '0' when a stat is asked)
+    this._lookGlass = null;
+    this._lookBaseCol = null;           // today's per-row colours (never changed)
+    this._lookGroups = [];              // [{size, pts, geo, idx}] sorted by size; rings last
+    this._lookRing = null;
+    this._lookTex = null;
+    this._lookTexs = [];                // the round-dot maps of the look's bigger Points
+    const lookWin = deps.lookWindow !== undefined ? deps.lookWindow : (typeof window !== 'undefined' ? window : null);
+    installSkyLookHooks(this, lookLoc, lookWin);
     if (this._card && this._card.setHandlers) {
       this._card.setHandlers({
         onSearch: (q) => this.search(q), onClose: () => this.select(-1),
@@ -264,6 +279,7 @@ export class RealSkyLayer {
       if (!sky || !Array.isArray(sky.rows)) throw new Error('data/sky.json: no rows');
       this._ingest(sky);
       this._loadState = 'ready';
+      if (this._lookWant !== '0') { this._lookId = this._lookWant; this._lookBuild(); }   // dev host `?look=<id>`; its _apply follows
       this._apply();
     } catch (err) {
       this._loadState = 'failed';
@@ -303,6 +319,7 @@ export class RealSkyLayer {
     this._buildScene(col);
     this._applyHiddenDraw();
     this.refreshAll();
+    this._lookBaseCol = col;
   }
 
   _buildScene(col) {
@@ -371,7 +388,8 @@ export class RealSkyLayer {
     const diveDots = this._dive === true && ready && this._diveAlpha > 0;
     if (this._dive === true) this._diveMaterial(this.diveAlpha());   // the Points are built when the data arrives, possibly mid-dive
     if (this._points) {
-      this._points.visible = f4 || diveDots;
+      this._points.visible = (f4 || diveDots) && this._lookGroups.length === 0;   // a look variant draws its own Points instead
+      for (const g of this._lookGroups) g.pts.visible = f4;
       this._points.material.size = this._isGlass() ? DOT_PX_GLASS : DOT_PX;   // 3 px on glass, 2 px with a mouse
       const sel = this._selected >= 0;
       this._hiPoints.visible = f4 && sel;
@@ -443,6 +461,7 @@ export class RealSkyLayer {
     if (`${on}|${this._loadState}` !== this._gate) this._apply();
     if (this._card && this._card.setLayout) this._card.setLayout(this._isGlass(), this._floor);   // a first touch / a floor change moves the panel clear of Earth
     if (this._points) { const s = this._isGlass() ? DOT_PX_GLASS : DOT_PX; if (this._points.material.size !== s) this._points.material.size = s; }
+    if (this._lookData && this._isGlass() !== this._lookGlass) this._lookBuild();   // the mouse / touch sizes differ
     this._ringSize();
     if (!on || this._loadState !== 'ready') { this._lastBatch = 0; return; }
     const t = this.skySeconds();
@@ -705,6 +724,8 @@ export class RealSkyLayer {
     const cp = cam.position;
     const pos = this._pos, N = this._rows.length, RE = Constants.EARTH_RADIUS, hide = this._hideCls, cls = this._cls;
     let best = -1, bd = R * R;
+    // look study: a bigger dot is hit anywhere on its disc (the distance is to its EDGE; inside it, the nearer centre wins); null = today's centre distance
+    const lp = this._lookData && this._lookData.id !== '0' ? this._lookData.px : null;
     for (let i = 0; i < N; i++) {
       if (hide[cls[i]] === 1) continue;                // a switched-off kind is not drawn, so it is not pickable
       const px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
@@ -713,7 +734,8 @@ export class RealSkyLayer {
       const sx = ((m[0] * px + m[4] * py + m[8] * pz + m[12]) / w * 0.5 + 0.5) * W;
       const sy = (-(m[1] * px + m[5] * py + m[9] * pz + m[13]) / w * 0.5 + 0.5) * H;
       const dx = sx - x, dy = sy - y;
-      const d = dx * dx + dy * dy;
+      let d = dx * dx + dy * dy;
+      if (lp !== null) { const e = Math.sqrt(d) - lp[i] * 0.5; d = e > 0 ? e * e : d * 1e-6; }
       if (d > bd) continue;
       // behind Earth? the camera-to-dot segment enters the sphere before it reaches the dot
       const ex = px - cp.x, ey = py - cp.y, ez = pz - cp.z;
@@ -949,6 +971,7 @@ export class RealSkyLayer {
     this._hideCls[k] = h;
     this._saveHiddenKinds();
     this._applyHiddenDraw();
+    this._lookReindex();
     this._lastPaintMs = -Infinity;                     // floor 5 repaints at once
     if (h === 1 && this._selected >= 0 && this._cls && this._cls[this._selected] === k) this.select(-1);
     if (this._card && this._card.refreshKinds) this._card.refreshKinds();
@@ -989,6 +1012,161 @@ export class RealSkyLayer {
     geo.setDrawRange(0, n);
   }
 
+  /* --- floor 4 look study (lane sky-look-1121): dev-only variants of how heavy objects stand out, see SkyLook.js --- */
+
+  /** The variant now drawn ('0' = today). */
+  lookId() { return this._lookId; }
+
+  /** The look's Points (one per dot size, the ring Points last), for probes and tests. */
+  lookPoints() { return this._lookGroups.map((g) => g.pts); }
+
+  /**
+   * Switch the floor 4 dots to a variant in place (same dots, no reload). `window.__skyLook` calls this on a dev host only.
+   * @param {string} id one of LOOK_IDS @returns {boolean} false for an unknown id or before the data has loaded
+   */
+  setLook(id) {
+    if (!LOOK_IDS.includes(id) || this._loadState !== 'ready' || !this._lookBaseCol) return false;
+    this._lookId = id;
+    this._lookBuild();
+    this._apply();
+    return true;
+  }
+
+  /** (Re)build the current variant's per-row sizes and its Points. */
+  _lookBuild() {
+    this._lookDrop();
+    if (this._loadState !== 'ready' || !this._lookBaseCol) return;
+    const glass = this._isGlass();
+    const data = buildLook(this._lookId, this._rows, glass, this._lookBaseCol);
+    this._lookData = data;
+    this._lookGlass = glass;
+    if (this._lookId === '0') { this._lookReindex(); return; }
+    const N = this._rows.length;
+    const colAttr = data.col === this._lookBaseCol ? this._geo.getAttribute('color') : new THREE.BufferAttribute(data.col, 3);
+    const sizes = [...new Set(data.px)].sort((a, b) => a - b);
+    sizes.forEach((size, k) => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', this._posAttr);   // the one shared, carried-forward position buffer
+      geo.setAttribute('color', colAttr);
+      const idx = new THREE.BufferAttribute(new Uint32Array(N), 1);
+      geo.setIndex(idx);
+      geo.setDrawRange(0, 0);
+      // a dot bigger than today's is drawn round (a plain Points is a square): a soft-edged disc map; today's size stays a plain square
+      const opts = { size, sizeAttenuation: false, vertexColors: true, depthWrite: false };
+      if (size > (glass ? DOT_PX_GLASS : DOT_PX)) {
+        const tex = new THREE.DataTexture(dotTextureBytes(32, size), 32, 32, THREE.RGBAFormat);
+        tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = false;
+        tex.needsUpdate = true;
+        this._lookTexs.push(tex);
+        opts.map = tex; opts.transparent = true; opts.alphaTest = 0.02;
+      }
+      const mat = new THREE.PointsMaterial(opts);
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false;
+      pts.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT + 0.001 * (k + 1);   // the bigger the dot, the later it is drawn
+      pts.visible = false;
+      pts.name = `real-sky-look-${size}`;
+      this._lookGroups.push({ size, pts, geo, idx });
+    });
+    if (data.ringCol) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', this._posAttr);
+      geo.setAttribute('color', new THREE.BufferAttribute(data.ringCol, 3));
+      const idx = new THREE.BufferAttribute(new Uint32Array(N), 1);
+      geo.setIndex(idx);
+      geo.setDrawRange(0, 0);
+      this._lookTex = new THREE.DataTexture(ringTextureBytes(32), 32, 32, THREE.RGBAFormat);
+      this._lookTex.minFilter = THREE.LinearFilter; this._lookTex.magFilter = THREE.LinearFilter; this._lookTex.generateMipmaps = false;
+      this._lookTex.needsUpdate = true;
+      const mat = new THREE.PointsMaterial({ size: data.ringPx, sizeAttenuation: false, vertexColors: true, map: this._lookTex, transparent: true, alphaTest: 0.05, depthWrite: false });
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false;
+      pts.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT + 0.0005;   // under the dots
+      pts.visible = false;
+      pts.name = 'real-sky-look-rings';
+      this._lookRing = { pts, geo, idx };
+      this._lookGroups.push({ size: -1, pts, geo, idx, ring: true });
+    }
+    for (const g of this._lookGroups) if (this._scene && this._scene.add) this._scene.add(g.pts);
+    this._lookReindex();
+  }
+
+  /** Which rows each look Points draws, kept in step with the hidden kinds; Starlink first inside a size (drawn under the rest), as `_applyHiddenDraw`. */
+  _lookReindex() {
+    const data = this._lookData;
+    if (!data || !this._cls || this._lookGroups.length === 0) return;
+    const N = this._rows.length, cls = this._cls, hide = this._hideCls;
+    const bySize = new Map(this._lookGroups.filter((g) => !g.ring).map((g) => [g.size, g]));
+    const counts = new Map();
+    for (const g of this._lookGroups) counts.set(g, 0);
+    const put = (g, i) => { const n = counts.get(g); g.idx.array[n] = i; counts.set(g, n + 1); };
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < N; i++) {
+        const isSl = cls[i] === CLS_STARLINK;
+        if ((pass === 0) !== isSl || hide[cls[i]] === 1) continue;
+        put(bySize.get(data.px[i]), i);
+        if (this._lookRing && data.ring[i]) put(this._lookGroups[this._lookGroups.length - 1], i);
+      }
+    }
+    for (const g of this._lookGroups) { g.idx.needsUpdate = true; g.geo.setDrawRange(0, counts.get(g)); }
+  }
+
+  /** Remove the look's Points from the scene and free them. The position and colour buffers shared with today's Points are taken off the look's
+   *  geometries first: `geometry.dispose()` frees every attribute it still holds, and a freed shared buffer would freeze today's dots. */
+  _lookDrop() {
+    const sharedCol = this._geo ? this._geo.getAttribute('color') : null;
+    for (const g of this._lookGroups) {
+      if (this._scene && this._scene.remove) this._scene.remove(g.pts);
+      g.geo.deleteAttribute('position');
+      if (sharedCol && g.geo.getAttribute('color') === sharedCol) g.geo.deleteAttribute('color');
+      g.geo.dispose(); g.pts.material.dispose();
+    }
+    if (this._lookTex) { this._lookTex.dispose(); this._lookTex = null; }
+    for (const t of this._lookTexs) t.dispose();
+    this._lookTexs = [];
+    this._lookGroups = []; this._lookRing = null; this._lookData = null;
+  }
+
+  /**
+   * The clutter measure of the dots as the camera sees them now (floor 4 view; same projection and behind-Earth test as `_pick4`; hidden kinds
+   * left out). `window.__skyLookStats` calls this on a dev host only.
+   * @returns {{look:string, glass:boolean, dots:number, coverPct:number, overlapPct:number, heavy:number, heavyHiddenPct:number, heavyOverlappedPct:number}|null}
+   */
+  lookStats() {
+    if (this._loadState !== 'ready' || !this._lookBaseCol) return null;
+    const cam = this._viewProj();
+    if (!cam) return null;
+    if (!this._lookData || this._lookGlass !== this._isGlass()) {
+      if (this._lookId === '0') { this._lookData = buildLook('0', this._rows, this._isGlass(), this._lookBaseCol); this._lookGlass = this._isGlass(); }
+      else this._lookBuild();
+    }
+    const data = this._lookData;
+    const v = this._getViewport(), W = v.w, H = v.h;
+    const m = this._vp.elements, cp = cam.position;
+    const pos = this._pos, N = this._rows.length, RE = Constants.EARTH_RADIUS, hide = this._hideCls, cls = this._cls;
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+      if (hide[cls[i]] === 1) continue;
+      const px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
+      const w = m[3] * px + m[7] * py + m[11] * pz + m[15];
+      if (!(w > 1e-9)) continue;
+      const sx = ((m[0] * px + m[4] * py + m[8] * pz + m[12]) / w * 0.5 + 0.5) * W;
+      const sy = (-(m[1] * px + m[5] * py + m[9] * pz + m[13]) / w * 0.5 + 0.5) * H;
+      if (sx < 0 || sx >= W || sy < 0 || sy >= H) continue;
+      const ex = px - cp.x, ey = py - cp.y, ez = pz - cp.z;
+      const a = ex * ex + ey * ey + ez * ez;
+      const b = cp.x * ex + cp.y * ey + cp.z * ez;
+      const c = cp.x * cp.x + cp.y * cp.y + cp.z * cp.z - RE * RE;
+      const disc = b * b - a * c;
+      if (disc > 0) { const t1 = (-b - Math.sqrt(disc)) / a; if (t1 > 0 && t1 < 1) continue; }
+      pts.push({ x: sx, y: sy, r: data.px[i] * 0.5, heavy: data.heavy[i] === 1, ringR: data.ring[i] ? data.ringPx * 0.5 : 0, i });
+    }
+    // draw order, as the look's Points are drawn: the bigger size later, Starlink first inside a size, then by row (`_lookReindex`)
+    const sl = (p) => (cls[p.i] === CLS_STARLINK ? 0 : 1);
+    pts.sort((p, q) => (p.r - q.r) || (sl(p) - sl(q)) || (p.i - q.i));
+    return { look: this._lookId, glass: this._isGlass(), ...measureClutter(pts, W, H) };
+  }
+
   /** Search by name or NORAD number: opens the best match's card, highlights its dot (also for a hidden kind: an explicit ask); on floor 4 the globe turns to it. @returns {number} row index or -1 */
   search(query) {
     if (this._loadState !== 'ready') return -1;
@@ -999,6 +1177,7 @@ export class RealSkyLayer {
   }
 
   dispose() {
+    this._lookDrop();
     if (this._scene && this._scene.remove) {
       for (const o of [this._points, this._hiPoints, this._orbitLine]) if (o) this._scene.remove(o);
     }

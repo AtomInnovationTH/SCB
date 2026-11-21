@@ -135,6 +135,8 @@ import { NavcomFloor } from './systems/NavcomFloor.js';
 import { earthTurnTrigger } from './systems/EarthTurn.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
+import { PageRow, createDebrisPage } from './ui/PageRow.js';
+import { AirPage } from './systems/AirPage.js';
 import { RealSkyLayer } from './ui/RealSkyLayer.js';
 import { OpeningDive, diveOn, diveVeil } from './ui/OpeningDive.js';
 import { RealSkyCard } from './ui/RealSkyCard.js';
@@ -878,6 +880,9 @@ let proxNetFloor;
 // The daughters' reach as a faint wire sphere round the mother on floors 2-3 (ui/DaughterReachBubble.js, plan sky-bubble-1119).
 let daughterReachBubble = null;
 let sdaFloor;
+// The row of pages to the right of the globe (ui/PageRow.js, plan sky-top-1121): floor 4 is the top floor, floor 5's chart is page 1.
+let pageRow = null;
+let pageRowLastT = 0;   // the frame time the row last ticked (ms)
 // The real catalogue as dots on floors 4-5 (ui/RealSkyLayer.js, plan sky-1116). Built in the ladder block; its clock is ticked from gameLoop.
 let realSkyLayer = null;
 let hullcamFloor;
@@ -2078,6 +2083,16 @@ async function init() {
     realSkySource: () => catalogLoader.getRealSky(),
     kessler: kesslerSystem,
   });
+  // The page row (plan sky-top-1121): floor 4 is the top floor and floor 5 is "the row is open". PAGE LIST: page 1 = the debris
+  // chart (an adapter over sdaFloor), page 2 = the air chart (systems/AirPage.js: her height and today's Sun, no game state of its own).
+  const debrisPage = createDebrisPage(sdaFloor);
+  const airPage = new AirPage({ sunStorms, getShipAltKm: () => (player ? player.getAltitudeKm() : null) });
+  pageRow = new PageRow({
+    pages: [debrisPage, airPage],
+    enterFloor: () => !!(ladderController && ladderController.enterPageFloor()),
+    leaveFloor: () => !!(ladderController && ladderController.leavePageFloor()),
+    reducedMotion: _prefersReducedMotion,
+  });
   // F3 (HULL CAM) content orchestrator: ship-local blueprint callouts. The projector composes
   // player.localToWorld with the SAME world→screen projector navcomFloor uses; anchor positions resolve from the
   // live ship meshes once per name (the anchor meshes are static, e.g. AftThrusterDeck). Providers feed the
@@ -3048,6 +3063,8 @@ async function init() {
     navcom: navcomFloor,
     proxNet: proxNetFloor,
     sdaFloor,
+    // The page row owns floor 5's content (every entry activates its current page; every way off deactivates it).
+    pageRow,
     // The PUBLIC key-state map (turntable): held arrows orbit the camera while a drawer is open on the workbench
     // floor (the controller maps them to ladderDragNudge; the gameLoop shim blanks them around processInput so the
     // ship never sees them). InputManager itself is untouched (do-not-edit; `keys` is public).
@@ -7318,10 +7335,14 @@ function updateCamera(dt, timestamp) {
     // low-orbit shell they move in fits clear of the panels (EarthTurn.earthFrame); the field wins when
     // both cannot. A drag stops it (the 15 s view return then restores it); the wheel/pinch only ends the zoom glide.
     const f4Focus = navcomFloor.getFocusedCluster();
+    // Coming back from a page lands on the globe exactly where she left it: the arrival re-frame does not run (plan sky-top-1121).
+    const f4PageBack = !!(ladderController.pageReturnPending && ladderController.pageReturnPending());
     const f4 = earthTurnTrigger({
       floor: ladderController.currentFloor(), riding: ladderController.isRiding(),
-      focusId: f4Focus ? f4Focus.id : null, prevSettled: f4WasSettled, prevFocusId: f4LastFocusId,
+      focusId: f4Focus ? f4Focus.id : null, prevSettled: f4WasSettled || f4PageBack,
+      prevFocusId: f4PageBack ? (f4Focus ? f4Focus.id : null) : f4LastFocusId,
     });
+    if (f4PageBack && f4.settled) ladderController.clearPageReturn();
     if (f4.turn) {
       const fr = navcomFloor.framing({ shipPos, shipVel: vel, project: navcomProject, fovDeg: cameraSystem.camera.fov });
       if (fr && cameraSystem.ladderTurnEarthDir(fr.dir)) ladderController.frameZoomTo({ distU: fr.distU });
@@ -7365,8 +7386,13 @@ function updateCamera(dt, timestamp) {
   }
 
   // SDA (F7): screen-space chart — no projector or ship pose needed; the floor self-throttles its data refresh
-  // (2 s cadence).
-  if (sdaFloor && sdaFloor.isActive()) sdaFloor.update();
+  // (2 s cadence). With the page row, the row ticks it (page 1 = this chart) and the slide between places; without, as before.
+  if (pageRow) {
+    const prT = Number.isFinite(timestamp) ? timestamp : performance.now();
+    pageRow.update(Math.min(100, Math.max(0, prT - (pageRowLastT || prT))));   // real ms: the slide never follows the sim clock or pause
+    pageRowLastT = prT;
+  }
+  else if (sdaFloor && sdaFloor.isActive()) sdaFloor.update();
   // The real catalogue dots (floors 4-5): after the camera moved, so floor 5's projection reads this frame's pose; self-gated.
   if (realSkyLayer) realSkyLayer.update();
   // The opening dive's dots (on by default, `?dive=0` off; null until the first dive): opacity by the camera's distance, the skip, the hand-back.

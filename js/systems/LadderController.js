@@ -133,6 +133,13 @@ const INTRO_LANDING_FLOOR = 2;
 /** The one crossing a zoom may never make (owner 2026-11-19): floor 4 up to floor 5. Floor 5 to 4 by zooming in stays. */
 export const F4_OUTER_BLOCK = { FROM: 4, TO: 5 };
 
+/**
+ * The floor the page row lives on (floor 5 stays in the code as "the row is open"; plan sky-top-1121 D1) and the globe's floor
+ * it opens from. The player never sees floor 5 as a floor: the rail has no rung for it, and only the row reaches it.
+ */
+export const PAGE_ROW_FLOOR = 5;
+export const GLOBE_FLOOR = 4;
+
 /** Floor 4's range before 2026-11-19 (scene units), the scale an older save's z01 was written on (see restoreView). */
 const LEGACY_F4_RANGE = { FLOOR: 4, MIN_U: 70, MAX_U: 255 };
 
@@ -228,19 +235,24 @@ export class LadderController {
     this._sceneManager = deps.sceneManager || null;
     this._gameState = deps.gameState || null;
     this._rail = deps.rail || null;
-    // Owner 2026-11-19: floor 5 opens by clicking its rung (from floor 4), and floor 4's rung is the way back; the rail only
-    // takes the pointer on those two rungs (RailIndicator.notchClickable), and this re-checks the floor before it jumps.
+    // Owner 2026-11-21 (DECISIONS §81 row 1, plan sky-top-1121): floor 4 is the top floor. Floor 5 is "the page row is open": the
+    // rail has no rung 5 and no rung opens it; floor 4's rung is the way back from a page, and this re-checks the floor.
     if (this._rail && typeof this._rail.setNotchClick === 'function') {
       this._rail.setNotchClick((floor) => {
         const s = this._ladder.getState();
-        if (s && ((s.floor === F4_OUTER_BLOCK.FROM && floor === F4_OUTER_BLOCK.TO) || (s.floor === F4_OUTER_BLOCK.TO && floor === F4_OUTER_BLOCK.FROM))) {
-          this.jump({ toFloor: floor });
-        }
+        if (s && s.floor === PAGE_ROW_FLOOR && floor === F4_OUTER_BLOCK.FROM) this.leavePageFloor();
       });
     }
     this._navcom = deps.navcom || null;
     this._proxNet = deps.proxNet || null;
     this._sdaFloor = deps.sdaFloor || null;
+    /** The page row (js/ui/PageRow.js, duck-typed): every floor 5 entry asks it to activate its current page; every way off
+     *  floor 5 asks it to deactivate. Absent: SdaFloor is activated directly as before (headless tests, flag off). */
+    this._pageRow = deps.pageRow || null;
+    /** The globe's z01 when a page was opened from it, so the way back lands there (ZoomLadder entryOverride); null = unset. */
+    this._pageReturnZ01 = null;
+    /** True from a landing on floor 4 that used the saved z01 until the hub has seen the globe settle (the framing turn skips). */
+    this._pageReturnUsed = false;
     this._hullcam = deps.hullcam || null;
     this._workbench = deps.workbench || null;
     this._onSubjectChange = (typeof deps.onSubjectChange === 'function') ? deps.onSubjectChange : null;
@@ -287,6 +299,15 @@ export class LadderController {
         // stops at floor 4's outer end ('wall': no charge, no creep). Floor 5 opens by the ladder, Esc / PageUp or a swipe.
         if (from === F4_OUTER_BLOCK.FROM && dest === F4_OUTER_BLOCK.TO) return 'wall';
         return from === FloorContract.DAUGHTER_ZOOM.FLOOR && dest === from - 1 && this._daughterFollowed();
+      });
+    }
+    if (typeof this._ladder.setEntryOverride === 'function') {
+      this._ladder.setEntryOverride((from, dest) => {
+        if (from === PAGE_ROW_FLOOR && dest === GLOBE_FLOOR && this._pageReturnZ01 != null) {
+          this._pageReturnUsed = true;
+          return this._pageReturnZ01;
+        }
+        return null;
       });
     }
     /** Reduced-motion probe for the follow-end ease (a cut under it). Injectable for tests. */
@@ -660,6 +681,12 @@ export class LadderController {
       this._rideTailArmed = false;
     }
     this._lastInputMs = t;
+    // On a page (the row's floor): zooming in is the way back to the globe, zooming out does nothing (plan sky-top-1121 D3).
+    // Neither moves the camera: the page is a chart, not a place to fly to.
+    if (this._pageRow && this._ladder.floorId() === PAGE_ROW_FLOOR) {
+      if (dir === 'in' && !this._ladder.isRiding()) this._pageRow.toGlobe();
+      return [];
+    }
     // Daughter focus (wait view / her haul / her reel view; owner 2026-10-27): a zoom moves in or out on her and keeps the
     // view; only a zoom out past floor 3's edge ends it (after the ladder is put on that distance).
     const fz = this._focusZoomWheel(dir, mag, t);
@@ -841,10 +868,87 @@ export class LadderController {
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
     this._endCatchFocus('ladder command');
+    const paged = this._pageCommand(type);
+    if (paged) return paged;
     const decisions = this._ladder.command({ tMs: t, type });
     this._apply(decisions, t);
     this._refreshRail();
     return decisions;
+  }
+
+  /**
+   * @private Esc / PageUp / PageDown on the globe (floor 4) and on a page (floor 5) belong to the page row (plan sky-top-1121
+   * D3). Esc on a page = straight back to the globe; Esc on the globe does nothing (the top floor), except to cancel a
+   * conjunction alarm's escalation as before. PageUp on the globe = page 1, on a page = the next one (nothing past the last).
+   * PageDown on a page = the previous one (page 1 -> the globe); on the globe it rides down to floor 3 as ever (not taken).
+   * No row (flag off, headless): the core's own rules, unchanged.
+   * @returns {Array|null} the (empty) decision list when the row took the key, null to let the core have it
+   */
+  _pageCommand(type) {
+    const row = this._pageRow;
+    if (!row) return null;
+    const st = this._ladder.getState();
+    const floor = st ? st.floor : null;
+    if (floor !== GLOBE_FLOOR && floor !== PAGE_ROW_FLOOR) return null;
+    if (type === 'esc') {
+      if (floor === PAGE_ROW_FLOOR) { if (st.mode !== 'riding') row.toGlobe(); return []; }
+      const stage = st.alarm && st.alarm.stage;
+      return (stage === 'knock' || stage === 'klaxon' || stage === 'autoRide') ? null : [];
+    }
+    if (type === 'pageUp') {
+      if (st.mode !== 'riding') row.next();
+      return [];
+    }
+    if (type === 'pageDown' && floor === PAGE_ROW_FLOOR) {
+      if (st.mode !== 'riding') row.prev();
+      return [];
+    }
+    return null;
+  }
+
+  /**
+   * The row asks to leave the globe for its floor (a swipe, PageUp, a dot). The globe's z01 is remembered so the way back
+   * lands exactly there. False when not on floor 4, mid-ride or disengaged.
+   * @returns {boolean} true when the ladder started the ride
+   */
+  enterPageFloor() {
+    if (!this._engaged) return false;
+    const st = this._ladder.getState();
+    if (!st || st.floor !== GLOBE_FLOOR || st.mode === 'riding') return false;
+    this._pageReturnZ01 = st.z01;
+    this._pageReturnUsed = false;
+    const d = this.jump({ toFloor: PAGE_ROW_FLOOR });
+    if (!d.length) this._pageReturnZ01 = null;
+    return d.length > 0;
+  }
+
+  /**
+   * The row asks to return to the globe (Esc, PageDown, a dot, a swipe, rung 4). The ride lands on the remembered z01.
+   * @returns {boolean} true when the ladder started the ride
+   */
+  leavePageFloor() {
+    if (!this._engaged) return false;
+    const st = this._ladder.getState();
+    if (!st || st.floor !== PAGE_ROW_FLOOR || st.mode === 'riding') return false;
+    return this.jump({ toFloor: GLOBE_FLOOR }).length > 0;
+  }
+
+  /** True from the landing on floor 4 that used the remembered z01, until clearPageReturn(): the globe must not re-frame. */
+  pageReturnPending() { return this._pageReturnUsed; }
+
+  /** The hub saw the globe settle after the way back: the next arrival on floor 4 re-frames again as usual. */
+  clearPageReturn() { this._pageReturnUsed = false; this._pageReturnZ01 = null; }
+
+  /** The page row this controller drives (null = none). */
+  pageRow() { return this._pageRow; }
+
+  /**
+   * A horizontal trackpad event the router claimed for paging: stamp the wheel clock so a coasting tail that turns vertical
+   * is still swallowed (see wheel()) and never zooms the page back to the globe.
+   */
+  noteSwipeEvent(tMs) {
+    if (!this._engaged) return;
+    this._lastWheelMs = (tMs === undefined) ? this._now() : tMs;
   }
 
   /** Hotkey / rail-notch jump passthrough. */
@@ -945,6 +1049,28 @@ export class LadderController {
    */
   pagePane({ toward } = {}) {
     if (!this._engaged) return null;
+    const row = this._pageRow;
+    if (row) {
+      // Floors 4 and 5 (plan sky-top-1121 D3): two fingers sideways page the row, finger-left = forward (the router's 'right'
+      // verb), finger-right = back (its 'left' verb). On the globe the drawer keeps what it had: finger-right opens it, and
+      // finger-left closes an open one before it opens page 1. On a page the drawer is not paged by the trackpad. The
+      // gesture's coasting tail never pages twice (WheelRouter's latch) and never zooms the page away (_rideTailArmed).
+      const floor = this._ladder.getState().floor;
+      if (floor === PAGE_ROW_FLOOR || floor === GLOBE_FLOOR) {
+        const w0 = this._workbench;
+        const drawerOpen = !!(w0 && w0.isOpen && w0.isOpen());
+        let moved = false;
+        if (toward === 'right') {
+          if (floor === GLOBE_FLOOR && drawerOpen) { if (w0.close) w0.close(); return 'close-workbench'; }
+          moved = row.next();
+        } else if (toward === 'left') {
+          if (floor === GLOBE_FLOOR) { if (w0 && !drawerOpen) { if (w0.open) w0.open(); return 'open-workbench'; } return null; }
+          moved = row.prev();
+        }
+        if (moved) { this._rideTailArmed = true; return toward === 'right' ? 'page-next' : 'page-prev'; }
+        return null;
+      }
+    }
     const w = this._workbench;
     const open = !!(w && w.isOpen && w.isOpen());
     if (toward === 'left') {
@@ -1103,6 +1229,11 @@ export class LadderController {
     const floor = saved.floor, z01 = saved.z01;
     if (!Number.isFinite(floor) || !FloorContract.FLOORS.some((f) => f.id === floor)) return false;
     if (typeof z01 !== 'number' || !Number.isFinite(z01)) return false;
+    // A save made on a page (floor 5) comes back on the globe: pages are reached only by a swipe, a key or a dot (plan sky-top-1121).
+    if (floor === PAGE_ROW_FLOOR && this._pageRow) {
+      const f4 = FloorContract.byId(GLOBE_FLOOR);
+      return this._placeWhileHidden(GLOBE_FLOOR, f4.entryZ01 ? f4.entryZ01.fromAbove : 0.5);
+    }
     // Floor 4's z01 changed meaning on 2026-11-19 (range 70..255 -> 70..707 u): a save carries its distance (`distU`); an
     // older save has none, and its z01 is read on the old range so the view comes back where it was.
     if (floor === LEGACY_F4_RANGE.FLOOR) {
@@ -1574,6 +1705,13 @@ export class LadderController {
     }
     if (this._navcom && this._navcom.deactivate) this._navcom.deactivate();
     if (this._proxNet && this._proxNet.deactivate) this._proxNet.deactivate();
+    if (this._pageRow) {
+      // The row owns floor 5's content: it goes back to the globe at once (no slide: the ladder is leaving) before SdaFloor is touched.
+      if (this._pageRow.reset) this._pageRow.reset(); else this._pageRow.pageDeactivate();
+      if (this._pageRow.setFloor) this._pageRow.setFloor(null);
+    }
+    this._pageReturnZ01 = null;
+    this._pageReturnUsed = false;
     if (this._sdaFloor && this._sdaFloor.deactivate) this._sdaFloor.deactivate();
     if (this._hullcam && this._hullcam.deactivate) this._hullcam.deactivate();
     // The ONE workbench pane closes with the ladder: setEnabled(false) shuts it (its close() fires the D10 open-signal false
@@ -1760,7 +1898,13 @@ export class LadderController {
     // star figures would read as chart strokes) and restore on any other floor / disengage. Hidden on F1 too (HULL CAM,
     // owner 2026-09-16: "the focus is on Mother").
     const massBands = !!(f && f.fidelity && f.fidelity.debrisMode === 'massBands');
-    if (this._sdaFloor) {
+    if (this._pageRow) {
+      // Floor 5 is the page row's floor: every entry asks the row to activate its CURRENT page (never SdaFloor directly, so a
+      // straight trip to page 2 never flashes page 1), every other floor deactivates it. The row also learns the floor (dots).
+      if (massBands) this._pageRow.pageActivate();
+      else this._pageRow.pageDeactivate();
+      if (this._pageRow.setFloor) this._pageRow.setFloor(floor);
+    } else if (this._sdaFloor) {
       if (massBands) {
         if (this._sdaFloor.activate) this._sdaFloor.activate();
       } else if (this._sdaFloor.deactivate) {
@@ -1915,6 +2059,9 @@ export class LadderController {
       this._autopilot.toggle();
     }
     if (verb === 'flip-lens' && this._sdaFloor && this._sdaFloor.flipLens) {
+      // With the row: Space flips page 1's lens only (another page has its own look and no lens to flip).
+      const page = this._pageRow && this._pageRow.currentPage ? this._pageRow.currentPage() : null;
+      if (page && page.id !== 'debris') return;
       this._sdaFloor.flipLens();
       this._noteSubjectChange(5);
     }

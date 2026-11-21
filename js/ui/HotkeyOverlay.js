@@ -101,7 +101,8 @@ export const HOTKEY_GROUPS = [
     rows: [
       [['T', '/', 'Tab'], 'Next target', { id: 'next_target' }],
       [['Space'], 'Main action', { id: 'main_action' }],
-      [['Esc'], 'Back', { id: 'back' }],
+      [['Esc'], 'Back (on a page: to the globe)', { id: 'back' }],
+      [['PgUp', '/', 'PgDn'], 'Next / previous page (from the globe on floor 4)', { id: 'pages' }],
       [['P'], 'Pause', { id: 'pause' }],
       [['B'], 'Upgrades (buy at the stop)', { id: 'upgrades' }],
       [['I'], 'Info', { id: 'info' }],

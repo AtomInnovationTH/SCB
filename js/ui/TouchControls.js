@@ -61,8 +61,11 @@ import { isDevHost } from '../core/DevHost.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { pairSetupOffered } from '../systems/PairSetup.js';
+import { RAIL_TOP_RUNG } from './RailIndicator.js';
+import { swipeCommits } from './PageRow.js';
 
-const FLOOR_COUNT = FloorContract.FLOORS.length;
+/** The rail's rungs (1-4): floor 4 is the top floor (DECISIONS §81 row 1), so the rail grip never goes past it. */
+const FLOOR_COUNT = RAIL_TOP_RUNG;
 /** The four keys the turn pad may write — never any other. */
 const ARROW_KEYS = Object.freeze(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
@@ -522,8 +525,11 @@ export class TouchControls {
     g.x = t.clientX; g.y = t.clientY; g.t = this._now();
     g.moved = Math.max(g.moved, Math.hypot(g.x - g.startX, g.y - g.startY));
     if (g.moved > this._tune.tapSlopPx) this._clearHold();   // a moving finger is not a hold
+    // The page row (floors 4 and 5): a finger-left swipe from the RIGHT band on the globe, or a sideways drag anywhere on a page,
+    // moves the pages with the finger (PageRow.dragBegin/dragMove); handled first. The LEFT band stays the drawer swipe.
+    if (!g.edgeLeft && this._pageDragStep(g, this._floorNow(), g.edgeRight)) return;
     // A drag that starts in the LEFT band is the drawer swipe: no nudge. A drag from the RIGHT band turns the view, except on
-    // floor 4, where it is the floor 5 swipe (FLOOR5_SWIPE) and turns nothing.
+    // floor 4, where it is the page swipe (above) and turns nothing.
     if (g.edgeLeft) return;
     if (g.edgeRight && this._floorNow() === FLOOR5_SWIPE.FROM) return;
     if (!this._viewDragFloor()) return;                       // floor 5: a drag does nothing
@@ -588,8 +594,9 @@ export class TouchControls {
     let mine = false;
     for (const t of e.changedTouches) if (t.identifier === g.id) { mine = true; break; }
     if (!mine) return;
-    if (g.consumed || g.poisoned || g.held) { this._endGesture(); return; }
+    if (g.consumed || g.poisoned || g.held) { this._pageDragFinish(g, true); this._endGesture(); return; }
     g.t = this._now();
+    if (g.pd) { this._pageDragFinish(g, false); this._endGesture(); return; }
     const W = this._canvasWidth();
     const kind = classifyGesture(g, this._tune, W);
     this._endGesture();
@@ -603,12 +610,21 @@ export class TouchControls {
       // ('library' is the hub's name for that drawer). The right-band verbs still classify but dispatch nothing.
       case 'edge-open-left': this._swipePane('library', true); this._syncPad(); break;
       case 'edge-close-left': this._swipePane('library', false); this._syncPad(); break;
-      // Owner 2026-11-19: an inward swipe from the RIGHT edge on floor 4 opens floor 5 (a tap there only wakes the rail).
+      // Owner 2026-11-19, re-pointed 2026-11-21: an inward swipe from the RIGHT edge on floor 4 opens page 1 of the row (a tap
+      // there only wakes the rail). With a row it goes through the row (a swipe that gave no move events); without one (older
+      // tests, flag off) it is the plain jump to floor 5 as before.
       case 'edge-open-right':
-        if (isFloor5Swipe(g, kind, this._floorNow()) && this._ladder && typeof this._ladder.jump === 'function') {
-          if (this._stats) this._stats.floorSwipe++;
-          if (this._telemetry) this._telemetry.log('edge', { which: 'floor5', open: true });
-          this._ladder.jump({ toFloor: FLOOR5_SWIPE.TO });
+        if (isFloor5Swipe(g, kind, this._floorNow()) && this._ladder) {
+          const row = this._pageRowNow();
+          if (row) {
+            if (this._stats) this._stats.floorSwipe++;
+            if (this._telemetry) this._telemetry.log('edge', { which: 'page', open: true });
+            row.next();
+          } else if (typeof this._ladder.jump === 'function') {
+            if (this._stats) this._stats.floorSwipe++;
+            if (this._telemetry) this._telemetry.log('edge', { which: 'floor5', open: true });
+            this._ladder.jump({ toFloor: FLOOR5_SWIPE.TO });
+          }
         }
         break;
       default: break;                                         // drag / slow tap / hold release / right-band swipe: nothing more
@@ -659,7 +675,82 @@ export class TouchControls {
     g.poisoned = true;
     g.maxTouches = 2;
     this._clearHold();
+    this._pageDragFinish(g, true);                   // a second finger ends a page swipe (the page springs back)
     if (g.dragging) this._cameraTouchHeld(false);   // a second finger ends the drag (the pinch is zoom input)
+  }
+
+  /** @private The page row, when the ladder has one (duck-typed: absent in older tests and with the flag off). */
+  _pageRowNow() {
+    const L = this._ladder;
+    return (L && typeof L.pageRow === 'function') ? L.pageRow() : null;
+  }
+
+  /**
+   * @private One move of a one-finger track that may be a PAGE swipe (plan sky-top-1121 D3/D4), shared by the canvas path and the
+   * right-edge grip. Floor 4 (the globe): only a finger-left swipe from the right band counts (`fromRightBand`). Floor 5 (a
+   * page): a mostly-sideways drag from anywhere (the caller already keeps the left band for the drawer). The first sideways move
+   * past the tap slop asks the row to begin (from the globe this takes the ladder to the row's floor right away, the page then
+   * follows the finger); every move after sets how far, as a fraction of the width.
+   * @param {object} s  the track: startX/startY/x/y/t, `pd` (the live swipe) and `pdNo` (decided not to) are written here
+   * @param {number|null} floor
+   * @param {boolean} fromRightBand
+   * @returns {boolean} true when the move was the page swipe's (or a swipe that must do nothing), false to let the caller go on
+   */
+  _pageDragStep(s, floor, fromRightBand) {
+    const row = this._pageRowNow();
+    if (!row || (floor !== 4 && floor !== 5)) return false;
+    if (floor === 4 && !fromRightBand) return false;
+    if (s.pdNo) return true;
+    const W = this._canvasWidth();
+    const dx = s.x - s.startX, dy = s.y - s.startY;
+    if (!s.pd) {
+      if (Math.hypot(dx, dy) <= this._tune.tapSlopPx) return false;
+      if (Math.abs(dx) < Math.abs(dy)) return false;          // mostly vertical: not a page swipe (the grip's rail drag, a tap)
+      const dir = dx < 0 ? 1 : -1;                              // finger-left = forward
+      if ((floor === 4 && dir !== 1) || !row.dragBegin(dir)) { s.pdNo = true; return true; }
+      s.pd = { dir, floor, frac: 0, samples: [] };
+      this._touched();
+    }
+    const prog = s.pd.dir === 1 ? -dx : dx;
+    const frac = (Number.isFinite(W) && W > 0) ? Math.max(0, Math.min(1, prog / W)) : 0;
+    s.pd.frac = frac;
+    s.pd.samples.push({ p: prog, t: s.t });
+    if (s.pd.samples.length > 12) s.pd.samples.shift();
+    row.dragMove(frac);
+    return true;
+  }
+
+  /**
+   * @private The finger lifted (or a second finger landed: `cancel`). A page swipe changes page when it went past a quarter of
+   * the width or was a quick flick (PageRow.swipeCommits); an opening swipe from the globe's right band also keeps the old floor
+   * 5 rule (60 px inward, mostly sideways, within a second), so a short quick swipe from the edge still opens page 1.
+   * @param {object} s  the track
+   * @param {boolean} cancel
+   * @returns {boolean} true when a swipe was live
+   */
+  _pageDragFinish(s, cancel) {
+    const pd = s && s.pd;
+    if (!pd) return false;
+    s.pd = null;
+    const row = this._pageRowNow();
+    if (!row) return true;
+    let v = 0;                                                  // px/s toward the next place, from the last ~60-120 ms of samples
+    const sm = pd.samples;
+    if (sm.length >= 2) {
+      const last = sm[sm.length - 1];
+      let first = sm[0];
+      for (let i = sm.length - 2; i >= 0; i--) if (last.t - sm[i].t >= 60) { first = sm[i]; break; }
+      if (last.t > first.t) v = (last.p - first.p) / (last.t - first.t) * 1000;
+    }
+    let commit = !cancel && swipeCommits(pd.frac, v);
+    if (!cancel && !commit && pd.floor === FLOOR5_SWIPE.FROM) {
+      s.t = this._now();
+      commit = isFloor5Swipe(s, classifyGesture(s, this._tune, this._canvasWidth()), pd.floor);
+    }
+    if (commit && pd.floor === FLOOR5_SWIPE.FROM && this._stats) this._stats.floorSwipe++;
+    if (this._telemetry) this._telemetry.log('page', { dir: pd.dir, frac: Math.round(pd.frac * 100) / 100, v: Math.round(v), commit });
+    row.dragEnd(commit);
+    return true;
   }
 
   /** @private Tells the camera a finger is held on a view drag (the view return waits). No-op on a camera without it. */
@@ -953,7 +1044,9 @@ export class TouchControls {
     // Floor 4, finger in the RIGHT edge band (the grip is stretched to it): the touch may be the floor 5 swipe, so nothing
     // jumps at touch-start. It is decided on the way (_handleGripMove) or at the lift (_handleGripEnd): an inward swipe opens
     // floor 5; a mostly vertical drag becomes the rail drag; a tap jumps to the floor under the finger, as the grip always did.
-    if (this._floorNow() === FLOOR5_SWIPE.FROM && t0.clientX > this._tune.edgeBandPx && this._inEdgeBand(t0.clientX)) {
+    const gripFloor = this._floorNow();
+    if ((gripFloor === FLOOR5_SWIPE.FROM || (gripFloor === FLOOR5_SWIPE.TO && this._pageRowNow()))
+      && t0.clientX > this._tune.edgeBandPx && this._inEdgeBand(t0.clientX)) {
       const now = this._now();
       this._gripSwipe = { id: t0.identifier, startX: t0.clientX, startY: t0.clientY, x: t0.clientX, y: t0.clientY, t0: now, t: now };
       this._railActive = false;
@@ -1005,10 +1098,12 @@ export class TouchControls {
     if (s) {
       if (e.cancelable) e.preventDefault();
       e.stopPropagation();
-      if (e.touches.length !== 1) { this._gripSwipe = null; return; }
+      if (e.touches.length !== 1) { this._pageDragFinish(s, true); this._gripSwipe = null; return; }
       const t = e.touches[0];
       this._touched();
       s.x = t.clientX; s.y = t.clientY; s.t = this._now();
+      // Floors 4 and 5: a sideways move is a page swipe that follows the finger; a mostly vertical one becomes the rail drag.
+      if (this._pageDragStep(s, this._floorNow(), true)) return;
       const dx = s.x - s.startX, dy = s.y - s.startY;
       if (Math.hypot(dx, dy) > this._tune.tapSlopPx && Math.abs(dy) > Math.abs(dx)) this._gripSwipeToRailDrag(t);
       return;
@@ -1026,14 +1121,21 @@ export class TouchControls {
     const s = this._gripSwipe;
     this._gripSwipe = null;
     this._railActive = false;
-    if (!s || e.type === 'touchcancel') return;
+    if (!s) return;
+    if (e.type === 'touchcancel') { this._pageDragFinish(s, true); return; }
     let mine = null;
     for (const t of (e.changedTouches || [])) if (t.identifier === s.id) { mine = t; break; }
     if (!mine) return;
     s.x = mine.clientX; s.y = mine.clientY; s.t = this._now();
+    if (s.pd) { this._pageDragFinish(s, false); return; }
     const kind = classifyGesture(s, this._tune, this._canvasWidth());
     if (isFloor5Swipe(s, kind, this._floorNow())) {
-      if (this._ladder && typeof this._ladder.jump === 'function') {
+      const row = this._pageRowNow();
+      if (row) {
+        if (this._stats) this._stats.floorSwipe++;
+        if (this._telemetry) this._telemetry.log('edge', { which: 'page', open: true });
+        row.next();
+      } else if (this._ladder && typeof this._ladder.jump === 'function') {
         if (this._stats) this._stats.floorSwipe++;
         if (this._telemetry) this._telemetry.log('edge', { which: 'floor5', open: true });
         this._ladder.jump({ toFloor: FLOOR5_SWIPE.TO });

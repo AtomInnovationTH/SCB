@@ -91,6 +91,9 @@ const DEFAULT_RULES = {
                           // Silent: no 'cross', no 'denied'. owner 2026-10-27: while the camera rides a daughter,
                           // zooming in on floor 2 never swings to the mother's close-up (floor 1). Jumps, page keys
                           // and Esc are explicit commands and are not asked.
+  entryOverride: null,    // optional (fromFloor, destFloor) => z01 | null: where an arrival on `destFloor` lands, any way it
+                          // is reached (jump, zoom, key). null / non-finite = the floor's own entry rule. Sky 14: coming back
+                          // from the page row (floor 5) to the globe (floor 4) lands where she left the globe.
 };
 
 export class ZoomLadder {
@@ -803,6 +806,11 @@ export class ZoomLadder {
   /** Arrival z01 on `dest` coming from below ('up') or above ('down'): the floor row's own `entryZ01` when it has one,
    *  else the shared LADDER_GEOMETRY rule. @private */
   _entryZ01(dest, way) {
+    const hook = this._rules.entryOverride;
+    if (hook && dest) {
+      const o = hook(this._floor, dest.id);
+      if (typeof o === 'number' && Number.isFinite(o)) return Math.min(1, Math.max(0, o));
+    }
     const e = dest && dest.entryZ01;
     const v = e ? (way === 'down' ? e.fromAbove : e.fromBelow) : undefined;
     if (Number.isFinite(v)) return v;
@@ -811,6 +819,9 @@ export class ZoomLadder {
 
   /** Set (or clear, with null) the zoom-crossing veto: see DEFAULT_RULES.crossBlock. */
   setCrossBlock(fn) { this._rules.crossBlock = (typeof fn === 'function') ? fn : null; }
+
+  /** Set (or clear, with null) the arrival-position override: see DEFAULT_RULES.entryOverride. */
+  setEntryOverride(fn) { this._rules.entryOverride = (typeof fn === 'function') ? fn : null; }
 
   /** The free-scroll z01 step per unit of wheel magnitude (a caller that extends the zoom past a
    *  floor's end steps the same amount per notch). */

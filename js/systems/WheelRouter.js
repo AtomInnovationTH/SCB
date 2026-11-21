@@ -333,6 +333,9 @@ export class WheelRouter {
     const lc = this._ladder;
     if (!lc || typeof lc.wantsPaneSwipe !== 'function' || !lc.wantsPaneSwipe()) return false;
     const t = this._now();
+    // Floors 4 and 5 page the row with this same axis (LadderController.pagePane): every claimed event stamps the ladder's wheel
+    // clock, so the coasting tail of the swipe, if it turns vertical, is still swallowed and never zooms the page away.
+    if (typeof lc.noteSwipeEvent === 'function') lc.noteSwipeEvent(t);
     // The gesture GAP is measured on the INPUT timeline when the event carries one (e.timeStamp, on the performance.now()
     // timeline): events queued behind a long frame keep their hardware-time stamps, so a main-thread stall can never
     // split one swipe into two gestures. The verb's tMs stays the router clock (the ladder timeline).
