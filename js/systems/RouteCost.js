@@ -56,7 +56,7 @@ import { currentSky } from './SunStorms.js';
 import { planeAngle, planeChangeDeltaV } from '../entities/OrbitalMechanics.js';
 import { pieceValues } from './BigPieceValues.js';
 import { isJobPiece, jobPayCr, capsuleCanDrop, capsuleMassKg, capsulePriceCr } from './JobsBoard.js';
-import { planBurn } from './BigMelt.js';
+import { planBurn, TIP_PICK_ORDER } from './BigMelt.js';
 import { gapChangeOverLeg, isLinedUp, stationInOwnPlane, stationOrbit, wrapDeg } from './NodeDrift.js';
 import { CW_FLIGHT, fetchModel } from '../entities/DaughterCW.js';
 
@@ -734,7 +734,7 @@ function freshWalk(state) {
   const melts = [];
   for (const h of held) {
     const m = h.melting && h.stop && h.stop.big && h.stop.big.melt;
-    if (m && m.partKg > 0) melts.push({ id: h.id, massKg: h.melting.wholeKg, leftKg: h.melting.leftKg, partKg: m.partKg, metalPerKg: m.metalPerKg, feeCr: h.melting.feeCr, shareCr: m.shareCr || 0, keep: !!h.stop.partJob && h.melting.leftKg >= h.melting.wholeKg - 1e-9 });
+    if (m && m.partKg > 0) melts.push({ id: h.id, massKg: h.melting.wholeKg, leftKg: h.melting.leftKg, partKg: m.partKg, smallKg: m.smallKg || 0, metal: m.metal ?? null, metalPerKg: m.metalPerKg, feeCr: h.melting.feeCr, shareCr: m.shareCr || 0, keep: !!h.stop.partJob && h.melting.leftKg >= h.melting.wholeKg - 1e-9 });
   }
   return {
     dryMassKg: state.dryMassKg, gasKg: state.gasKg, carriedKg: state.carriedKg || 0, altKm: state.altKm,
@@ -806,17 +806,23 @@ function fillQuota(w, steps, x) {
 
 /**
  * The furnaces work during a trip's burn (`planBurn`, BigMelt.js:91: parts of 5 kg a stage / 11 kg a satellite, delivered one at a
- * time, `FURNACE_S_PER_KG` per kg per furnace, the hold's room limits the metal). The pieces marked for melting get this transfer's
+ * time, `FURNACE_S_PER_KG` per kg per furnace, the hold's room limits the metal; steel and titanium only on the tips whose tool melts
+ * them, at that tool's rate and in `smallKg` parts: the walk's furnaces are the first `furnaces` tips of the pick order). The pieces marked for melting get this transfer's
  * days. The game pays a part when it melts (`meltAccount`, BigMelt.js:148): the fee for its share of the piece, less the owner's share
  * of its metal; the metal goes into the hold, on her mass until a satellite buys it.
  */
 function applyMelts(w, days, state, steps) {
   if (!w.melts.length || !(days > 0)) return;
   const furnaces = Number.isFinite(state.furnaces) ? state.furnaces : 4;
+  // the free tips themselves when the caller has them (`state.furnaceTips`: a tip busy elsewhere is not the first of the order); a count alone
+  // takes the first `furnaces` of the pick order (0, 2, 1, 3), so the tools match the real tips: with fewer than four the two aluminium tips go first
+  const tips = Array.isArray(state.furnaceTips)
+    ? state.furnaceTips.filter((i) => TIP_PICK_ORDER.includes(i)).sort((a, b) => TIP_PICK_ORDER.indexOf(a) - TIP_PICK_ORDER.indexOf(b))
+    : TIP_PICK_ORDER.slice(0, Math.max(0, Math.min(furnaces, TIP_PICK_ORDER.length)));
   const plan = planBurn({
     burnShipS: days * SECONDS_PER_DAY,
-    pieces: w.melts.map((m) => ({ id: m.id, kg: m.leftKg, partKg: m.partKg, metalPerKg: m.metalPerKg })),
-    tips: Array.from({ length: furnaces }, (_, i) => i), roomKg: w.holdRoomKg,
+    pieces: w.melts.map((m) => ({ id: m.id, kg: m.leftKg, partKg: m.partKg, smallKg: m.smallKg, metal: m.metal, metalPerKg: m.metalPerKg })),
+    tips, roomKg: w.holdRoomKg,
   });
   if (!plan.parts.length) return;
   const done = {};
@@ -974,7 +980,7 @@ function runStop(w, stop, state, legs, fast, stopIndex, steps) {
     const m = stop.melt;
     if (!a || !m || !(m.partKg > 0)) return false;
     w.aboard = w.aboard.map((x) => (x === a ? { ...x, melting: true } : x));
-    w.melts = w.melts.concat({ id: a.id, massKg: a.massKg, leftKg: a.massKg, partKg: m.partKg, metalPerKg: m.metalPerKg, feeCr: (a.stop.value && a.stop.value.feeCr) || 0, shareCr: m.shareCr || 0, keep: !!a.stop.partJob });
+    w.melts = w.melts.concat({ id: a.id, massKg: a.massKg, leftKg: a.massKg, partKg: m.partKg, smallKg: m.smallKg || 0, metal: m.metal ?? null, metalPerKg: m.metalPerKg, feeCr: (a.stop.value && a.stop.value.feeCr) || 0, shareCr: m.shareCr || 0, keep: !!a.stop.partJob });
     w.sigGroup = w.sigGroup.concat(`melt:${a.id}`);
     if (steps) steps.push({ kind: 'melt', stop: stopIndex, id: a.id });
     return true;

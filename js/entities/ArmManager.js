@@ -31,6 +31,7 @@ import { DebrisField } from './DebrisField.js';
 import { clearRackCell, berthAnchorLocalInto, catchHomeDistM, homeShapeKey, isInspectOnlyMass } from './CaptureNet.js';
 import { noseBucketFor, noseRadiatorsOk, noseWindowSpans } from './NoseRoute.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
+import { tipCanMelt } from '../systems/BigMelt.js';   // Furnace 2: which tip's tool can melt a catch's metal
 import { attitudeTurnProfile } from '../systems/AutopilotSystem.js';   // the gas turn's planned time (reel-home line-up estimate)
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import {
@@ -3263,7 +3264,7 @@ export class ArmManager {
       if (busy) return { reason: 'nose-busy', text: `The nose is busy with another catch. Daughter ${n} waits.`, retry: true };
     }
     if (tc && typeof tc.pickTip === 'function') {
-      const tip = tc.pickTip();
+      const tip = tc.pickTip(d ? d.material : undefined);   // Furnace 2: only a tip whose tool can melt the catch
       if (tip == null && !ignoreRealTime) return { reason: 'tip-busy', text: `Every radiator tip is busy. Daughter ${n} waits.`, retry: true };
       if (tip != null && drv && typeof drv.canReach === 'function' && d) {
         const seat = this._noseSeatScene(d, new THREE.Vector3());
@@ -3413,13 +3414,25 @@ export class ArmManager {
     // the direct carry has no row for a catch longer than 0.5 m (row >= 1; GATE holds row 0, cell 0 only): it can go to the nose and then
     // by leash instead. Only that cause: a second catch, or a row-0 catch with no gate entry, keeps the refusal. The direct carry has priority.
     let nose = null;
-    if (!gate) {
+    let anyTip = false;   // the unflown hand-over of a catch her own tip's tool cannot melt: `deliverUnflown` picks the tip (`pickTip(material)`)
+    // Furnace 2: her radial carry lands on her own tip (`arm.index`), certified for her own line only. When that tip's tool cannot
+    // melt the catch's metal, it takes the nose route instead (when there is one), whose `pickTip(material)` picks a tip that can.
+    if (!gate || !tipCanMelt(arm.index, delivered.material)) {
       nose = this._noseCandidate(arm, rack, row, cell, reach);
-      if (!nose) {
-        return no('gate', `Daughter ${n} cannot carry this catch to a furnace without touching the ship. It stays on her rack.`, false, true);
+      if (gate && !(nose && !nose.refusal)) {
+        // Furnace 2: her line is certified and her tip's tool cannot melt the catch's metal, and the nose route is no option (it is
+        // certified only for a catch over row 0, which has no radial gate: a small catch never has both). A flown carry stays on the
+        // rack (the trip's unflown hand-over takes it later); the unflown one flies nothing, so ANY free tip whose tool melts it will do.
+        if (!skipRT) {
+          return no('wrong-tool', `Daughter ${n}'s catch is a metal her radiator's furnace cannot melt. It stays on her rack until a trip hands it to the right furnace.`, false, false);   // NOT a give-up: a mark would make the trip's own unflown hand-over refuse her ('gave-up'), and that hand-over is what delivers it
+        }
+        nose = null;
+        anyTip = true;
+      } else {
+        if (!nose) return no('gate', `Daughter ${n} cannot carry this catch to a furnace without touching the ship. It stays on her rack.`, false, true);
+        if (nose.refusal) return nose.refusal;
+        gate = nose.gate;
       }
-      if (nose.refusal) return nose.refusal;
-      gate = nose.gate;
     }
     const tipIndex = nose ? -1 : arm.index;                   // her radiator: the tip on her line (DECISIONS §29 row 4); the nose route reserves none (the leash picks a tip after the hand-over)
     const fuelPct = nose ? arm.noseFuelPct() : (typeof arm.carryFuelPct === 'function' ? arm.carryFuelPct() : 0);
@@ -3478,7 +3491,7 @@ export class ArmManager {
     return {
       ok: true, reason: '', text: '', retry: false, giveUp: false,
       plan: {
-        tipIndex, cell, delivered, row, mission,
+        tipIndex, cell, delivered, row, mission, ...(anyTip ? { anyTip: true } : {}),
         strutRad: degToRad(gate.strutDeg), thetaRad: degToRad(gate.thetaDeg), dir: gate.dir,
         recordedStrutRad: typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : degToRad(gate.strutDeg),
       },
@@ -3576,6 +3589,7 @@ export class ArmManager {
       case 'nose-busy': return 'the nose is busy';
       case 'nose-leash': return 'the leash cannot reach it from the nose';
       case 'nose-gas': return 'there is too little steering gas to swing it to a radiator';
+      case 'wrong-tool': return "her radiator's furnace cannot melt this metal; a trip hands it to a furnace that can";
       case 'no-tip': case 'layout': return 'this ship cannot move catches to a radiator';
       case 'no-catch': case 'gave-up': return null;     // she is empty / her own last carry failed: there is no catch to "keep", nothing to say
       default: return 'the hand-off cannot start';
@@ -3690,7 +3704,7 @@ export class ArmManager {
       if (r.reason === 'neighbour-catch' && r.lift) { this._commandLifts(arm, r, { mission, motherNetOnly }); continue; }
       // a neighbour's catch that can never leave is said too, once, or the catch just stays on her rack in silence
       const sayIt = say && r.text && (r.reason === 'fit' || r.reason === 'gate' || r.reason === 'fuel' || r.reason === 'swing-back'
-        || r.reason === 'nose-reach' || r.reason === 'nose-leash' || r.reason === 'nose-gas' || r.reason === 'radiators-angle'
+        || r.reason === 'nose-reach' || r.reason === 'nose-leash' || r.reason === 'nose-gas' || r.reason === 'radiators-angle' || r.reason === 'wrong-tool'
         || (r.reason === 'neighbour-catch' && !r.retry));
       if (sayIt) {
         const key = r.sayKey || `${arm.index}|${r.reason}`;
@@ -3742,7 +3756,7 @@ export class ArmManager {
       const r = this.carryCheck(arm, { ignoreRealTime: true });
       if (!r.ok) {
         const sayIt = say && r.text && (r.reason === 'fit' || r.reason === 'gate' || r.reason === 'fuel' || r.reason === 'swing-back'
-          || r.reason === 'nose-reach' || r.reason === 'nose-gas' || r.reason === 'radiators-angle'
+          || r.reason === 'nose-reach' || r.reason === 'nose-gas' || r.reason === 'radiators-angle' || r.reason === 'wrong-tool'
           || (r.reason === 'neighbour-catch' && !r.retry));
         if (sayIt) {
           const key = r.sayKey || `${arm.index}|${r.reason}`;
@@ -3752,7 +3766,7 @@ export class ArmManager {
       }
       const plan = r.plan;
       const nose = plan.kind === 'nose';
-      const tip = nose ? tc.pickTip() : plan.tipIndex;
+      const tip = (nose || plan.anyTip) ? tc.pickTip(plan.delivered && plan.delivered.material) : plan.tipIndex;   // nothing flies here: any free tip whose tool melts it
       if (tip == null || tc.debrisAt(tip) || (typeof tc.isReserved === 'function' && tc.isReserved(tip))) continue;   // every tip busy: waits for a melt
       const pct = nose ? arm.noseFuelPct() : (typeof arm.carryFuelPct === 'function' ? arm.carryFuelPct() : 0);
       if (!(arm.fuel >= pct) || arm.power.flat) continue;                              // no fuel, or a flat pack (no power, no push): she waits

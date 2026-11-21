@@ -3557,10 +3557,10 @@ export class CaptureNetSystem {
     if (!tc.fits(radiusM)) return 'rack';
     // Every free, unreserved tip in the preferred order (a catch that cannot reach, or cannot pay the swing to, the first
     // one goes to the next; owner 2026-10-31 "on 2nd capture sometimes debris is not transferred to radiators strut").
-    // A mock tip store without the list falls back to the single pick.
+    // A mock tip store without the list falls back to the single pick. Furnace 2: only tips whose tool melts `d.material` (none free: 'rack').
     let tips;
-    if (typeof tc.freeTipsInOrder === 'function') tips = tc.freeTipsInOrder();
-    else { const one = tc.pickTip(); tips = one == null ? [] : [one]; }
+    if (typeof tc.freeTipsInOrder === 'function') tips = tc.freeTipsInOrder(d.material);
+    else { const one = tc.pickTip(d.material); tips = one == null ? [] : [one]; }
     let tip = null;
     let noseReel = false;
     let gasShort = false;

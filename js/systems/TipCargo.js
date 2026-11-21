@@ -39,6 +39,7 @@ import {
   clearShipRelativeAttitude,
 } from '../entities/CaptureNet.js';
 import { DebrisField } from '../entities/DebrisField.js';
+import { tipCanMelt, tipRateFactor, TIP_PICK_ORDER } from './BigMelt.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { degToRad, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
@@ -60,7 +61,7 @@ export const TIP_BAND = [[0.10, 146], [0.15, 145], [0.22, 143], [0.30, 142], [0.
 /** How fast a bag turns from the line it arrived on to the boom axis (deg/s). ESTIMATE, not measured. */
 export const SWING_RATE_DEG_S = 20;
 /** Tip order for the next free tip: azimuth 40 → 220 → 140 → 320 (AZIMUTHS_DEG indices). */
-const PICK_ORDER = [0, 2, 1, 3];
+const PICK_ORDER = TIP_PICK_ORDER;
 const SLOT_COUNT = 4;
 
 const _q1 = new THREE.Quaternion();
@@ -672,11 +673,15 @@ export class TipCargo {
    * Next free tip that exists (order az 40 → 220 → 140 → 320), or null. A tip a daughter is carrying to is not free.
    * A free tip whose daughter holds no catch is preferred, so a nose catch does not take the tip a loaded daughter is
    * waiting for while another tip is free; with every free tip wanted by a loaded daughter, the order above decides.
+   * With a `material` (Furnace 2: the catch's `material`) only a tip whose tool can melt it counts (tips 0 and 2 aluminium,
+   * tip 1 steel, tip 3 titanium: `BigMelt.tipCanMelt`); none able → null. No argument: every tip, as before.
+   * @param {string} [material]
    */
-  pickTip() {
+  pickTip(material) {
     let wanted = null;
     for (const i of PICK_ORDER) {
       if (this._slots[i] || this._reserved[i] || !this._tipRec(i)) continue;
+      if (material !== undefined && !tipCanMelt(i, material)) continue;
       if (!this._daughterLoaded(i)) return i;
       if (wanted === null) wanted = i;
     }
@@ -687,14 +692,16 @@ export class TipCargo {
    * Every free, unreserved tip that exists, in `pickTip`'s order: tips whose daughter holds no catch first (in az order
    * 40 → 220 → 140 → 320), then the ones a loaded daughter is waiting for. `pickTip()` is this list's first entry.
    * `CaptureNet._tryLeash` walks it so a catch that cannot reach (or cannot afford the swing to) the first tip still goes
-   * to the next free one before the rack is considered.
+   * to the next free one before the rack is considered. With a `material`, only the tips whose tool can melt it.
+   * @param {string} [material]
    * @returns {number[]} tip indices (a new array; empty when no tip is free)
    */
-  freeTipsInOrder() {
+  freeTipsInOrder(material) {
     const first = [];
     const loaded = [];
     for (const i of PICK_ORDER) {
       if (this._slots[i] || this._reserved[i] || !this._tipRec(i)) continue;
+      if (material !== undefined && !tipCanMelt(i, material)) continue;
       (this._daughterLoaded(i) ? loaded : first).push(i);
     }
     return first.concat(loaded);
@@ -1104,6 +1111,20 @@ export class TipCargo {
     if (p && '_attitudeInertia' in p) p._attitudeInertia = null;
   }
 
+  /**
+   * The cook span (game-seconds) of the bag in `slot`: the one span law (`FURNACE_TRANSFER.digestSpanS`) times its tip's tool rate
+   * for the bag's material over the aluminium rate (`BigMelt.tipRateFactor`). Aluminium, a non-metal and a missing material read 1,
+   * so they are unchanged; a slower tool digests proportionally slower (steel through tip 1's plate 2.27x, steel in tip 3's pot 0.71x).
+   * A tip whose tool cannot melt the metal (only a stow past the router, e.g. a test) cooks at the aluminium rate.
+   * @param {{i: number, massKg: number, debris: object}} slot
+   * @returns {number}
+   */
+  cookSpanS(slot) {
+    const span = Constants.FURNACE_TRANSFER.digestSpanS(slot.massKg);
+    const f = tipRateFactor(slot.i, slot.debris && slot.debris.material);
+    return Number.isFinite(f) && f > 0 ? span * f : span;
+  }
+
   /** Pin + cook one bag — the rack's _updateHoldingCatch / ArmManager pin loop on a tip. */
   _cook(slot, dt) {
     const d = slot.debris;
@@ -1117,7 +1138,7 @@ export class TipCargo {
     // same real-dt clock.
     const cook = Constants.isFeatureEnabled('FURNACE_COOK') || tripMelting();
     if (dt > 0 && cook) {
-      const span = FT.digestSpanS(slot.massKg);
+      const span = this.cookSpanS(slot);   // Furnace 2: the slot tool's rate for this metal
       d._digestProgress = (d._digestProgress || 0) + dt * TimeAuthority.fixedClockScale() * this._sunScale();   // slowed only near a piece (debris-1 D6)
       slot.phaseT = Math.min(FT.FEED_S, (d._digestProgress / span) * FT.FEED_S);
     }
@@ -1201,7 +1222,7 @@ export class TipCargo {
     for (let i = 0; i < SLOT_COUNT; i++) {
       const slot = this._slots[i];
       if (!slot || !this._tipRec(i)) continue;
-      slot.debris._digestProgress = FT.digestSpanS(slot.massKg);
+      slot.debris._digestProgress = this.cookSpanS(slot);
       slot.phaseT = FT.FEED_S;
       this._cook(slot, 0);
       if (!this._slots[i]) n++;

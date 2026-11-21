@@ -5001,6 +5001,27 @@ export const Constants = {
     METAL_ID: 'refined_orbit',  // the hold's id for melted metal: the 'refined_' prefix is what the elevator contract takes (ShopScreen)
     METAL_NAME: 'Orbit metal',
     METAL_COLOR: '#b9c4d2',
+    // FURNACE TOOLS per tip (Furnace 2 step 1, owner ruling DECISIONS §82 rows 1-2): the four tips are not the same furnace.
+    // Tips 0 and 2 are the plain 0.6 m aluminium ball; tip 1 takes a swap-in 2 cm plate (a 0.3 m receiver, steel in small
+    // parts); tip 3 carries an electric pot (a closed induction pot in a 0.3 m receiver). Capability is by METAL only: an
+    // aluminium piece melts on every tip at today's `FURNACE_S_PER_KG` and warm-up (the plate swap takes no time, has no state);
+    // a piece of a non-metal material (composite, mli_mylar, solar_cell) or with none melts on any tip as aluminium (today's
+    // behaviour; the owed rows stay in HANDOFF). `melts`: the metals a tool can melt ('aluminum' | 'steel' | 'titanium',
+    // DebrisField's material ids); `sPerKg`: sunlit s per kg of a metal other than aluminium. A steel or titanium part on
+    // the plate or the pot fits the 0.3 m receiver only: reach `SMALL_REACH_M` (0.15 m), about 1 kg (BigMelt.partKgSmall).
+    // Rates are ESTIMATES (*est*; basis docs/research/2026-11-solar-furnace-options.md §3 lines 77-91): the spare power is the
+    // wings' 1,633 W peak less the 500 W base load always billed (PlayerSatellite.js:435, Constants.js:335) = 1,133 W;
+    //   steel through the 2 cm plate: 1.0 MJ/kg / (460 W in - 149 W out the opening - 116 W foil)            = 5,128 s/kg
+    //   steel in the pot:             1.0 MJ/kg / (1,133 W x 0.65 coil - 116 W foil)                         = 1,612 s/kg
+    //   titanium in the pot:          1.26 MJ/kg / (1,133 W x 0.65 coil - 200 W foil)                        = 2,349 s/kg
+    // No power is billed for the pot in this step (the trip bills no engine power either; TransferTrip.js:1307, owed in TripProfile.js:27).
+    TOOLS: {
+      TIP_TOOL: ['ball', 'plate', 'ball', 'pot'],     // tip index -> tool id (a tip index past the table is a plain ball)
+      SMALL_REACH_M: 0.15,                            // m: the 0.3 m receiver's radius, the reach limit of a steel or titanium part
+      ball:  { melts: ['aluminum'], sPerKg: {} },
+      plate: { melts: ['aluminum', 'steel'], sPerKg: { steel: 5128 } },
+      pot:   { melts: ['aluminum', 'steel', 'titanium'], sPerKg: { steel: 1612, titanium: 2349 } },
+    },
   },
   CATCH_MAX_SIDE_M: 5.5,    // m: no HIGH_FIELD piece is longer than this (the mother net's 6 m mouth less a margin)
 

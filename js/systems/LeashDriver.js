@@ -1044,7 +1044,7 @@ export class LeashDriver {
     if (typeof cns._cutActive === 'function' && cns._cutActive(net)) return null;
     if (net._cargoDeclined !== true || Math.abs(net._cargoRetryS || 0) >= 1e8) return null;
     if (!tc.fits(DebrisField.trueReachM(d, 2))) return null;
-    const tip = tc.pickTip();
+    const tip = tc.pickTip(d.material);               // Furnace 2: a tip whose tool can melt the catch
     if (tip != null && typeof this.gasShort === 'function' && this.gasShort(net, d, tip, { noseReel: !this.canReach(d, tip) })) return null;
     return net;
   }
@@ -1058,7 +1058,7 @@ export class LeashDriver {
     const net = this.noseCatchForUnflown();
     const tc = this._tc;
     if (!net) return null;
-    const tip = tc.pickTip();
+    const tip = tc.pickTip(net.targetDebris && net.targetDebris.material);
     if (tip == null || tc.has(tip) || (typeof tc.isReserved === 'function' && tc.isReserved(tip))) return null;
     const d = net.targetDebris;
     const massKg = net.capturedMass || d.mass || 0;

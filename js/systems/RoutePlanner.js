@@ -27,7 +27,7 @@ import { scoringSystem, CAPTURE_TIERS, taperMultiplier, computeSaleValue } from 
 import { pieceValue, isCandidate, bestRoutes, SORTS, MAX_MOVES } from './RouteCost.js';
 import { fatePay, pieceValues } from './BigPieceValues.js';
 import { lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
-import { PART_KG } from './BigMelt.js';
+import { PART_KG, partKgSmall } from './BigMelt.js';
 import { isJobPiece } from './JobsBoard.js';
 import { STAY_ID, PUSH_PREFIX, creditsText, kgText, daysText } from './WhereNextRows.js';
 import { trainingHoldsHighRow } from '../core/missionProgress.js';
@@ -111,7 +111,8 @@ export function pushHeightKm(mass, areaM2) {
 export const HIGH_ROW_PUSH_KM = [635, 670, 590, 560, 655, 645, 700, 655];
 
 function bigInfo(d, knownPushKm) {
-  const key = `${d.type}|${d.mass}|${d.areaM2}|${d.owner ? `${d.owner.status}|${d.owner.launchYear}` : ''}`;
+  // Furnace 2: the melt depends on the piece's material (which tips' tools can melt it, at what rate and part size), so it keys the memo
+  const key = `${d.type}|${d.material ?? ''}|${d.mass}|${d.areaM2}|${d.owner ? `${d.owner.status}|${d.owner.launchYear}` : ''}`;
   let info = _bigMemo.get(key);
   if (info) return info;
   const B = Constants.BIG_PIECES;
@@ -120,7 +121,11 @@ function bigInfo(d, knownPushKm) {
   info = {
     get pushKm() { if (pushKm === undefined) pushKm = pushHeightKm(d.mass, dragAreaM2(d)); return pushKm; },     // lazy: only a route that pushes it pays for the integration
     satExtraCr: fatePay(d, 'satellite').totalCr - fatePay(d, 'push').totalCr,
-    melt: { partKg: PART_KG[d.type], metalPerKg: B.METAL_FRACTION[d.type] || 0, shareCr: Math.round(v.consentShare * v.scrapKg * B.IN_ORBIT_CR_PER_KG) },
+    melt: {
+      partKg: PART_KG[d.type], metalPerKg: B.METAL_FRACTION[d.type] || 0, shareCr: Math.round(v.consentShare * v.scrapKg * B.IN_ORBIT_CR_PER_KG),
+      metal: d.material ?? null,                                   // the tools' rule: steel and titanium only on the tips that melt them
+      smallKg: PART_KG[d.type] > 0 ? partKgSmall(d.type) : 0,       // the plate's and the pot's part size (0.3 m receiver), fractional kg
+    },
   };
   if (_bigMemo.size > 500) _bigMemo.clear();
   _bigMemo.set(key, info);
@@ -256,6 +261,7 @@ export function routeState(state, held = []) {
     catchesLeft: state.catchesLeft || 0, maxMoves: Number.isFinite(state.maxMoves) ? state.maxMoves : MAX_MOVES,
     holdSlots: state.holdSlots, holdRoomKg: state.holdRoomKg, held,
     ...(Number.isFinite(state.furnaces) ? { furnaces: state.furnaces } : {}),     // the free radiator tips (`_freeTips`); absent = 4
+    ...(Array.isArray(state.furnaceTips) ? { furnaceTips: state.furnaceTips } : {}),   // which tips (their tools differ); absent = the first `furnaces` of the pick order
     // the node gap and the part aboard (J5 Task 12): `gapDeg`/`incDeg` let the walker move the gap by the route's days; `partCr` is the part job's pay
     ...(Number.isFinite(state.gapDeg) && Number.isFinite(state.incDeg) ? { gapDeg: state.gapDeg, incDeg: state.incDeg } : {}),
     // plan route-1109 lane D: the plane she is in against the satellites' (a satellite stop pays the tilt back, a station stop's finish starts from it)
@@ -342,7 +348,7 @@ let _memo = null;
 function stateKey(state, sortBy, maxStops) {
   const r = (x, d = 1000) => (Number.isFinite(x) ? Math.round(x * d) : x);
   return JSON.stringify([
-    sortBy, maxStops, state.nextMissionNumber ?? null, r(state.dryMassKg), r(state.gasKg), r(state.carriedKg), r(state.altKm), state.fieldId, state.catchesLeft, state.holdSlots, r(state.holdRoomKg, 1), state.furnaces,
+    sortBy, maxStops, state.nextMissionNumber ?? null, r(state.dryMassKg), r(state.gasKg), r(state.carriedKg), r(state.altKm), state.fieldId, state.catchesLeft, state.holdSlots, r(state.holdRoomKg, 1), state.furnaces, Array.isArray(state.furnaceTips) ? state.furnaceTips.join(',') : null,
     (state.pieces || []).map((e) => [e.id, e.discovered === true, !!e.hazard, !!e.captured, e.piece && r(e.piece.mass, 10), e.posM ? [r(e.posM.x, 0.1), r(e.posM.y, 0.1), r(e.posM.z, 0.1)] : null]),
     (state.fields || []).map((f) => [f.id, (f.remaining || []).join(',')]),
     (state.held || []).map((h) => [h.id, h.piece && r(h.piece.mass, 10), h.melting === true]),

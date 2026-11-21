@@ -23,7 +23,7 @@ import { captureNetSystem } from '../entities/CaptureNet.js';
 import { bigPieces, isBigPiece, pieceName, pieceNameCap, FATES } from './BigPieces.js';
 import { fatePay, payLine, pieceValues } from './BigPieceValues.js';
 import {
-  DAY_S, HOLD_FULL_LINE, packedSizeM, partKgFor, pieceType, planBurn, valuesAtCatch, meltAccount, metalListedCrPerKg, tripLine, tooShortLine, noFurnaceLine,
+  DAY_S, HOLD_FULL_LINE, packedSizeM, partKgFor, partKgSmall, meltPartKg, pieceType, planBurn, valuesAtCatch, meltAccount, metalListedCrPerKg, tripLine, tooShortLine, noFurnaceLine, noAbleFurnaceLine, tipCanMelt,
 } from './BigMelt.js';
 import { lifetimeYears, dragAreaM2, sailLifeYears } from './OrbitLifetime.js';
 import { FREE_ID } from './FieldRegistry.js';
@@ -3231,19 +3231,31 @@ export class GameFlowManager {
       const d = x.debris;
       const at = d._disposal.massAtCatch > 0 ? d._disposal.massAtCatch : d.mass;
       const v = valuesAtCatch(d, at);
-      return { id: d.id, kg: d.mass, partKg: partKgFor(pieceType(d)), metalPerKg: at > 0 ? v.scrapKg / at : 0, d };
+      // Furnace 2: `metal` is the piece's material (its tips' tools melt it or not, at their rates); `smallKg` the part size of the plate and the pot (0.3 m receiver)
+      return { id: d.id, kg: d.mass, partKg: partKgFor(pieceType(d)), smallKg: partKgSmall(pieceType(d)), metal: d.material, metalPerKg: at > 0 ? v.scrapKg / at : 0, d };
     });
     const burnShipS = days * DAY_S;
     const ovens = this._meltOvens(tipsFree);
     if (!ovens.tips.length && ovens.say) { this._meltSay(ovens.say, 'info'); return; }     // no oven can work this trip: nothing is planned, the pieces stay
     const plan = planBurn({ burnShipS, pieces: specs, tips: ovens.tips, roomKg: this._holdRoomKg() });
+    // Furnace 2: a piece no FREE tip's tool can melt is left for a later trip; it says so by name (other tips may be free, and other pieces may melt)
+    const waitLine = (id) => {
+      const s = specs.find((x) => x.id === id);
+      // an able tip that is free but whose sun oven cannot open this trip is not "busy": say so
+      const cannotWork = s ? tipsFree.filter((i) => tipCanMelt(i, s.metal) && !ovens.tips.includes(i)) : [];
+      return s ? noAbleFurnaceLine(pieceName(s.d), s.metal, undefined, cannotWork) : null;
+    };
+    const sayWaits = () => { for (const id of plan.skipped || []) { const l = waitLine(id); if (l) this._meltSay(l, 'info'); } };
     if (!plan.parts.length) {
-      const name = pieceName(specs[0].d);
-      if (plan.stop === 'furnaces') this._meltSay(noFurnaceLine(name), 'info');
+      const skipped = plan.skipped && specs.find((x) => x.id === plan.skipped[0]);
+      const name = pieceName(skipped ? skipped.d : specs[0].d);
+      if (plan.stop === 'furnaces' && plan.skipped && plan.skipped.length) sayWaits();
+      else if (plan.stop === 'furnaces') this._meltSay(noFurnaceLine(name), 'info');
       else if (plan.stop === 'hold') this._meltSay(HOLD_FULL_LINE, 'info');
       else this._meltSay(tooShortLine(name), 'info');
       return;
     }
+    sayWaits();
     const byId = new Map(specs.map((x) => [x.id, x.d]));
     const tc = this._refs.player && this._refs.player.tipCargo;
     const used = [...new Set(plan.parts.map((x) => x.tip))];
@@ -3252,7 +3264,7 @@ export class GameFlowManager {
     for (const d of byId.values()) if (plan.parts.some((x) => x.pieceId === d.id)) d._meltBusy = true;
     this._melt = {
       burnShipS, plan, tips: used,
-      partsBefore: new Map(specs.map((x) => [x.id, x.partKg > 0 ? Math.round(((x.d._disposal && x.d._disposal.meltDoneKg) || 0) / x.partKg) : 0])),   // parts of each piece finished on earlier trips (the numbering of a part across trips)
+      partsBefore: new Map(specs.map((x) => [x.id, meltPartKg(x) > 0 ? Math.round(((x.d._disposal && x.d._disposal.meltDoneKg) || 0) / meltPartKg(x)) : 0])),   // parts of each piece finished on earlier trips (the numbering of a part across trips)
       parts: plan.parts.map((x) => ({ ...x, st: 0, d: byId.get(x.pieceId) })),   // st: 0 waiting, 1 cut (being delivered), 2 melting, 3 over
       inFlight: new Map(),                                                       // piece id -> kg cut and not yet melted
       totals: new Map(),                                                         // piece id -> this trip's totals, for the line
@@ -4593,7 +4605,7 @@ export class GameFlowManager {
       const d = net.targetDebris;
       if (!d) continue;
       if (!tc.fits(DebrisField.trueReachM(d, 2))) continue;
-      const tip = tc.pickTip();
+      const tip = tc.pickTip(d.material);               // Furnace 2: only a tip whose tool can melt the catch
       if (tip == null) continue;
       if (!(drv.canReach(d, tip) || drv.canReachAtNose(net, d, tip))) continue;
       // a hand-off the driver refuses now (daughter on her tether, radiators busy, a turn under way) is not waited for:
@@ -5266,6 +5278,7 @@ export class GameFlowManager {
     const owed = this.missionStartOwed();
     const caught = gameState.debrisCleared % quota;
     const gasKg = engineGasKg(p.resources);
+    const furnaceTips = this._freeTips();
     const holdKgNow = r.cargoSystem && typeof r.cargoSystem.getTotalMassKg === 'function' ? Math.max(0, r.cargoSystem.getTotalMassKg()) : 0;
     // What she carries = the catches aboard (racks, berth, tips) + the hold's weight (the metal in it and the kept part): the same sources `p.mass` adds, so
     // `dryMassKg` below stays her true dry mass (plan hold-mass-1106 H5).
@@ -5319,7 +5332,8 @@ export class GameFlowManager {
       satellites: reg.satellites().map((s) => ({ id: s.id, altKm: s.altKm, name: s.name })),
       held,
       holdSlots: held.length + booked.size + (collarFree ? 1 : 0),
-      furnaces: this._freeTips().length,                                            // the free radiator tips (the game's `_freeTips`), not a fixed 4
+      furnaces: furnaceTips.length,                                                 // the free radiator tips (the game's `_freeTips`), not a fixed 4
+      furnaceTips,                                                                  // which ones: a busy tip 0 is not "the first of the order" (the tools differ per tip)
       holdRoomKg: this._holdRoomKg(),
       captureCreditsEarned: scoringSystem.captureCreditsEarned,
       jobPostings: this.jobPostings?.() ?? [],
