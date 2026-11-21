@@ -1,9 +1,9 @@
 {
   "bullets": [
-    "Map: smooth dots, speed slider (pause to 1000×), tap a dot for orbit, double-tap to fly",
-    "Map: Starlink row and tick box; warm debris, grey working satellites; panel top right",
-    "Floors 2-3 show daughter reach; - and + show target panes before a scan; new title look"
+    "Side swipe at full zoom out for rich visual views",
+    "Large objects more noticeable",
+    "Occlusion fixes"
   ],
-  "release": "2026-11-19",
-  "version": "1.09"
+  "release": "2026-11-21",
+  "version": "1.91"
 }
