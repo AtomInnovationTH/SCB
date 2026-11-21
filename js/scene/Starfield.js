@@ -17,6 +17,23 @@ import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlp
 import { DEG2RAD, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 
 /**
+ * The ladder floors that show no constellation figures (owner 2026-11-21: "constellations should not be visible in floor 4").
+ * Floor 4 is the Earth view; floor 5 in the code is the row of pages opened from it (the debris chart, the air chart), which
+ * count as floor 4 for this rule. Floors 1-3 are unchanged: the player's own choice rules there.
+ */
+export const CONSTELLATION_MASKED_FLOORS = Object.freeze([4, 5]);
+
+/**
+ * The hub's ONE rule for Starfield's mask (`setMenuSuppressed`): hidden on the MENU, and on the Earth-view floors. Pure.
+ * @param {boolean} isMenu  the game state is MENU
+ * @param {number|null} floor  the ladder's floor id (null: no ladder)
+ * @returns {boolean}
+ */
+export function constellationMaskWanted(isMenu, floor) {
+  return !!isMenu || (floor != null && CONSTELLATION_MASKED_FLOORS.includes(floor));
+}
+
+/**
  * RA (hours, 0–24) and Dec (degrees) to cartesian on the star sphere.
  * Convention: +Y is celestial north, RA 0 at +X, Z negated. Exported so the
  * `?shot=1` sky-pose hook in main.js reuses it (this basis is easy to get wrong).
@@ -1019,8 +1036,9 @@ export class Starfield {
    * The MENU mask (owner 2026-09-09: constellation figures must not show on the
    * MENU, they distract from the hero mother): while `true` every figure is
    * hidden regardless of intent. Written only by the hub (main.js) from the
-   * game state, never by a key, rung or the F5 chart, so it cannot race their
-   * capture/restore priors. Idempotent.
+   * game state (and, since owner 2026-11-21, the ladder floor: floors 4-5 mask
+   * too, see constellationMaskWanted), never by a key, rung or the F5 chart, so
+   * it cannot race their capture/restore priors. Idempotent.
    */
   setMenuSuppressed(suppressed) {
     this._menuSuppressed = !!suppressed;

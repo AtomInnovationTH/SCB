@@ -1623,7 +1623,10 @@ export class InputManager {
           settingsManager.setConstellations(on);
           // Reactive feedback: Starfield is a THREE object with no comms of its own, so InputManager narrates.
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: on ? 'Constellation names ON (6 to hide)' : 'Constellation names OFF (6 to show)',
+            // owner 2026-11-21: figures are masked on floor 4 and its pages; say so instead of a bare ON.
+            text: on
+              ? (d.starfield.isMenuSuppressed?.() ? 'Constellation names ON below floor 4 (hidden here)' : 'Constellation names ON (6 to hide)')
+              : 'Constellation names OFF (6 to show)',
             priority: 'info',
             _reactive: true,
           });

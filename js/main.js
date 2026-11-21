@@ -19,7 +19,7 @@ import { runtimeAdapt, TIER_ORDER } from './systems/QualityManager.js';
 import { SceneManager } from './scene/SceneManager.js';
 import { portraitDirFor, portraitUpFor } from './scene/portraitFraming.js';
 import { Earth } from './scene/Earth.js';
-import { Starfield, raDec2xyz } from './scene/Starfield.js';
+import { Starfield, raDec2xyz, constellationMaskWanted } from './scene/Starfield.js';
 import { BRIGHT_STARS, CONSTELLATION_FIGURES, galacticBasis } from './scene/starCatalog.js';
 import { SunLight } from './scene/SunLight.js';
 
@@ -865,6 +865,19 @@ let _ladderLevelingPrev = false;
 // null = no attribute (menu / pause → menu / ?ladder=0 → the stamp shows).
 let _ladderFloorAttr = null;
 let _vitalsUnderDrawer = false;   // the meters hide under the open F1 drawer (last written)
+// Starfield's constellation MASK, the hub's one writer (owner 2026-09-09 MENU; 2026-11-21 floors 4-5: "constellations should not be
+// visible in floor 4"; floor 5 is the page row opened from it). Last-written value: Starfield is touched only on change.
+let _constellationMask = null;
+function syncConstellationMask(state = gameState.currentState) {
+  if (!starfield || typeof starfield.setMenuSuppressed !== 'function') return;
+  // The core's floorId (allocation-free; it holds the real floor through a pause, a ride and the opening dive's first frames).
+  const l = ladderController && ladderController.ladder;
+  const floor = (l && l.floorId) ? l.floorId() : null;
+  const want = constellationMaskWanted(state === GameStates.MENU, floor);
+  if (want === _constellationMask) return;
+  _constellationMask = want;
+  starfield.setMenuSuppressed(want);
+}
 
 // F6 (NAVCOM) floor content orchestrator. Constructed in the ladder block, injected into LadderController
 // (activates/ticks on F6), and ticked explicitly from the loop with the live projector below.
@@ -1368,10 +1381,13 @@ async function init() {
   // would not. Applied once from the current state (no GAME_STATE_CHANGE fires for the initial MENU) and then on
   // every GAME_STATE_CHANGE (payload `{ from, to }`). MENU only: SHOP / BRIEFING / PAUSED / the end screens are not
   // the hero view. OUTSIDE the ladder gate on purpose: a `?ladder=0` boot gets the same clean menu.
+  // owner 2026-11-21: the same mask also hides them on floor 4 and its pages (floors 4-5), following the ladder floor every frame
+  // (syncConstellationMask in gameLoop: opening dive, rides, page swipes, jumps all change the core's floor). Intent untouched,
+  // so floor 3 and below show exactly what the player had.
   if (starfield && typeof starfield.setMenuSuppressed === 'function') {
-    starfield.setMenuSuppressed(gameState.currentState === GameStates.MENU);
+    syncConstellationMask();
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
-      starfield.setMenuSuppressed(to === GameStates.MENU);
+      syncConstellationMask(to);
     });
   }
 
@@ -6548,6 +6564,8 @@ function gameLoop(timestamp) {
   // While game time is sped up the rail (and its "8×") stays awake: the edge chrome would fade it after its idle time
   // mid-turn (measured 11-04: hidden in 33 of 76 samples at 8×). It fades as usual once k is back to 1.
   if (_simK > 1 && _ladderActive && edgeChrome) edgeChrome.wake('rail', timestamp);
+  // Constellation figures are masked on floors 4-5 (owner 2026-11-21): follow the core's floor, write-on-change.
+  syncConstellationMask();
   // Build-stamp floor law: write `body[data-ladder-floor]` = the engaged floor's id, write-on-change. Disengaged
   // (menu, pause → menu, ?ladder=0) → null → removeAttribute → the stamp shows. The pure-scenery rule still hides
   // it on F1 transiently (index.html). Gated on the flag: ?ladder=0 does ZERO DOM writes.
