@@ -150,10 +150,11 @@ export class RealSkyLayer {
     this._hoverScr = { x: 0, y: 0 };    // scratch for _screenOf (no allocation per frame)
     this._hoverShown = { ring: false, label: false, rx: NaN, ry: NaN, lx: NaN, ly: NaN };   // last written ring / label state: a style is written only on change
     this._cursorOn = false;
-    // floor 4 look study (lane sky-look-1121, dev host only: `?look=<id>`, `window.__skyLook(id)`, `window.__skyLookStats()`). Variant '0' = today's
-    // scene, built exactly as before; the other variants add Points beside it (one per dot size, one for rings) and hide the original.
+    // floor 4 look (lane sky-look-1121; DECISIONS §83 row 1: variant 'b' is the game's look on every host). Variant '0' = the old fixed-size
+    // dots, the base scene built exactly as before; the other variants add Points beside it (one per dot size, one for rings) and hide the
+    // original. Dev host only: `?look=<id>`, `window.__skyLook(id)`, `window.__skyLookStats()` switch it for comparing.
     const lookLoc = deps.location !== undefined ? deps.location : globalThis.location;
-    this._lookWant = lookFromSearch(lookLoc);   // the variant to build when the data arrives ('0' on a public host)
+    this._lookWant = lookFromSearch(lookLoc);   // the variant to build when the data arrives (DEFAULT_LOOK 'b' on a public host)
     this._lookId = '0';
     this._lookData = null;              // buildLook() of the current variant (also made for '0' when a stat is asked)
     this._lookGlass = null;
@@ -279,7 +280,7 @@ export class RealSkyLayer {
       if (!sky || !Array.isArray(sky.rows)) throw new Error('data/sky.json: no rows');
       this._ingest(sky);
       this._loadState = 'ready';
-      if (this._lookWant !== '0') { this._lookId = this._lookWant; this._lookBuild(); }   // dev host `?look=<id>`; its _apply follows
+      if (this._lookWant !== '0') { this._lookId = this._lookWant; this._lookBuild(); }   // 'b' by default, or a dev host `?look=<id>`; its _apply follows
       this._apply();
     } catch (err) {
       this._loadState = 'failed';
@@ -388,7 +389,8 @@ export class RealSkyLayer {
     const diveDots = this._dive === true && ready && this._diveAlpha > 0;
     if (this._dive === true) this._diveMaterial(this.diveAlpha());   // the Points are built when the data arrives, possibly mid-dive
     if (this._points) {
-      this._points.visible = (f4 || diveDots) && this._lookGroups.length === 0;   // a look variant draws its own Points instead
+      // a look variant draws its own Points on floor 4 instead; the opening dive always draws these plain dots (the look's Points carry no dive fade)
+      this._points.visible = this._lookGroups.length === 0 ? (f4 || diveDots) : (diveDots && !f4);
       for (const g of this._lookGroups) g.pts.visible = f4;
       this._points.material.size = this._isGlass() ? DOT_PX_GLASS : DOT_PX;   // 3 px on glass, 2 px with a mouse
       const sel = this._selected >= 0;
@@ -724,8 +726,10 @@ export class RealSkyLayer {
     const cp = cam.position;
     const pos = this._pos, N = this._rows.length, RE = Constants.EARTH_RADIUS, hide = this._hideCls, cls = this._cls;
     let best = -1, bd = R * R;
-    // look study: a bigger dot is hit anywhere on its disc (the distance is to its EDGE; inside it, the nearer centre wins); null = today's centre distance
+    // look: a dot bigger than today's is hit anywhere on its extra size (the pick radius grows by its radius beyond today's dot; inside that, the
+    // nearer centre wins); a dot of today's size picks exactly as before (centre distance). null = no look
     const lp = this._lookData && this._lookData.id !== '0' ? this._lookData.px : null;
+    const lb = this._lookGlass ? DOT_PX_GLASS : DOT_PX;
     for (let i = 0; i < N; i++) {
       if (hide[cls[i]] === 1) continue;                // a switched-off kind is not drawn, so it is not pickable
       const px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
@@ -735,7 +739,7 @@ export class RealSkyLayer {
       const sy = (-(m[1] * px + m[5] * py + m[9] * pz + m[13]) / w * 0.5 + 0.5) * H;
       const dx = sx - x, dy = sy - y;
       let d = dx * dx + dy * dy;
-      if (lp !== null) { const e = Math.sqrt(d) - lp[i] * 0.5; d = e > 0 ? e * e : d * 1e-6; }
+      if (lp !== null && lp[i] > lb) { const e = Math.sqrt(d) - (lp[i] - lb) * 0.5; d = e > 0 ? e * e : d * 1e-6; }
       if (d > bd) continue;
       // behind Earth? the camera-to-dot segment enters the sphere before it reaches the dot
       const ex = px - cp.x, ey = py - cp.y, ez = pz - cp.z;
@@ -1012,9 +1016,9 @@ export class RealSkyLayer {
     geo.setDrawRange(0, n);
   }
 
-  /* --- floor 4 look study (lane sky-look-1121): dev-only variants of how heavy objects stand out, see SkyLook.js --- */
+  /* --- floor 4 look (lane sky-look-1121): how heavy objects stand out; 'b' by default, the other variants dev-only, see SkyLook.js --- */
 
-  /** The variant now drawn ('0' = today). */
+  /** The variant now drawn ('0' = the old fixed-size dots, also before the data loads; 'b' the default once it has). */
   lookId() { return this._lookId; }
 
   /** The look's Points (one per dot size, the ring Points last), for probes and tests. */

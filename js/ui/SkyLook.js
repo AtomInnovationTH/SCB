@@ -1,7 +1,7 @@
 /**
- * SkyLook.js — the floor 4 look study (lane sky-look-1121, owner 2026-11-20, DECISIONS §80 row 10 / §81 row 1): seven dev-only variants
- * of how HEAVY objects stand out on the globe, and a clutter measure, so the owner can look at them before anything is decided. Today's
- * fixed-size dots stay (variant `0`); nothing here is built into the game.
+ * SkyLook.js — how HEAVY objects stand out on the floor 4 globe (look study lane sky-look-1121, owner 2026-11-20, DECISIONS §80 row 10 /
+ * §81 row 1), and a clutter measure. The owner picked variant `b` (§83 row 1, 2026-11-21): it is the game's look on every host
+ * (`DEFAULT_LOOK`). The other six variants, and `0` (the old fixed-size dots), stay behind the dev-host switch `?look=<id>` for comparing.
  *
  * Pure: no DOM, no scene. RealSkyLayer builds the Points from `buildLook` and installs the dev hooks through `installSkyLookHooks`.
  *
@@ -22,6 +22,8 @@ export const BASE_PX_GLASS = 3;
 
 /** The variant ids, in the order the sheet shows them. */
 export const LOOK_IDS = ['0', 'a', 'b', 'c', 'd', 'e', 'f'];
+/** The look the game draws with no switch, on every host: the owner's pick (DECISIONS §83 row 1, 2026-11-21, "b: two sizes"). */
+export const DEFAULT_LOOK = 'b';
 /** One plain line per variant (the sheet prints these). */
 export const LOOK_TEXT = {
   '0': 'Today: every dot the same small size, coloured by kind.',
@@ -291,10 +293,10 @@ export function measureClutter(points, w, h) {
   return { dots: n, coverPct: pct(covered, gw * gh), overlapPct: pct(overlapped, n), heavy, heavyHiddenPct: pct(heavyHidden, heavy), heavyOverlappedPct: pct(heavyOverlapped, heavy) };
 }
 
-/** `?look=<id>` from a location, on a dev host only; '0' (today) for no switch, an unknown id, or a public host. */
+/** `?look=<id>` from a location, on a dev host only (`?look=0` = the old fixed-size dots); DEFAULT_LOOK for no switch, an unknown id, or a public host. */
 export function lookFromSearch(loc = globalThis.location) {
   const raw = new URLSearchParams(devSearch(loc)).get('look');
-  return raw !== null && LOOK_IDS.includes(raw) ? raw : '0';
+  return raw !== null && LOOK_IDS.includes(raw) ? raw : DEFAULT_LOOK;
 }
 
 /**
