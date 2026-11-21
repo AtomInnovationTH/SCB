@@ -536,7 +536,7 @@ export class LadderController {
     const f = (s && s.floor === 4) ? FloorContract.byId(s.floor) : null;
     if (!f || !(distU > 0) || !Number.isFinite(distU)) return false;
     const w = FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC;
-    // The framing keeps today's reach (camera.frameMaxU, 210.1 u): the floor now zooms out to 500 u, the glide does not.
+    // The framing keeps today's reach (camera.frameMaxU, 210.1 u): the floor now zooms out to 1300 u (2026-11-21), the glide does not.
     const top = Number.isFinite(f.camera.frameMaxU) ? Math.min(1 - w, z01FromDistance(f, f.camera.frameMaxU)) : 1 - w;
     const to = Math.min(top, Math.max(s.z01, z01FromDistance(f, distU)));
     if (!(to > s.z01 + 1e-6)) { this._glide = null; return false; }

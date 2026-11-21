@@ -23,10 +23,30 @@ function logRange(minU, maxU) {
   return [Math.log10(minU), Math.log10(maxU)];
 }
 
+/** Outer z01 fraction that is spring-wall, each side (LADDER_GEOMETRY.WALL_ZONE_FRAC; floor 4's range is derived from it). */
+const WALL_ZONE_FRAC = 0.15;
+
+/**
+ * Floor 4's camera range (owner 2026-11-21: "Floor 4 should allow further zoom out"). The free zone's top (z01 1 - WALL_ZONE_FRAC,
+ * the hard stop) is F4_STOP_U; the range's top is derived so the stop lands exactly there: 70 * (1300/70)^(1/0.85) = 2177 u.
+ * Everything else the range feeds is kept in scene units (see floor 4's comment block): per-notch zoom, inner wall edge, arrivals.
+ */
+const F4_MIN_U = 70;
+const F4_STOP_U = 1300;
+const F4_TOP_U = F4_MIN_U * Math.pow(F4_STOP_U / F4_MIN_U, 1 / (1 - WALL_ZONE_FRAC));
+/** The range before 2026-11-19 (70..255 u) and the one of 2026-11-19..21 (70..707 u): the u values `wheelStepScale`/`wallLoFrac`/`entryZ01` keep. */
+const F4_OLD_TOP_U = 255;
+const F4_PREV_TOP_U = 707;
+/** z01 on floor 4's range of the distance `u` (log10 interpolation, as ZoomLadder.z01FromDistance). */
+const f4Z01 = (u) => Math.log10(u / F4_MIN_U) / Math.log10(F4_TOP_U / F4_MIN_U);
+/** The 2026-11-19 arrivals (z01 0.152 / 0.42 of the 70..707 range) in u: 99.48 u from below, 184.89 u from above. */
+const F4_ARRIVE_BELOW_U = F4_MIN_U * Math.pow(F4_PREV_TOP_U / F4_MIN_U, 0.152);
+const F4_ARRIVE_ABOVE_U = F4_MIN_U * Math.pow(F4_PREV_TOP_U / F4_MIN_U, 0.42);
+
 export const FloorContract = {
   /** Shared ladder geometry (docs/ladder/01-numbers.md "ladder position model"). */
   LADDER_GEOMETRY: {
-    WALL_ZONE_FRAC: 0.15,        // outer z01 fraction that is spring-wall, each side
+    WALL_ZONE_FRAC,              // outer z01 fraction that is spring-wall, each side
     ENTRY_Z01_FROM_BELOW: 0.25,  // arrival z01 after crossing upward (zoom-out)
     ENTRY_Z01_FROM_ABOVE: 0.75,  // arrival z01 after crossing downward (zoom-in)
   },
@@ -219,23 +239,28 @@ export const FloorContract = {
       id: 4,
       name: 'LEO',           // player label; instrument name NAVCOM
       anchor: 'earth',
-      // 1.1-7.8 R_E (R_E = Constants.EARTH_RADIUS = 63.71 u). Owner 2026-11-19 (DECISIONS §79 row 1): floor 4 keeps zooming
-      // out smoothly instead of crossing to floor 5. The range's top is 707 u so that the free zone's top (z01 0.85, the
-      // wall edge, a hard stop here: the 4->5 crossBlock in LadderController) lands at 500 u, floor 5's inner limit.
+      // 1.1-34 R_E (R_E = Constants.EARTH_RADIUS = 63.71 u; the stop is 20.4 R_E). Owner 2026-11-19 (DECISIONS §79 row 1): floor 4 keeps zooming
+      // out smoothly instead of crossing to floor 5; the free zone's top (z01 0.85, the wall edge, a hard stop: the 4->5 crossBlock
+      // in LadderController) first sat at 500 u (range top 707). Owner 2026-11-21: "Floor 4 should allow further zoom out" -> the
+      // stop is now 1300 u (floor 5's old outer limit; the ladder ends at floor 4 since DECISIONS §80 row 7, so it no longer
+      // guards a crossing). Measured (tmp probe, FloorContract fov 45): at 1300 u the GEO ring (421.6 u) stays inside the picture
+      // on a 1728x1117 and a 1366x1024 view for every camera direction (max |NDC| 0.83, a tilted view; 0.78 face-on), see test-Floor4Zoom1120.
+      // The range's top is derived (F4_TOP_U = 2177 u) so z01 0.85 lands exactly on the stop.
       // Until 2026-11-19 the range was [70, 255] (free zone 85..210 u); `entryZ01` below keeps the arrivals where they were.
-      // far 1200: the farthest thing drawn from the camera at 500 u is a GEO-shell dot on the far side (421.6 + 500 = 922 u);
-      // the Moon and planets follow the camera on this floor (SunLight), as the star shell does. `frameMaxU` is the NAVCOM
+      // far 2000 (= floor 5's): the farthest thing drawn from the camera at 1300 u is a GEO-shell dot on the far side
+      // (421.6 + 1300 = 1721.6 u); the Moon and planets follow the camera on this floor (SunLight), as the star shell does, so
+      // their offset from the camera does not grow with the zoom. `frameMaxU` is the NAVCOM
       // framing's own limit: the old free zone's top (70 * (255/70)^0.85 = 210.1 u), unchanged by the longer range.
-      // The wheel feel is today's (fix round 1, Z3): the range grew from 0.561 to 1.004 decades, and the ladder moves z01 (a
-      // fraction of the range) per notch, so `wheelStepScale` (old span / new span, 0.559) keeps every notch the old 1.053x, and
-      // `wallLoFrac` (0.15 of the old range, 0.0838 of the new) keeps the inner wall edge, the closest steady zoom, at the old 85.0 u
-      // (the outer edge is the 500 u hard stop, 0.85). ZoomLadder reads both for this floor; other floors use the shared values.
-      camera: { distU: [70, 707], rangeLog10: logRange(70, 707), fov: 45, near: 0.05, far: 1200, upFrame: 'earth-north', frameMaxU: 70 * Math.pow(255 / 70, 0.85),
-        wheelStepScale: Math.log10(255 / 70) / Math.log10(707 / 70), wallLoFrac: 0.15 * Math.log10(255 / 70) / Math.log10(707 / 70) },
-      // Arrival z01 (overrides LADDER_GEOMETRY.ENTRY_Z01_*): fromBelow 0.152 = 99.1 u (was 0.25 of the old range = 96.7 u;
-      // the free zone now starts at 0.0838 = 85 u), fromAbove
-      // 0.42 = 184.9 u (was 0.75 of the old range = 184.6 u).
-      entryZ01: { fromBelow: 0.152, fromAbove: 0.42 },
+      // The wheel feel is the 2026-11-18 one (fix round 1, Z3): the ladder moves z01 (a fraction of the range) per notch, so
+      // `wheelStepScale` (old span 0.561 decades / new span 1.493, 0.376) keeps every notch the old 1.053x, and `wallLoFrac`
+      // (0.15 of the old range, 0.0564 of the new) keeps the inner wall edge, the closest steady zoom, at the old 85.0 u
+      // (the outer edge is the 1300 u hard stop, 0.85). ZoomLadder reads both for this floor; other floors use the shared values.
+      camera: { distU: [F4_MIN_U, F4_TOP_U], rangeLog10: logRange(F4_MIN_U, F4_TOP_U), fov: 45, near: 0.05, far: 2000, upFrame: 'earth-north', frameMaxU: F4_MIN_U * Math.pow(F4_OLD_TOP_U / F4_MIN_U, 0.85),
+        wheelStepScale: Math.log10(F4_OLD_TOP_U / F4_MIN_U) / Math.log10(F4_TOP_U / F4_MIN_U), wallLoFrac: WALL_ZONE_FRAC * Math.log10(F4_OLD_TOP_U / F4_MIN_U) / Math.log10(F4_TOP_U / F4_MIN_U) },
+      // Arrival z01 (overrides LADDER_GEOMETRY.ENTRY_Z01_*), derived from the 2026-11-19 arrivals in u: fromBelow 99.5 u
+      // (z01 0.1023 now; 0.152 of the 707 range; the old 0.25 of the 255 range was 96.7 u), fromAbove 184.9 u (z01 0.2826 now; 0.42 of the 707 range;
+      // the old 0.75 of the 255 range was 184.6 u). The free zone starts at z01 0.0564 = 85 u.
+      entryZ01: { fromBelow: f4Z01(F4_ARRIVE_BELOW_U), fromAbove: f4Z01(F4_ARRIVE_ABOVE_U) },
       humps: { inFirmness: 1.6 },
       timeCap: 0.1, // real speed (1 game s per real s); was 20 (200x) until 2026-11-18. The map clock slider picks faster.
       fidelity: { nearField: false, physicsMode: 'warp-moid', debrisMode: 'clusters' },

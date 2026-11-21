@@ -1117,7 +1117,7 @@ export class SunLight {
     ).normalize();
 
     // Origin-centered (not camera-relative like the sun); parallax is negligible. On the Earth-anchored floors (4, 5) the
-    // camera is up to 500 u out and the disc 430 u from Earth's centre would sit up to 930 u from it: past the far plane on
+    // camera is up to 1300 u out (500 u before 2026-11-21) and the disc 430 u from Earth's centre would sit up to 1730 u from it: past the far plane on
     // the far side (the disc vanished along a line across the view, owner 2026-11-19), so there it follows the camera, as
     // the Sun and the star shell do.
     const follow = this._followsCamera();

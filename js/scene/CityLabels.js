@@ -686,7 +686,7 @@ export class CityLabels {
       layer.parent.getWorldPosition(_center);
 
       const maxTier = lodMaxTier(_cam.distanceTo(_center), layer.lodNear, layer.lodFar);
-      // Far camera (floor 4 out to 500 u): the whole label fades out between farFadeNear and farFadeEnd.
+      // Far camera (floor 4 out to 1300 u): the whole label fades out between farFadeNear and farFadeEnd.
       const farFade = farLabelFade(_cam.distanceTo(_center), layer.farFadeNear, layer.farFadeEnd);
       if (farFade <= 0) {
         for (const item of layer.items) this._hide(item);

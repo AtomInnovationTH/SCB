@@ -565,7 +565,7 @@ export class NavcomFloor {
     const d = (this._focusDesc && this._focusDesc.id === focused.id) ? this._focusDesc : null;
     const lines = d ? [d.label, d.estimate].filter(Boolean) : [ClusterIcons.nameLine(focused)];
     const foot = ClusterIcons.footprint({ ringPx: d ? d.ringPx : ClusterIcons.ringPx(focused.count, true), lines });
-    // The framing keeps today's reach (210.1 u, the old free zone's top): the floor's zoom now goes out to 500 u, but the
+    // The framing keeps today's reach (210.1 u, the old free zone's top): the floor's zoom now goes out to 1300 u (2026-11-21), but the
     // framing never zooms that far on its own (it would jump 210 -> ~400 u). FloorContract floor 4 `camera.frameMaxU`.
     const max = Number.isFinite(maxDistU) ? maxDistU
       : (Number.isFinite(FLOOR.camera.frameMaxU) ? FLOOR.camera.frameMaxU

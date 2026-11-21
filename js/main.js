@@ -1915,7 +1915,8 @@ async function init() {
       // global peak pads-in-one-view, so pads are never truncated.
       maxVisible: 28,
       maxVisibleLaunch: 6,
-      // Floor 4 zooms out to 500 u (2026-11-19): names stay whole up to 400 u and fade out by 500 u rather than smear.
+      // Floor 4 zooms out to 1300 u (2026-11-21; 500 u from 2026-11-19): names stay whole up to 400 u and fade out by 500 u rather than
+      // smear, so none show past 500 u (the same fade, not tied to the stop).
       farFadeNear: 400,
       farFadeEnd: 500,
       // Hide a dot inside the ship's screen circle (live position; radius covers every radiator pose).

@@ -61,7 +61,7 @@ const STARVE_MS = 2600;
 
 /** Ladder floor render-block pairs pinned by test-FloorContract; flags the "matches NO contract" mixed near/far state
  *  seen once in the field. Deliberately not imported from FloorContract (dev probe, no dep creep). */
-const FLOOR_CLIP = { 4: { near: 0.05, far: 1200 }, 5: { near: 0.5, far: 2000 } };
+const FLOOR_CLIP = { 4: { near: 0.05, far: 2000 }, 5: { near: 0.5, far: 2000 } };
 
 /** @returns {0|1|2} parsed `?bfp=` mode (0 = off) */
 function parseMode() {
