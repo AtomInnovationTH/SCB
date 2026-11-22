@@ -23,21 +23,70 @@
  */
 
 import { stormMultiplier as defaultStormMultiplier, multText } from './SunStorms.js';
-import { todaySunWords } from './AirGases.js';
+import { todaySunWords, totalDensity } from './AirGases.js';
 import { AirChart } from '../ui/AirChart.js';
 import { fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
+import { Constants } from '../core/Constants.js';
+import { atmosphericDensityBase, atmosphericDragOn } from '../entities/OrbitalMechanics.js';
+import { referenceDragAreaM2 } from '../entities/MotherDragArea.js';
 
 const DAY_MS = 86400000;
 /** The height the storm line speaks of when she has none. */
 export const STORM_DEFAULT_KM = 400;
 
+/** A number in the plain way a person says it: 1.5, 2, 40, 300 (one figure, or a half step while the first figure is 1). */
+function niceNumber(v) {
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  const m = v / p;
+  const step = m < 2 ? p / 2 : p;
+  const r = Math.round(v / step) * step;
+  return Number.isInteger(r) ? String(r) : String(Math.round(r * 10) / 10);
+}
+
+/**
+ * How much thinner the air is than at sea level (1.225 kg/m3), in words: "about 100 billion times thinner than at sea level".
+ * @param {number} rho air density here, kg/m3 @returns {string}
+ */
+export function thinnerWords(rho) {
+  const ratio = atmosphericDensityBase(0) / rho;
+  if (!(ratio > 1)) return 'Air here is as thick as at sea level.';
+  const units = [[1e15, 'quadrillion'], [1e12, 'trillion'], [1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand']];
+  const [size, name] = units.find(([s]) => ratio >= s) || [1, ''];
+  return `Air here is about ${niceNumber(ratio / size)}${name ? ' ' + name : ''} times thinner than at sea level.`;
+}
+
+/**
+ * How far the game's drag sinks her in a day at this height and air density, km. The game's own law (OrbitPane.referenceSinkKmPerRealS:
+ * da/dt = 2 a drag / v for her reference area and start mass), run on the chosen curve's density instead of today's.
+ * @param {number} altKm @param {number} rho air density here, kg/m3 @returns {number} km per day
+ */
+export function sinkKmPerDay(altKm, rho) {
+  const a = Constants.EARTH_RADIUS_KM + altKm;
+  const v = Math.sqrt(Constants.MU_EARTH / a);
+  const decel = atmosphericDragOn(altKm, v, referenceDragAreaM2(), Constants.MOTHER_DRAG.MASS_KG, rho / atmosphericDensityBase(altKm));
+  return 2 * decel * a / v * 86400;
+}
+
+/** "She sinks about 1.7 km a day with this Sun." (metres under 1 km) */
+export function sinkWords(kmPerDay) {
+  if (!(kmPerDay > 0)) return null;
+  if (kmPerDay >= 1) return `She sinks about ${kmPerDay >= 10 ? Math.round(kmPerDay) : (Math.round(kmPerDay * 10) / 10)} km a day with this Sun.`;
+  const m = kmPerDay * 1000;
+  return m < 1 ? 'She sinks less than a metre a day with this Sun.' : `She sinks about ${niceNumber(m)} metres a day with this Sun.`;
+}
+
 export class AirPage {
-  /** @param {{sunStorms:{today:()=>({ms:number,f107:number,kp:number}|null)}, getShipAltKm?:()=>(number|null|undefined), getViewport?:()=>{w:number,h:number}, stormMultiplier?:function, fontEpoch?:object, parent?:HTMLElement}} deps */
+  /** @param {{sunStorms:{today:()=>({ms:number,f107:number,kp:number}|null)}, getShipAltKm?:()=>(number|null|undefined), getFieldBands?:()=>(Array<{altKm:number[]}>|null|undefined), getStationKm?:()=>(number|null|undefined), getViewport?:()=>{w:number,h:number}, stormMultiplier?:function, fontEpoch?:object, parent?:HTMLElement}} deps */
   constructor(deps = {}) {
     this.id = 'air';
     this.title = 'Air by height';
     this._sun = deps.sunStorms || null;
     this._getAlt = typeof deps.getShipAltKm === 'function' ? deps.getShipAltKm : () => null;
+    this._getBands = typeof deps.getFieldBands === 'function' ? deps.getFieldBands : () => null;
+    this._getStation = typeof deps.getStationKm === 'function' ? deps.getStationKm : () => null;
+    /** Read when the page opens (the catalogue is loaded by then); read again then if it was empty. */
+    this._bandsKm = null;
+    this._stationKm = null;
     this._getViewport = typeof deps.getViewport === 'function' ? deps.getViewport : null;
     this._storm = typeof deps.stormMultiplier === 'function' ? deps.stormMultiplier : defaultStormMultiplier;
     this._fontEpoch = deps.fontEpoch || defaultFontEpoch;
@@ -66,9 +115,23 @@ export class AirPage {
 
   activate() {
     this._active = true;
+    this._readMarks();
     this.chart.show();
     this._key = null;
     this._draw();
+  }
+
+  /** Her debris-field heights and the space station's height, read once the page opens (the catalogue may not have been there before). */
+  _readMarks() {
+    if (!this._bandsKm) {
+      const fb = this._getBands();
+      const km = Array.isArray(fb) ? fb.map((b) => b && b.altKm).filter((a) => Array.isArray(a) && a.length === 2 && a[1] > a[0]) : [];
+      if (km.length) this._bandsKm = km;
+    }
+    if (this._stationKm === null) {
+      const s = this._getStation();
+      if (Number.isFinite(s)) this._stationKm = s;
+    }
   }
 
   deactivate() {
@@ -120,7 +183,16 @@ export class AirPage {
       storm = { kp: t.kp, factor, altKm };
       stormLine = `A storm is on today: at ${Math.round(altKm)} km the air is ${multText(factor)} times thicker than on a calm day with this Sun.`;
     }
-    return { mode: this._mode, curveLevel, todayLevel, todayLine, todaySub, stormLine, shipAltKm: alt, storm };
+    // What the air is like at her height, on the chosen curve: how thin, and how fast it sinks her (the game's own drag law).
+    let hereLines = [];
+    if (alt !== null && alt >= 100 && alt <= 900) {
+      const rho = totalDensity(alt, curveLevel);
+      if (rho > 0) hereLines = [thinnerWords(rho), sinkWords(sinkKmPerDay(alt, rho))].filter(Boolean);
+    }
+    return {
+      mode: this._mode, curveLevel, todayLevel, todayLine, todaySub, stormLine, shipAltKm: alt, storm,
+      hereLines, fieldBandsKm: this._bandsKm, stationKm: this._stationKm,
+    };
   }
 
   _viewport() {

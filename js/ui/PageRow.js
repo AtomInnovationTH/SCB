@@ -64,7 +64,9 @@ export function createDebrisPage(sdaFloor) {
     deactivate() { if (sdaFloor && sdaFloor.deactivate) sdaFloor.deactivate(); },
     update() { if (sdaFloor && sdaFloor.isActive && sdaFloor.isActive() && sdaFloor.update) sdaFloor.update(); },
     elements() {
-      const c = sdaFloor && sdaFloor.chart && sdaFloor.chart.element ? sdaFloor.chart.element() : null;
+      const ch = sdaFloor && sdaFloor.chart ? sdaFloor.chart : null;
+      if (ch && typeof ch.elements === 'function') return ch.elements();   // the canvas and the lens buttons slide together
+      const c = ch && ch.element ? ch.element() : null;
       return c ? [c] : [];
     },
   };

@@ -18,7 +18,7 @@
 
 import { VisualLaw } from '../core/VisualLaw.js';
 import { mono, fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
-import { totalDensity, gasDensity, oxygenAtomsDensity, ROW0_KM, ROW_TOP_KM } from '../systems/AirGases.js';
+import { totalDensity, gasDensity, oxygenAtomsDensity, ROW0_KM, ROW_TOP_KM, LEVEL_F107 } from '../systems/AirGases.js';
 import { TITLE_BOTTOM_PX } from './PageRow.js';
 
 /**
@@ -75,6 +75,11 @@ const TEXT_DIM = 'rgba(176, 192, 212, 0.78)';
 const GRID = 'rgba(150, 176, 206, 0.13)';
 const PLOT_BG = 'rgba(14, 24, 40, 0.9)';
 const HERE = VisualLaw.COLORS.INFO;
+/** The faint marks (debris-field bands, space station): a tint across the plot, a bar and tick at the right edge, dim words. */
+const BAND_FILL = 'rgba(190, 200, 230, 0.055)';
+const BAND_BAR = 'rgba(190, 200, 230, 0.45)';
+const BAND_TICK = 'rgba(190, 200, 230, 0.8)';
+const MARK_TEXT = 'rgba(176, 192, 212, 0.7)';
 const STEP_KM = 10;
 const LABEL_ROWS = 4;
 /** Row pitch of the labels above the plot: a label is 16 px tall, so rows are 8 px apart. */
@@ -181,10 +186,108 @@ export function layoutTopLabels(labels, gap = 8) {
 }
 
 /**
+ * Which Sun level a Sun is: 'low' | 'mean' | 'high' for the key itself or an F10.7 within half a unit of a level (the curves are the same
+ * to the eye), else null.
+ * @param {string|number} level @returns {string|null}
+ */
+export function sunKeyOf(level) {
+  if (level === 'low' || level === 'mean' || level === 'high') return level;
+  if (!Number.isFinite(level)) return null;
+  for (const k of ['low', 'mean', 'high']) if (Math.abs(level - LEVEL_F107[k]) < 0.5) return k;
+  return null;
+}
+
+/** The narrowest and widest the words about the air at her height wrap to (CSS px). */
+export const READOUT_MIN_W = 230; // 150 wrapped each sentence into a 4-line column (visual check 2026-11-22)
+export const READOUT_MAX_W = 260;
+/** Line pitch of the readout and of the edge marks (13 px type). */
+export const READOUT_PITCH = 16;
+
+/**
+ * How wide the words under her line may be: from the right edge of the plot back to the busy Sun's whole-air curve (the rightmost curve)
+ * at the lowest line the words can reach (about 100 px under her line), less 16 px.
+ */
+export function readoutWidth(geom, shipY) {
+  const reach = shipY + 110;
+  let maxX = geom.plot.x0;
+  for (const p of curvePoints(geom, 'total', 'high')) if (p[1] >= shipY && p[1] <= reach) maxX = Math.max(maxX, p[0]);
+  return Math.max(READOUT_MIN_W, Math.min(READOUT_MAX_W, Math.floor(geom.plot.x1 - 8 - maxX - 16)));
+}
+
+/**
+ * The faint marks at the right edge of the plot and where their words go: a band for each of her debris-field heights and a tick for
+ * the space station. The words are right-aligned at the plot's right edge, in the free column right of the curves; each label is kept
+ * clear of her label and readout and of the other labels by moving it up or down a few px (a band label stays inside its band).
+ * Words that find no room are dropped (`label: null`) and the band or tick stays.
+ * @param {object} geom @param {object|null} ship the ship part of the frame (its `readout` is wrapped lines) @param {object} model
+ * @param {(s:string, px:number)=>number} measure
+ */
+export function placeEdgeMarks(geom, ship, model, measure) {
+  const { plot } = geom;
+  const rightX = plot.x1 - 8;
+  const boxes = [];
+  const box = (text, baseline, h = 14) => { const w = measure(text, SIZE.small); return { l: rightX - w, r: rightX, t: baseline - SIZE.small + 1, b: baseline - SIZE.small + 1 + h, w }; };
+  if (ship) {
+    const lw = measure(ship.text, SIZE.body);
+    boxes.push({ l: rightX - lw, r: rightX, t: ship.y - 7 - SIZE.body, b: ship.y - 4 });
+    // the readout under her line: its first baseline 18 px below the line, a 6 px gap between sentences
+    let by = ship.y + 18;
+    ship.readoutLines = [];
+    for (const para of ship.readout) {
+      for (const line of para) { ship.readoutLines.push({ text: line, y: by }); by += READOUT_PITCH; }
+      by += 6;
+    }
+    by -= 6;
+    const shift = ship.readoutLines.length ? Math.min(0, plot.y1 - 4 - by) : 0;
+    for (const r of ship.readoutLines) r.y += shift;
+    if (ship.readoutLines.length) {
+      const w = Math.max(...ship.readoutLines.map((r) => measure(r.text, SIZE.small)));
+      boxes.push({ l: rightX - w, r: rightX, t: ship.readoutLines[0].y - SIZE.small, b: ship.readoutLines[ship.readoutLines.length - 1].y + 4 });
+    }
+  }
+  const clear = (c) => boxes.every((o) => c.r <= o.l - 6 || c.l >= o.r + 6 || c.b <= o.t - 4 || c.t >= o.b + 4);
+  /** Try offsets 0, -6, +6, -12 ... from the preferred baseline; `lo`/`hi` bound the box's top and bottom. */
+  const place = (text, pref, lo, hi) => {
+    for (let k = 0; k <= 12; k++) {
+      for (const sgn of (k === 0 ? [1] : [-1, 1])) {
+        const base = pref + sgn * k * 6;
+        const c = box(text, base);
+        if (c.t < Math.max(lo, plot.y0 + 2) || c.b > Math.min(hi, plot.y1 - 2)) continue;
+        if (!clear(c)) continue;
+        boxes.push(c);
+        return { text, x: rightX, y: base, w: c.w };
+      }
+    }
+    return null;
+  };
+
+  const station = { km: null, y: null, label: null };
+  const km = model.stationKm;
+  if (Number.isFinite(km) && km >= Y_MIN_KM && km <= Y_MAX_KM) {
+    station.km = km; station.y = yOfKm(geom, km);
+    station.label = place(`Space station ${Math.round(km)} km`, station.y - 6, plot.y0 + 2, plot.y1 - 2);
+  }
+  const bands = [];
+  for (const b of (Array.isArray(model.fieldBandsKm) ? model.fieldBandsKm : [])) {
+    const [lo, hi] = b;
+    if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)) continue;
+    const yTop = Math.max(plot.y0, yOfKm(geom, Math.min(hi, Y_MAX_KM)));
+    const yBot = Math.min(plot.y1, yOfKm(geom, Math.max(lo, Y_MIN_KM)));
+    const text = `Debris field ${lo}\u2013${hi} km`;
+    const mid = (yTop + yBot) / 2 + 4;
+    // inside the band if there is room, else a little outside it (the words carry the heights)
+    const label = place(text, mid, yTop + 1, yBot - 1) || place(text, mid, yTop - 30, yBot + 30);
+    bands.push({ lo, hi, yTop, yBot, label });
+  }
+  return { bands, station };
+}
+
+/**
  * Everything the chart draws for a model and a screen size.
  * @param {object} model what AirPage works out:
  *   mode 'low'|'mean'|'high'|'today'; curveLevel 'low'|'mean'|'high'|F10.7 number (the chosen curves); todayLevel (the same, for today);
- *   todayLine, todaySub (plain words), stormLine (string|null); shipAltKm (number|null)
+ *   todayLine, todaySub (plain words), stormLine (string|null); shipAltKm (number|null); hereLines (strings about the air at her height,
+ *   optional); fieldBandsKm ([[lo,hi],...], optional); stationKm (number, optional)
  * @param {number} wPx @param {number} hPx
  * @param {(s:string, px:number)=>number} [measure] text width (default: an estimate)
  */
@@ -205,21 +308,46 @@ export function buildFrame(model, wPx, hPx, measure = approxWidth) {
   const todayDashed = mode === 'today' ? null
     : { id: 'today-dashed', label: 'Today', level: model.todayLevel, pts: curvePoints(geom, 'total', model.todayLevel) };
 
-  // Labels above the plot, at the 900 km end of each whole-air line.
+  // Labels above the plot, at the 900 km end of each whole-air line. When today's Sun IS one of the three levels, that level gets ONE
+  // label ("Average Sun = today"), never a "Today" label on top of the level's own (the faint line under the bold one has no label either).
   const topLabels = [];
   const topOf = (pts) => pts[pts.length - 1][0];
-  for (const f of faint) topLabels.push({ id: f.id, text: f.label, x: topOf(f.pts), w: measure(f.label, SIZE.small) + 6, bold: false });
+  const todayKey = sunKeyOf(model.todayLevel);
+  const todayWord = (k) => (todayKey === k ? `${SUN_WORDS[k]} = today` : SUN_WORDS[k]);
   const bold = curves[0];
-  topLabels.push({ id: 'chosen', text: mode === 'today' ? 'Today' : SUN_WORDS[mode], x: topOf(bold.pts), w: measure(mode === 'today' ? 'Today' : SUN_WORDS[mode], SIZE.small) + 6, bold: true });
-  if (todayDashed) topLabels.push({ id: todayDashed.id, text: 'Today', x: topOf(todayDashed.pts), w: measure('Today', SIZE.small) + 6, bold: false });
-  // A faint line that is the same as the chosen one in Today mode is not drawn twice: the bold label stands for it.
+  if (mode === 'today') {
+    const text = todayKey ? todayWord(todayKey) : 'Today';
+    for (const f of faint) {
+      if (f.level === todayKey) continue;
+      topLabels.push({ id: f.id, text: f.label, x: topOf(f.pts), w: measure(f.label, SIZE.small) + 6, bold: false });
+    }
+    topLabels.push({ id: 'chosen', text, x: topOf(bold.pts), w: measure(text, SIZE.small) + 6, bold: true });
+  } else {
+    for (const f of faint) {
+      const text = todayWord(f.level);
+      topLabels.push({ id: f.id, text, x: topOf(f.pts), w: measure(text, SIZE.small) + 6, bold: false });
+    }
+    const text = todayWord(mode);
+    topLabels.push({ id: 'chosen', text, x: topOf(bold.pts), w: measure(text, SIZE.small) + 6, bold: true });
+    if (todayDashed && !todayKey) {
+      topLabels.push({ id: todayDashed.id, text: 'Today', x: topOf(todayDashed.pts), w: measure('Today', SIZE.small) + 6, bold: false });
+    }
+  }
   const topPlaced = layoutTopLabels(topLabels);
 
-  // Her height.
+  // Her height, and what the air is like there (words come in with the model).
   let ship = null;
   if (Number.isFinite(model.shipAltKm) && model.shipAltKm >= Y_MIN_KM && model.shipAltKm <= Y_MAX_KM) {
-    ship = { altKm: model.shipAltKm, y: yOfKm(geom, model.shipAltKm), text: `She is here: ${Math.round(model.shipAltKm)} km` };
+    ship = { altKm: model.shipAltKm, y: yOfKm(geom, model.shipAltKm), text: `She is here: ${Math.round(model.shipAltKm)} km`, readout: [] };
+    const rw = readoutWidth(geom, ship.y);
+    for (const para of (Array.isArray(model.hereLines) ? model.hereLines : [])) {
+      const lines = wrapText(para, rw, (t) => measure(t, SIZE.small));
+      if (lines.length) ship.readout.push(lines);
+    }
   }
+
+  // Faint marks at the right edge: her debris-field heights and the space station (heights come in with the model).
+  const marks = placeEdgeMarks(geom, ship, model, measure);
 
   // Axis ticks.
   const yTicks = [];
@@ -246,10 +374,11 @@ export function buildFrame(model, wPx, hPx, measure = approxWidth) {
   const sig = [
     mode, String(model.curveLevel), String(model.todayLevel), model.todayLine, model.todaySub || '', model.stormLine || '',
     ship ? Math.round(ship.altKm) : '-', `${wPx}x${hPx}`,
+    ship ? ship.readout.map((p) => p.join(' ')).join('/') : '', JSON.stringify(model.fieldBandsKm || null), String(model.stationKm ?? '-'),
   ].join('|');
 
   return {
-    geom, mode, buttons, curves, faint, todayDashed, topLabels: topPlaced, ship, yTicks, xTicks, legend, notes,
+    geom, mode, buttons, curves, faint, todayDashed, topLabels: topPlaced, ship, marks, yTicks, xTicks, legend, notes,
     title: AIR_TITLE, subtitle: AIR_SUBTITLE, footer: AIR_FOOTER,
     xTitle: 'Air density, kg per cubic metre (log scale: each step to the right is 10 times thicker)',
     sig,
@@ -406,6 +535,16 @@ export class AirChart {
     g.strokeStyle = 'rgba(176, 192, 212, 0.55)';
     g.strokeRect(plot.x0 + 0.5, plot.y0 + 0.5, plot.x1 - plot.x0 - 1, plot.y1 - plot.y0 - 1);
 
+    // Faint marks under the curves: a band for each of her debris-field heights, a tick for the space station, both at the right edge.
+    g.fillStyle = BAND_FILL;
+    for (const b of f.marks.bands) g.fillRect(plot.x0 + 1, b.yTop, plot.x1 - plot.x0 - 2, b.yBot - b.yTop);
+    g.fillStyle = BAND_BAR;
+    for (const b of f.marks.bands) g.fillRect(plot.x1 - 4, b.yTop, 3, b.yBot - b.yTop);
+    if (f.marks.station.y !== null) {
+      g.strokeStyle = BAND_TICK; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(plot.x1 - 26, f.marks.station.y); g.lineTo(plot.x1 - 1, f.marks.station.y); g.stroke();
+    }
+
     // Curves, clipped to the plot.
     g.save();
     g.beginPath(); g.rect(plot.x0, plot.y0, plot.x1 - plot.x0, plot.y1 - plot.y0); g.clip();
@@ -424,6 +563,9 @@ export class AirChart {
     }
     g.restore();
     if (f.ship) T(f.ship.text, plot.x1 - 8, f.ship.y - 7, SIZE.body, HERE, 'right', 'bold');
+    if (f.ship) for (const r of f.ship.readoutLines || []) T(r.text, plot.x1 - 8, r.y, SIZE.small, TEXT, 'right');
+    for (const b of f.marks.bands) if (b.label) T(b.label.text, b.label.x, b.label.y, SIZE.small, MARK_TEXT, 'right');
+    if (f.marks.station.label) T(f.marks.station.label.text, f.marks.station.label.x, f.marks.station.label.y, SIZE.small, MARK_TEXT, 'right');
 
     // Labels above the plot, at the 900 km end of each whole-air line.
     // Leaders first, then each label on a patch of the backdrop so a leader never runs through a word.

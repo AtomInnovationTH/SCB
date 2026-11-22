@@ -294,7 +294,7 @@ export const FloorContract = {
         frameRadiusU: 1020,
         geoRingU: 6.6 * Constants.EARTH_RADIUS,
         meoCompressed: true,
-        compressionTag: 'MEO compressed',
+        compressionTag: 'Not to scale beyond 2,000 km',
         lenses: ['VALUE', 'THREAT'],
       },
     },

@@ -57,6 +57,8 @@ export class SdaFloor {
     this._realSkySource = deps.realSkySource || null;
     this._kessler = deps.kessler || null;
     this._chart = deps.chart || new SdaChart();
+    // The chart's two lens buttons (Tonnes / Danger) set the lens through this floor, like the endings ride does.
+    if ('onLens' in this._chart) this._chart.onLens = (lens) => this.setLens(lens);
     this._now = deps.now || _nowMs;
     this._realSkyLayer = deps.realSkyLayer || null;   // the real-catalogue dots (ui/RealSkyLayer.js, plan sky-1116): show(5) / hide(5)
 

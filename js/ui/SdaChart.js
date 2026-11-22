@@ -348,11 +348,18 @@ export const CHART_TOP_CLEAR_PX = 62; // 56 left the tag's glyphs 5 px under the
  * The Kessler strip's top and bottom edges as distances from the screen bottom, px (lane fix F2, 2026-11-18). The bottom used to be
  * 34: the field-heights line (baseline h-23, glyph tops h-31) touched the decade ticks (to h-30) and the trace. At 44 the ticks end at
  * h-40, 9 px above the field-heights line's glyph tops (at least 6 px asked).
+ * 2026-11-22 (sky 18): the year labels now run every 20 years under the whole strip, so they sit in the field-heights line's rows: the
+ * bottom is 52 (ticks end at h-48), the labels' baseline 15 px under it (glyphs h-45..h-37, 6 px above that line's glyph tops at h-31),
+ * and the top 112 (the plot is 60 px tall: a 32 px plot made the 1957-2026 climb a hairline. The page title "Debris by height" is
+ * centred with its bottom at h-108, so the forecast must stay under it: it is at most 0.78 of the plot high over the title's width.
+ * The page dots' circles sit at h-80 +-5, centred; the line passes over them.)
  */
-export const STRIP_TOP_FROM_BOTTOM_PX = 88;
-export const STRIP_BOTTOM_FROM_BOTTOM_PX = 44;
+export const STRIP_TOP_FROM_BOTTOM_PX = 112;
+export const STRIP_BOTTOM_FROM_BOTTOM_PX = 52;
 /** Decade ticks hang this far under the strip's bottom edge. */
 export const STRIP_TICK_PX = 4;
+/** The 20-year labels' baseline, px under the strip's bottom edge. */
+const STRIP_LABEL_DROP_PX = 15;
 
 /**
  * Every string the chart painted last (CSS px: x, y top, w, h) - the real-sky dots canvas (z 34) sits over the chart (z 33) and
@@ -369,38 +376,90 @@ export function chartTextVersion() { return _chartTextVersion; }
 function _setChartTextBoxes(list) { _chartTextBoxes = list; _chartTextVersion++; }
 /** The lowest a label baseline may start: below the tag and the caveat row (CHART_TOP_CLEAR_PX + 2 rows). */
 export const LABEL_TOP_PX = CHART_TOP_CLEAR_PX + 28;
-/** Label x offset from the centre: beside its ring when alone, further out when it sits in a leader column. */
+/** Label x offset from the centre for a label that has no leader (the far ring's label at the top). */
 const LABEL_X_NEAR = 8;
-const LABEL_X_COLUMN = 24;
+/** The five height labels stand in a column at the upper right, outside the outermost band (owner 2026-11-22, sky 18). */
+const COLUMN_X_FRAC = 0.72;   // column left edge = this x the outermost band's outer radius + COLUMN_X_PAD_PX, from the centre
+const COLUMN_X_PAD_PX = 16;
+/** Clear space between the outermost ring and the nearest corner of any column label box, px. */
+const COLUMN_CLEAR_PX = 10;
+/** Where each leader leaves its ring: this many degrees clockwise from 12 o'clock (about half past one). */
+const LEADER_ANGLE_DEG = 50;
+/**
+ * What the search/filter panel at the top right covers (CSS px, measured in the browser 2026-11-22 at 1728x1117 and 1366x1024):
+ * it is 12 px from the right edge, 270 px wide, from y 176 to 318. The column keeps its text off it.
+ */
+export const LEGEND_PANEL = Object.freeze({ right: 12, w: 275, top: 170, bottom: 322 });
+/** Width of one 10 px label when there is no canvas to measure it (the face is about 6.1 px a glyph). */
+const GLYPH_PX = 6.6;
 
 /**
- * Lay the ring labels out so no two text boxes overlap. A label sits beside its ring (baseline 3 px above the ring's
- * mid-radius, clamped to ≥ 12 px from the top). Where neighbours would be closer than `minGap` (the inner LEO rings are
- * only ~8 px apart) the whole run of neighbours goes into a column at fixed `minGap` spacing, outermost first, each with a
- * leader line from its ring (`ringY`) to the label. The input is not mutated; the strip title (rPx 0, painted with the
- * strip) passes through untouched.
- * @param {Array<{id:*, rPx:number}>} labels
+ * Lay the ring labels out so no two text boxes overlap. The band labels (ids `band-…`) stand in ONE column at the upper right,
+ * outermost band first at fixed `minGap` spacing, entirely outside the outermost ring (`outerPx`, the outer radius of the last
+ * band): the column's left edge sits at 0.72 of that radius + 16 px, and its lowest box ends where the circle (radius + 10 px)
+ * passes it. Each label has a leader from its OWN ring (its `rPx`, about half past one o'clock) to the column. When the column
+ * would meet the legend panel (`avoid`: {x0, x1, y0, y1} as offsets from the centre/top) it goes up above the panel instead. Any
+ * other label (the GEO ring's) sits at the top beside the centre line. The input is not mutated; the strip title (rPx 0, painted
+ * with the strip) passes through untouched.
+ * @param {Array<{id:*, rPx:number, text?:string}>} labels
  * @param {number} cy - chart centre y, px
  * @param {number} [minGap]
- * @returns {Array<object>} each label plus `x` (offset from the centre), `y` (baseline), `ringY`, `leader`
+ * @param {number} [minY]     - first baseline the column may use
+ * @param {number} [outerPx]  - outer radius of the outermost band, px (default: the outermost label's radius + 4)
+ * @param {{x0:number,x1:number,y0:number,y1:number}|null} [avoid] - a rectangle the column must not touch (x from the centre, y from the top)
+ * @returns {Array<object>} each label plus `x` (offset from the centre), `y` (baseline), `ringX` / `ringY` (leader start: x from
+ *   the centre, y from the top), `leader`
  */
-export function layoutLabels(labels, cy, minGap = LABEL_MIN_GAP_PX, minY = 12) {
+export function layoutLabels(labels, cy, minGap = LABEL_MIN_GAP_PX, minY = 12, outerPx = 0, avoid = null) {
   const out = labels.map((l) => {
     const ringY = cy - l.rPx;
-    return { ...l, x: LABEL_X_NEAR, y: Math.max(minY, ringY - 3), ringY, leader: false };
+    return { ...l, x: LABEL_X_NEAR, y: Math.max(minY, ringY - 3), ringX: 0, ringY, leader: false };
   });
-  const rings = out.filter((l) => l.id !== 'kessler-strip').sort((a, b) => a.y - b.y);
-  const raw = rings.map((l) => l.y);
-  for (let k = 1; k < rings.length; k++) rings[k].y = Math.max(raw[k], rings[k - 1].y + minGap);
-  for (let k = 0; k < rings.length; k++) {
-    const pushed = (m) => m >= 0 && m < rings.length && rings[m].y > raw[m] + 1e-9;
-    if (pushed(k) || pushed(k + 1)) { // pushed itself, or it pushed its inner neighbour
-      rings[k].x = LABEL_X_COLUMN;
-      rings[k].leader = true;
-    }
+  const bands = out.filter((l) => String(l.id).startsWith('band-')).sort((a, b) => b.rPx - a.rPx);
+  if (!bands.length) return out;
+  const edge = outerPx > 0 ? outerPx : bands[0].rPx + 4;
+  const x = edge * COLUMN_X_FRAC + COLUMN_X_PAD_PX;
+  const reach = edge + COLUMN_CLEAR_PX;
+  const dy = Math.sqrt(Math.max(0, reach * reach - x * x));
+  let bottom = cy - dy - 3;                       // baseline of the lowest label; its box ends 3 px lower
+  const span = (bands.length - 1) * minGap;
+  if (avoid) {
+    const right = x + Math.max(...bands.map((l) => (l.text ? String(l.text).length : 0) * GLYPH_PX));
+    const colTop = bottom - span - 9, colBottom = bottom + 3;
+    if (right > avoid.x0 && x < avoid.x1 && colBottom > avoid.y0 && colTop < avoid.y1) bottom = Math.min(bottom, avoid.y0 - 8 - 3);
   }
+  const top = Math.max(minY + 14, bottom - span);   // one row under the first top line, whose box ends 3 px under its baseline (the GEO label)
+  const a = LEADER_ANGLE_DEG * Math.PI / 180;
+  bands.forEach((l, k) => {
+    l.x = x;
+    l.y = top + k * minGap;
+    l.leader = true;
+    l.ringX = l.rPx * Math.sin(a);
+    l.ringY = cy - l.rPx * Math.cos(a);
+  });
   return out;
 }
+
+/** The two lens buttons, in flip order: words for what each lens shows (gold = tonnes, red = danger). */
+export const LENS_BUTTONS = Object.freeze([
+  { lens: 'VALUE', label: 'Tonnes' },
+  { lens: 'THREAT', label: 'Danger' },
+]);
+/** Like the air page's Sun buttons: a fingertip tall (AirChart BUTTON_MIN_H 46). */
+export const LENS_BTN_H = 46;
+const LENS_BTN_W = 96;
+const LENS_BTN_TEXT = '#eef2f7';
+
+/** The strip's title (plain words; the forecast starts at "today"). */
+export const STRIP_TITLE = 'Objects in orbit, 1957\u20132126 \u00b7 after today: forecast';
+/** The strip's scale note: the count axis is logarithmic, so every step up is ten times more. */
+export const STRIP_SCALE_NOTE = 'Each step up is 10 times more objects';
+/** The strip's honest-scale caveats (VALUE: some masses are estimates; THREAT: the timeline's two caveats). */
+export const NOTE_ESTIMATES = 'Band masses marked est. are estimates';
+export const NOTE_THREAT = 'Some jumps before 2020 are better tracking, not new pieces \u00b7 when a chain reaction starts is disputed';
+
+/** The lowest count the strip's log axis shows (the 1957 start of zero sits on this line), and the decades it spans. */
+export const STRIP_LOG_MIN = 1000;
 
 export class SdaChart {
   /**
@@ -415,6 +474,11 @@ export class SdaChart {
     this._ctx2d = null;
     this._built = false;
     this._visible = false;
+    this._buttonsRoot = null;
+    /** @type {Map<string, HTMLElement>} lens -> its button (built with the canvas, browser only) */
+    this._lensButtons = new Map();
+    /** A press on a lens button calls this with 'VALUE' | 'THREAT' (SdaFloor sets it to its own setLens); unset: the chart's own. */
+    this.onLens = null;
     this._lens = LENSES[0]; // VALUE — the arrival default (00-spec §3 F5)
     // Write-on-change state: last painted signature + paint clock.
     this._lastSig = null;
@@ -484,6 +548,64 @@ export class SdaChart {
     document.body.appendChild(canvas);
     this._canvas = canvas;
     this._ctx2d = canvas.getContext ? canvas.getContext('2d') : null;
+    this._buildLensButtons();
+  }
+
+  /**
+   * @private The two lens buttons, real <button>s built like the air page's Sun buttons (AirChart): 46 px tall, the active one
+   * highlighted, top left (nothing else lives there on page 1). They slide with the chart (the page row moves `elements()`) and show
+   * only while the chart does. A press goes through `onLens` (SdaFloor.setLens) and then lets go of focus, so Space stays the flip.
+   */
+  _buildLensButtons() {
+    const root = document.createElement('div');
+    root.id = 'sda-lens-buttons';
+    root.style.cssText = [
+      'position:absolute', 'left:16px', 'top:16px', 'display:none', 'flex-direction:row', 'gap:10px', 'z-index:36',
+      'pointer-events:none', 'opacity:0', 'transition:opacity 0.3s', 'font-family:var(--font-mono)',
+      'user-select:none', '-webkit-user-select:none',
+    ].join(';');
+    for (const b of LENS_BUTTONS) {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.textContent = b.label;
+      el.dataset.lens = b.lens;
+      el.setAttribute('aria-pressed', 'false');
+      el.tabIndex = -1;
+      el.style.cssText = [
+        'box-sizing:border-box', 'cursor:pointer', 'border-radius:6px', `color:${LENS_BTN_TEXT}`, 'font-family:inherit',
+        'font-size:15px', 'touch-action:manipulation', 'padding:0 14px', `height:${LENS_BTN_H}px`, `min-width:${LENS_BTN_W}px`,
+        'pointer-events:auto', '-webkit-tap-highlight-color:transparent',
+      ].join(';');
+      const press = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (this.onLens) this.onLens(b.lens); else this.setLens(b.lens);
+        this._syncLensButtons();
+        if (typeof el.blur === 'function') el.blur();
+      };
+      el.addEventListener('click', press);
+      // a touch or press on a button is the button's, never the page row's swipe or the globe's
+      for (const type of ['touchstart', 'mousedown', 'pointerdown']) {
+        el.addEventListener(type, (e) => { e.stopPropagation(); if (type === 'mousedown') e.preventDefault(); });
+      }
+      root.appendChild(el);
+      this._lensButtons.set(b.lens, el);
+    }
+    document.body.appendChild(root);
+    this._buttonsRoot = root;
+    this._syncLensButtons();
+  }
+
+  /** @private Highlight the button of the current lens (also after Space flips it). */
+  _syncLensButtons() {
+    if (!this._buttonsRoot) return;
+    for (const [lens, el] of this._lensButtons) {
+      const on = lens === this._lens;
+      if (el.dataset.on === (on ? '1' : '0')) continue;
+      el.dataset.on = on ? '1' : '0';
+      el.setAttribute('aria-pressed', on ? 'true' : 'false');
+      el.style.background = on ? 'rgba(86, 116, 156, 0.55)' : 'rgba(30, 44, 66, 0.9)';
+      el.style.border = on ? `2px solid ${LENS_BTN_TEXT}` : '1px solid rgba(150, 176, 206, 0.45)';
+    }
   }
 
   isVisible() { return this._visible; }
@@ -491,10 +613,18 @@ export class SdaChart {
   /** The chart's canvas (built on first use; null headless): the page row slides this node. */
   element() { this._build(); return this._canvas || null; }
 
+  /** Every top-level node the page row slides: the canvas and the lens buttons (empty headless). */
+  elements() { this._build(); return [this._canvas, this._buttonsRoot].filter(Boolean); }
+
   show() {
     this._build();
     this._visible = true;
     if (this._canvas) this._canvas.style.opacity = '1';
+    if (this._buttonsRoot) {
+      this._syncLensButtons();
+      this._buttonsRoot.style.display = 'flex';
+      this._buttonsRoot.style.opacity = '1';
+    }
     // A re-show must repaint even into an unchanged world (the canvas may have been cleared on hide).
     this._lastSig = null;
   }
@@ -503,6 +633,7 @@ export class SdaChart {
     this._visible = false;
     this._boxes = [];
     _setChartTextBoxes([]);
+    if (this._buttonsRoot) { this._buttonsRoot.style.opacity = '0'; this._buttonsRoot.style.display = 'none'; }
     if (this._canvas) {
       this._canvas.style.opacity = '0';
       if (this._ctx2d) this._ctx2d.clearRect(0, 0, this._canvas.width, this._canvas.height);
@@ -523,6 +654,7 @@ export class SdaChart {
    */
   render(m = {}) {
     const lens = this._lens;
+    this._syncLensButtons(); // Space may have flipped the lens since the last frame
     const wPx = m.wPx || ((typeof window !== 'undefined') ? window.innerWidth : 1280);
     const hPx = m.hPx || ((typeof window !== 'undefined') ? window.innerHeight : 720);
     const bands = m.bands || [];
@@ -557,25 +689,26 @@ export class SdaChart {
       id: r.id,
       weight: weights[i],
       text: lens === 'VALUE'
-        ? `${r.altKm[0]}\u2013${r.altKm[1]} km \u00b7 ${Math.round(r.massT + r.liveMassT)} t${r.estimate ? ' \u00b7 EST' : ''}`
+        ? `${_thousands(r.altKm[0])}\u2013${_thousands(r.altKm[1])} km \u00b7 ${_thousands(r.massT + r.liveMassT)} t${r.estimate ? ' \u00b7 est.' : ''}`
         : (r.realCount != null
-          ? `${r.altKm[0]}\u2013${r.altKm[1]} km \u00b7 ${_thousands(r.realCount)} tracked \u00b7 ${_thousands(r.realNotWorking)} not working`
-          : `${r.altKm[0]}\u2013${r.altKm[1]} km \u00b7 ${r.count} obj`),
+          ? `${_thousands(r.altKm[0])}\u2013${_thousands(r.altKm[1])} km \u00b7 ${_thousands(r.realNotWorking)} of ${_thousands(r.realCount)} not working`
+          : `${_thousands(r.altKm[0])}\u2013${_thousands(r.altKm[1])} km \u00b7 ${_thousands(r.count)} ${r.count === 1 ? 'object' : 'objects'}`),
       rPx: (r.innerPx + r.outerPx) / 2,
     }));
     candidates.push({
       id: 'geo-ring',
       weight: lens === 'VALUE' ? 1.01 : 0.5, // the gold ring headlines VALUE
-      text: `GEO belt+graveyard \u00b7 ${gold} t`,
+      text: `36,000 km ring + graveyard \u00b7 ${_thousands(gold)} t`,
       rPx: map.geoPx,
     });
     candidates.push({
       id: 'kessler-strip',
       weight: lens === 'THREAT' ? 1.01 : 0.4, // the timeline headlines THREAT
-      text: 'KESSLER TIMELINE 1957\u21922126',
+      text: STRIP_TITLE,
       rPx: 0,
     });
-    const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2, LABEL_MIN_GAP_PX, LABEL_TOP_PX);
+    const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2, LABEL_MIN_GAP_PX, LABEL_TOP_PX,
+      map.leoTopPx, { x0: wPx / 2 - LEGEND_PANEL.right - LEGEND_PANEL.w, x1: wPx / 2, y0: LEGEND_PANEL.top, y1: LEGEND_PANEL.bottom });
 
     const timeline = m.timeline || null;
     const sig = SdaChart.frameSig({
@@ -653,28 +786,31 @@ export class SdaChart {
     for (const l of labels) {
       if (l.id === 'kessler-strip') continue; // painted with the strip below
       g.fillStyle = this._rgba(ramp, 0.95);
-      if (l.leader) { // column label: a thin leader from its ring (same colour as the label)
+      if (l.leader) { // column label: a thin leader from its own ring (same colour as the label), a dot where it leaves the ring
         g.beginPath();
-        g.moveTo(cx, l.ringY);
+        g.moveTo(cx + l.ringX, l.ringY);
         g.lineTo(cx + l.x - 3, l.y - 4);
         g.strokeStyle = this._rgba(ramp, 0.95);
         g.lineWidth = 1;
         g.stroke();
+        g.beginPath();
+        g.arc(cx + l.ringX, l.ringY, 1.5, 0, Math.PI * 2);
+        g.fill();
       }
       this._text(g, l.text, cx + l.x, l.y);
     }
 
-    // Honesty chrome (not world labels): MEO tag + ESTIMATE provenance.
+    // Honesty chrome (not world labels): the scale tag + ESTIMATE provenance.
     g.textAlign = 'center';
     g.fillStyle = VisualLaw.COLORS.INFO;
     g.globalAlpha = 0.8;
     if (map.compressed) this._text(g, FLOOR.chart.compressionTag, cx, CHART_TOP_CLEAR_PX);
     const realSky = f.realSky || null;
     if (lens === 'VALUE') {
-      // The EST line stays only while some band still shows an estimate (a real band has none).
-      if (rings.some((r) => r.estimate)) this._text(g, 'sub-LEO band masses are estimates (EST)', cx, CHART_TOP_CLEAR_PX + 14);
+      // The estimate line stays only while some band still shows an estimate (a real band has none).
+      if (rings.some((r) => r.estimate)) this._text(g, NOTE_ESTIMATES, cx, CHART_TOP_CLEAR_PX + 14);
     } else {
-      this._text(g, 'pre-2020 count jumps partly = better sensors \u00b7 cascade onset disputed', cx, CHART_TOP_CLEAR_PX + 14);
+      this._text(g, NOTE_THREAT, cx, CHART_TOP_CLEAR_PX + 14);
     }
     // Objects beyond the LEO shells are counted, never silently dropped.
     const topKm = rings.length ? rings[rings.length - 1].altKm[1] : 2000;
@@ -682,10 +818,10 @@ export class SdaChart {
       // Bottom right on the credit's baseline (h-7): the top edge clips it at 1728×1117 and the Houston panel covers it at
       // 1366×1024, and the field-heights row (h-20) is taken by the strip's last year label (2126) at the right.
       g.textAlign = 'right';
-      this._text(g, `beyond ${topKm} km: ${_thousands(realSky.beyond2000.n)} tracked`, w - 10, h - 7);
+      this._text(g, `beyond ${_thousands(topKm)} km: ${_thousands(realSky.beyond2000.n)} tracked`, w - 10, h - 7);
     } else if (f.outOfBand && f.outOfBand.count > 0) {
       g.textAlign = 'right';
-      this._text(g, `beyond ${topKm} km: ${f.outOfBand.count} obj`, w - 10, h - 7);
+      this._text(g, `beyond ${_thousands(topKm)} km: ${_thousands(f.outOfBand.count)} ${f.outOfBand.count === 1 ? 'object' : 'objects'}`, w - 10, h - 7);
     }
     // Real numbers need their credit (CC BY 4.0): bottom centre, both lenses, under the strip (h-34); the strip's year
     // labels (h-20) sit at its far left and right, so the centred field-heights line on that row clears them.
@@ -714,7 +850,11 @@ export class SdaChart {
     g.fillText(str, x, y);
   }
 
-  /** @private The decade-scale Kessler timeline strip along the bottom. */
+  /**
+   * @private The timeline strip along the bottom. The count axis is logarithmic (each gridline is 10 times the one under it, STRIP_LOG_MIN
+   * at the bottom; the 1957 start of zero sits on that line), so 1957-2026 is a readable climb next to the forecast. The history is a
+   * solid line; the forecast after "today" (the last keyframe year) is dashed and fainter than the history.
+   */
   _paintStrip(g, w, h, lens, timeline, labels, pulse) {
     const x0 = w * 0.08, x1 = w * 0.92;
     const y0 = h - STRIP_TOP_FROM_BOTTOM_PX, y1 = h - STRIP_BOTTOM_FROM_BOTTOM_PX;
@@ -725,11 +865,17 @@ export class SdaChart {
     const counts = [...hist.map((p) => p.tracked), ...proj.map((p) => p.tracked)];
     const yr0 = Math.min(...years), yr1 = Math.max(...years);
     const cMax = Math.max(...counts, 1);
+    const decades = Math.max(1, Math.ceil(Math.log10(cMax / STRIP_LOG_MIN) - 1e-9));
+    const today = Number.isFinite(timeline.baseYear) ? timeline.baseYear : (hist.length ? hist[hist.length - 1].year : yr0);
     const X = (yr) => x0 + ((yr - yr0) / Math.max(1, yr1 - yr0)) * (x1 - x0);
-    const Y = (n) => y1 - (n / cMax) * (y1 - y0);
+    const Y = (n) => y1 - (Math.log10(Math.max(n, STRIP_LOG_MIN) / STRIP_LOG_MIN) / decades) * (y1 - y0);
 
     g.strokeStyle = CHART_GRID;
     g.lineWidth = 1;
+    for (let k = 0; k <= decades; k++) { // one faint line per ten-fold step of the count
+      const y = Y(STRIP_LOG_MIN * Math.pow(10, k));
+      g.beginPath(); g.moveTo(x0, y); g.lineTo(x1, y); g.stroke();
+    }
     for (let yr = Math.ceil(yr0 / 10) * 10; yr <= yr1; yr += 10) {
       g.beginPath(); g.moveTo(X(yr), y1); g.lineTo(X(yr), y1 + STRIP_TICK_PX); g.stroke();
     }
@@ -744,10 +890,19 @@ export class SdaChart {
       g.beginPath(); g.arc(X(p.year), Y(p.tracked), 2.5, 0, Math.PI * 2); g.fill();
     }
 
+    // The forecast: dashed, fainter than the history on the VALUE lens, brighter on THREAT (which pulses it).
     g.strokeStyle = this._rgba(VisualLaw.COLORS.THREAT, (lens === 'THREAT' ? 0.95 : 0.5) * pulse);
+    g.setLineDash([5, 4]);
     g.beginPath();
     proj.forEach((p, i) => { const x = X(p.year), y = Y(p.tracked); if (i === 0) g.moveTo(x, y); else g.lineTo(x, y); });
     g.stroke();
+    g.setLineDash([]);
+
+    // "today": a thin dashed upright at the year the history ends and the forecast starts.
+    g.strokeStyle = this._rgba(VisualLaw.COLORS.INFO, 0.55);
+    g.setLineDash([2, 3]);
+    g.beginPath(); g.moveTo(X(today), y0); g.lineTo(X(today), y1); g.stroke();
+    g.setLineDash([]);
 
     const title = labels.find((l) => l.id === 'kessler-strip');
     g.font = mono(10);
@@ -756,11 +911,15 @@ export class SdaChart {
       g.fillStyle = this._rgba(lens === 'THREAT' ? VisualLaw.COLORS.THREAT : VisualLaw.COLORS.INFO, 0.95);
       this._text(g, title.text, x0, y0 - 6);
     }
-    g.textAlign = 'center';
     g.fillStyle = VisualLaw.COLORS.INFO;
+    g.globalAlpha = 0.8;
+    g.textAlign = 'right';
+    this._text(g, STRIP_SCALE_NOTE, x1, y0 - 6);
+    g.textAlign = 'right'; // left of its line: centred, it touched the page title on the iPad (visual check 2026-11-22)
+    this._text(g, `today ${today}`, X(today) - 4, y0 - 6);
     g.globalAlpha = 0.7;
-    this._text(g, String(yr0), X(yr0), y1 + 14);
-    this._text(g, String(yr1), X(yr1), y1 + 14);
+    g.textAlign = 'center';
+    for (let yr = Math.ceil(yr0 / 20) * 20; yr <= yr1; yr += 20) this._text(g, String(yr), X(yr), y1 + STRIP_LABEL_DROP_PX);
     g.globalAlpha = 1;
   }
 
@@ -772,6 +931,9 @@ export class SdaChart {
 
   dispose() {
     if (this._canvas && this._canvas.remove) this._canvas.remove();
+    if (this._buttonsRoot && this._buttonsRoot.remove) this._buttonsRoot.remove();
+    this._buttonsRoot = null;
+    this._lensButtons = new Map();
     this._canvas = null;
     this._ctx2d = null;
     this._built = false;

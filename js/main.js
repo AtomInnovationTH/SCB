@@ -2107,7 +2107,13 @@ async function init() {
   // The page row (plan sky-top-1121): floor 4 is the top floor and floor 5 is "the row is open". PAGE LIST: page 1 = the debris
   // chart (an adapter over sdaFloor), page 2 = the air chart (systems/AirPage.js: her height and today's Sun, no game state of its own).
   const debrisPage = createDebrisPage(sdaFloor);
-  const airPage = new AirPage({ sunStorms, getShipAltKm: () => (player ? player.getAltitudeKm() : null) });
+  const airPage = new AirPage({
+    sunStorms,
+    getShipAltKm: () => (player ? player.getAltitudeKm() : null),
+    // the same field bands page 1 lists in its footer (data/real-sky.json) and the station's height (data/active-sats.json, norad 25544)
+    getFieldBands: () => { const r = catalogLoader.getRealSky(); return r ? r.fieldBands : null; },
+    getStationKm: () => { const s = catalogLoader.getActiveSat('25544'); return s && s.tle ? s.tle.alt_km : null; },
+  });
   pageRow = new PageRow({
     pages: [debrisPage, airPage],
     enterFloor: () => !!(ladderController && ladderController.enterPageFloor()),
