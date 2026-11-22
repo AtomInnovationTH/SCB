@@ -565,6 +565,12 @@ export class SceneManager {
     if (this._earth && typeof this._earth.setLowDetail === 'function') {
       this._earth.setLowDetail(this.currentTier === 'LOW');
     }
+    this._syncGlareB?.();
+  }
+
+  /** Floor 4 glare balance (owner 2026-11-22; dev host `?glare=b` only, Earth.setGlareB ignores it elsewhere): on while the engaged floor is >= 4. */
+  _syncGlareB() {
+    if (this._earth && typeof this._earth.setGlareB === 'function') this._earth.setGlareB(this.isLadderSkyFollowing());
   }
 
   /**
@@ -630,9 +636,11 @@ export class SceneManager {
         if (this._ladderStarfield?.setFollowCamera) this._ladderStarfield.setFollowCamera(false);
       }
       this._ladderFidelity = null;
+      this._syncGlareB?.();
       return;
     }
     this._ladderFidelity = fid;
+    this._syncGlareB?.();
     // Earth-anchored floors (F4/F5): a world-fixed 400 u shell needs far >= D_max + R,
     // which NAVCOM breaks (BLACK-SKY); camera-follow puts every star at exactly R = 400.
     if (this._ladderStarfield?.setFollowCamera) this._ladderStarfield.setFollowCamera(fid.floor >= 4);

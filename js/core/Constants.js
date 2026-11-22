@@ -744,6 +744,29 @@ export const Constants = {
   // stops (bodyGeometry.SUN_GLARE_STOPS) 0.10 puts the mask at 0.90 of the sprite = 1.341° vs the 1.49° disc.
   SUN_GLARE_VISIBLE_ALPHA: 0.10,
   SUN_LABEL_OFFSET: 15,         // world units below the disc (camera-relative)
+  // --- Floor 4 glare balance, variant b (dev host `?glare=b` only; applies on floors >= 4; DevHost.devGlareB) ---
+  // Owner 2026-11-22: "the glare from sun is a little too strong ... find the right balance of gorgeous Earth visuals and object
+  // visibility". Measured before-values are in the comments (tmp/f4glare/matrix/summary.md). Public host / no switch: the values
+  // beside "was" are what runs.
+  GLARE_B: {
+    // Sun: a core at the REAL angular size with a small soft halo, no lens flare (was a 1.49° sprite, core 0.82°, plus 3 flare sprites).
+    SUN_CORE_DEG: 0.53,         // owner 2026-11-22, floor 4 glare balance (?glare=b): core diameter, degrees (the real Sun; was 1.49 sprite width)
+    SUN_HALO_DEG: 3.0,          // owner 2026-11-22, floor 4 glare balance (?glare=b): halo radius, degrees; the alpha is 0 here (sprite half-width)
+    SUN_HALO_PEAK: 0.04,        // owner 2026-11-22, floor 4 glare balance (?glare=b): halo alpha at the core's edge (the core is 1.0)
+    SUN_MASK_DEG: 0.40,         // owner 2026-11-22, floor 4 glare balance (?glare=b): stars-only depth mask radius, degrees (was 0.67)
+    SUN_LIMB_FADE_DEG: 1.5,     // owner 2026-11-22, floor 4 glare balance (?glare=b): the Sun fades out over this many degrees above Earth's limb
+    // Ocean glint and sheen (earthSurfaceFragmentShader).
+    GLINT_GAIN: 0.30,           // owner 2026-11-22, floor 4 glare balance (?glare=b): glint peak (was 1.8, clipped to white)
+    GLINT_POW: 900.0,           // owner 2026-11-22, floor 4 glare balance (?glare=b): glint tightness (was 300: a narrower highlight)
+    SHEEN_GAIN: 0.15,           // owner 2026-11-22, floor 4 glare balance (?glare=b): broad sheen lobe weight (was 0.25, -40%)
+    FRESNEL_GAIN: 0.18,         // owner 2026-11-22, floor 4 glare balance (?glare=b): ocean grazing fresnel weight (was 0.30, -40%)
+    HAZE_GAIN: 0.19,            // owner 2026-11-22, floor 4 glare balance (?glare=b): day-side surface limb haze (was 0.32, -40%)
+    // Atmosphere shell (atmosphereFragmentShader).
+    LIMB_GAIN: 0.85,            // owner 2026-11-22, floor 4 glare balance (?glare=b): day-side limb blue (was 1.8)
+    LIMB_FALLOFF: 9.0,          // owner 2026-11-22, floor 4 glare balance (?glare=b): density exp(-h * this): a thinner limb line (was 4.0)
+    LIMB_LOW_COL: [0.30, 0.62, 1.00],   // owner 2026-11-22, floor 4 glare balance (?glare=b): limb base colour, bluer (was 0.60, 0.80, 1.00: near white)
+    MIE_POW: 12.0,              // owner 2026-11-22, floor 4 glare balance (?glare=b): gold lobe = (VdotS^2)^this (was 3: VdotS^6, half-width 27 deg; 12 gives 13.5 deg)
+  },
   // --- Moon ---
   MOON_BASE_OPACITY: 0.85,      // NormalBlending disc; the shader owns phase (real terminator + earthshine, see
                                 // _updateMoon). MUST stay under BLOOM_THRESHOLD: the Moon must never bloom.

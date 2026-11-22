@@ -32,6 +32,7 @@ import { meoRadialMap, radiusPxForAltKm, chartTextBoxes, chartTextVersion } from
 import { cardFields, CLASS_COLORS, CLASS_NAMES, CLS_STARLINK, isStarlinkRow } from './RealSkyCard.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 import { LOOK_IDS, buildLook, ringTextureBytes, dotTextureBytes, lookFromSearch, installSkyLookHooks, measureClutter } from './SkyLook.js';
+import { devGlareB } from '../core/DevHost.js';
 
 export { CLASS_COLORS };
 
@@ -155,6 +156,10 @@ export class RealSkyLayer {
     // original. Dev host only: `?look=<id>`, `window.__skyLook(id)`, `window.__skyLookStats()` switch it for comparing.
     const lookLoc = deps.location !== undefined ? deps.location : globalThis.location;
     this._lookWant = lookFromSearch(lookLoc);   // the variant to build when the data arrives (DEFAULT_LOOK 'b' on a public host)
+    // Floor 4 glare balance (owner 2026-11-22, `?glare=b` on a dev host): every dot Points is drawn in the transparent queue, after Earth's clouds,
+    // the atmosphere shell, the glint and the Sun (renderOrder 0 there). A plain (opaque-queue) Points is drawn BEFORE all of them whatever its
+    // renderOrder, so those effects covered the smallest dots. The dots keep the depth test, so a dot behind Earth stays hidden.
+    this._glareB = devGlareB(lookLoc);
     this._lookId = '0';
     this._lookData = null;              // buildLook() of the current variant (also made for '0' when a stat is asked)
     this._lookGlass = null;
@@ -331,7 +336,7 @@ export class RealSkyLayer {
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     // The dots go through the composer's OutputPass (ACES) like the rest of the frame, so the colours in CLASS_COLORS are chosen for ACES
     // (see there); a material flag could not change that. Lane sky-look-1119.
-    const mat = new THREE.PointsMaterial({ size: DOT_PX, sizeAttenuation: false, vertexColors: true, depthWrite: false });
+    const mat = new THREE.PointsMaterial({ size: DOT_PX, sizeAttenuation: false, vertexColors: true, depthWrite: false, transparent: this._glareB });
     const pts = new THREE.Points(geo, mat);
     pts.frustumCulled = false;                       // positions move every frame; no bounding sphere to keep right
     pts.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;
@@ -342,7 +347,7 @@ export class RealSkyLayer {
 
     const hg = new THREE.BufferGeometry();
     hg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
-    const hm = new THREE.PointsMaterial({ size: 9, sizeAttenuation: false, color: 0xffffff, depthWrite: false });
+    const hm = new THREE.PointsMaterial({ size: 9, sizeAttenuation: false, color: 0xffffff, depthWrite: false, transparent: this._glareB });
     this._hiPoints = new THREE.Points(hg, hm);
     this._hiPoints.frustumCulled = false;
     this._hiPoints.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT + 0.1;
@@ -1067,7 +1072,7 @@ export class RealSkyLayer {
       geo.setIndex(idx);
       geo.setDrawRange(0, 0);
       // a dot bigger than today's is drawn round (a plain Points is a square): a soft-edged disc map; today's size stays a plain square
-      const opts = { size, sizeAttenuation: false, vertexColors: true, depthWrite: false };
+      const opts = { size, sizeAttenuation: false, vertexColors: true, depthWrite: false, transparent: this._glareB };
       if (size > (glass ? DOT_PX_GLASS : DOT_PX)) {
         const tex = new THREE.DataTexture(dotTextureBytes(32, size), 32, 32, THREE.RGBAFormat);
         tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = false;
@@ -1256,7 +1261,7 @@ export class RealSkyLayer {
     this._diveAlpha = 0;
     if (this._points) {
       const m = this._points.material;
-      if (m.transparent || m.opacity !== 1) { m.transparent = false; m.opacity = 1; m.needsUpdate = true; }
+      if (m.transparent !== this._glareB || m.opacity !== 1) { m.transparent = this._glareB; m.opacity = 1; m.needsUpdate = true; }
     }
     this._apply();
   }

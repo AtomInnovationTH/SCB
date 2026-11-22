@@ -15,6 +15,7 @@ import {
 } from './bodyGeometry.js';
 import { skyBrightness } from './starCatalog.js';
 import { DEG2RAD, degToRad, clamp } from '../core/MathUtil.js';
+import { devGlareB } from '../core/DevHost.js';
 
 // Tilt (rad, ~23.5°) of the stylized cycle's sun circle vs the equator. Shared by
 // the per-frame sun motion and the real-clock seeding; exported so the eclipse
@@ -41,6 +42,35 @@ export function createSunDiscTexture(size = 64) {
   });
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+
+/**
+ * Floor 4 glare balance (dev host `?glare=b`, owner 2026-11-22): the Sun as it is in the sky. A core at the REAL angular size
+ * (Constants.GLARE_B.SUN_CORE_DEG, fully bright, a soft edge) inside a small soft halo that peaks at SUN_HALO_PEAK at the core's edge,
+ * falls off as a power law and is exactly 0 at the sprite's rim (SUN_HALO_DEG): no hard edge anywhere. The texture's half-width is the halo radius.
+ * @param {number} size canvas pixel dimensions
+ */
+export function createSunGlareBTexture(size = 256) {
+  const G = Constants.GLARE_B;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const half = size / 2;
+  const rc = (G.SUN_CORE_DEG / 2) / G.SUN_HALO_DEG;   // core radius as a fraction of the half-width (small angles: tan x ~ x)
+  const ss = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const r = Math.hypot(x + 0.5 - half, y + 0.5 - half) / half;
+      const halo = G.SUN_HALO_PEAK * Math.pow(Math.min(1, rc / Math.max(r, 1e-6)), 1.2) * (1 - ss(0.4, 1.0, r));
+      const a = r >= 1 ? 0 : halo + (1 - halo) * (1 - ss(rc * 0.7, rc * 1.3, r));
+      const i = 4 * (y * size + x);
+      img.data[i] = 255; img.data[i + 1] = 252; img.data[i + 2] = 240; img.data[i + 3] = Math.round(255 * a);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
   return new THREE.CanvasTexture(canvas);
 }
 
@@ -663,6 +693,16 @@ export class SunLight {
     );
     scene.add(this.hemiLight);
 
+    // Floor 4 glare balance (owner 2026-11-22): `?glare=b` on a dev host swaps the Sun for a real-size core with a small halo, drops the lens
+    // flare and fades the Sun over Earth's limb, on floors 4-5 only (_updateSunDisc). `_sunB` is the look applied now.
+    this._glareBSwitch = devGlareB();
+    this._sunB = false;
+    this._sunTexA = null;                  // the shipped Sun texture (kept to swap back)
+    this._sunTexB = null;                  // variant b's texture, made at once only with the switch
+    this._sunMaskR0 = 1;                   // the shipped depth mask's radius at BODY_DEPTH_MASK_DIST
+    this._sunMaskK = 1;                    // scale factor on the mask: 1 = shipped
+    this._sunSpriteScale0 = 1;             // the shipped sprite scale
+
     this._createSunDisc(sceneManager);
     this._createLensFlare(sceneManager);
     this._createMoon();
@@ -736,6 +776,10 @@ export class SunLight {
     this.sunSprite.scale.set(sunGeo.spriteScale, sunGeo.spriteScale, 1);   // sprite scale = full width
     this.sunSprite.name = 'SunDisc';
     this.scene.add(this.sunSprite);
+    this._sunTexA = texture;
+    this._sunSpriteScale0 = sunGeo.spriteScale;
+    this._sunMaskR0 = sunGeo.maskRadius;
+    if (this._glareBSwitch) this._sunTexB = createSunGlareBTexture(256);
 
     // Depth mask: sized to the VISIBLY GLOWING extent (0.90 of the sprite = 1.341°),
     // not the sprite square: the texture reaches alpha 0 at its rim, so a full-sprite
@@ -1053,9 +1097,24 @@ export class SunLight {
       : this._bodyPos.copy(this.sunDirection).multiplyScalar(Constants.SUN_DIST);
     this.sunSprite.position.copy(sunPos);
 
-    const sunHidden = this.camera
-      ? this._isOccludedByEarth(this.sunSprite.position, this.camera.position)
-      : this._inShadow;
+    // Floors 4-5 (camera-following sky): the Sun is at the sky, farther than any Earth surface, so only Earth's angular disc hides it
+    // (atInfinity). Before 2026-11-22 the 450 u disc passed in front of Earth whenever the camera was over ~514 u out: at 1300 u it drew over
+    // Earth's night side (bug found by the floor 4 glare matrix; owner 2026-11-22, floor 4 glare balance: fixed on every host, floors 4-5 only).
+    const follow = this._followsCamera();
+    // `?glare=b` (dev host): variant b's Sun on floors 4-5 (real-size core, small halo, faded over the limb, no flare).
+    const sunB = this._glareBSwitch && follow;
+    if (sunB !== this._sunB) this._setSunLook(sunB);
+    let sunVis = 1;
+    let sunHidden;
+    if (sunB && this.camera) {
+      sunVis = this._sunBEarthVis();
+      sunHidden = sunVis <= 0;
+      this.sunSprite.material.opacity = Constants.SUN_GLARE_OPACITY * sunVis;
+    } else {
+      sunHidden = this.camera
+        ? this._isOccludedByEarth(this.sunSprite.position, this.camera.position, follow)
+        : this._inShadow;
+    }
     this.sunSprite.visible = !sunHidden;
 
     // Depth mask is camera-relative: a fixed origin-centered DEPTH_MASK_DIST fails
@@ -1074,7 +1133,7 @@ export class SunLight {
         } else {
           const t = (-s + Math.sqrt(disc)) * 0.98;
           this._sunDepthMask.position.copy(this.sunDirection).multiplyScalar(t).add(cam);
-          this._sunDepthMask.scale.setScalar(t / DEPTH_MASK_DIST);
+          this._sunDepthMask.scale.setScalar((t / DEPTH_MASK_DIST) * this._sunMaskK);
           this._sunDepthMask.visible = !sunHidden;
         }
       } else {
@@ -1092,8 +1151,56 @@ export class SunLight {
     }
   }
 
+  /**
+   * Floor 4 glare balance (dev host `?glare=b`): switch the Sun sprite between the shipped look and variant b (real-size core with a small
+   * halo: its own texture, a sprite as wide as the halo, a smaller stars-only depth mask). Called when the look changes (floors 4-5 on/off).
+   * @param {boolean} b
+   */
+  _setSunLook(b) {
+    this._sunB = b;
+    const G = Constants.GLARE_B;
+    const mat = this.sunSprite.material;
+    if (b && this._sunTexB) {
+      const w = 2 * Constants.SUN_DIST * Math.tan(G.SUN_HALO_DEG * DEG2RAD);   // sprite scale is the FULL width
+      mat.map = this._sunTexB;
+      this.sunSprite.scale.set(w, w, 1);
+      this._sunMaskK = (DEPTH_MASK_DIST * Math.tan(G.SUN_MASK_DEG * DEG2RAD)) / this._sunMaskR0;
+    } else {
+      this._sunB = false;
+      mat.map = this._sunTexA;
+      mat.opacity = Constants.SUN_GLARE_OPACITY;
+      this.sunSprite.scale.set(this._sunSpriteScale0, this._sunSpriteScale0, 1);
+      this._sunMaskK = 1;
+    }
+    mat.needsUpdate = true;
+  }
+
+  /**
+   * Variant b: how much of the Sun shows, 0..1, from Earth's place in the camera's view. CPU test like the real Moon's (_placeRealMoon):
+   * the angle between the Earth-centre direction and the drawn Sun direction against Earth's angular radius plus the core's radius (no part
+   * of the core is drawn over Earth), then a fade over SUN_LIMB_FADE_DEG (at most 0.3 of Earth's radius) above the limb.
+   * @returns {number}
+   */
+  _sunBEarthVis() {
+    const cam = this.camera.position;
+    const camDist = cam.length();
+    if (camDist <= Constants.EARTH_RADIUS) return 1;
+    const G = Constants.GLARE_B;
+    const earthRad = Math.asin(Constants.EARTH_RADIUS / camDist);
+    const toEarth = this._occToEarth.copy(cam).multiplyScalar(-1 / camDist);
+    const ang = Math.acos(clamp(toEarth.dot(this.sunDirection), -1, 1));
+    const coreRad = 0.5 * G.SUN_CORE_DEG * DEG2RAD;
+    const fadeW = Math.min(0.3 * earthRad, G.SUN_LIMB_FADE_DEG * DEG2RAD);
+    return clamp((ang - (earthRad + coreRad)) / fadeW, 0, 1);
+  }
+
   _updateLensFlare() {
     if (!this.camera) {
+      this.flareGroup.visible = false;
+      return;
+    }
+
+    if (this._sunB) {   // variant b (floors 4-5, `?glare=b`): no lens flare
       this.flareGroup.visible = false;
       return;
     }

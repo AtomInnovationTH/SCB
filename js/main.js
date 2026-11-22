@@ -1919,6 +1919,8 @@ async function init() {
       // smear, so none show past 500 u (the same fade, not tied to the stop).
       farFadeNear: 400,
       farFadeEnd: 500,
+      // Floor 4 mid zoom (camera 1.5+ radii out): a name that would run past Earth's edge flips onto the planet, or fades.
+      discFlipFrom: Constants.EARTH_RADIUS * 1.5,
       // Hide a dot inside the ship's screen circle (live position; radius covers every radiator pose).
       occluders: cityLabels.shipOccluders(() => player && player.position),
     });

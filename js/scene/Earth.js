@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { profileFlags } from '../core/ProfileFlags.js';
-import { isDevHost, devSearch } from '../core/DevHost.js';
+import { isDevHost, devSearch, devGlareB } from '../core/DevHost.js';
 import { TouchControls } from '../ui/TouchControls.js';
 import { smoothstep01 } from '../core/MathUtil.js';
 
@@ -103,8 +103,15 @@ const cloudCoverageRampGLSL = /* glsl */ `
 #define CLOUD_COVERAGE_HI 0.80
 `;
 
+/** A number as a GLSL float literal (3 -> "3.0"). The floor 4 glare balance values (Constants.GLARE_B) go into the shaders through it. */
+const glf = (x) => (Number.isInteger(x) ? x.toFixed(1) : String(x));
+const GB = Constants.GLARE_B;
+
 const earthSurfaceFragmentShader = /* glsl */ `
 #include <logdepthbuf_pars_fragment>
+
+// Floor 4 glare balance (dev host ?glare=b, floors >= 4; owner 2026-11-22): 1 = the variant-b values, 0 = today's. Set by Earth.setGlareB.
+uniform float uGlareB;
 
 // st9 (2026-10-19): every picture slot can show up to three pictures at once
 // while one blends into the next. *Texture = the newest picture, *Prev = the one
@@ -291,9 +298,9 @@ void main() {
   //    rim at the true limb (crossover NdotV≈0.3) while collapsing the broad
   //    band to ~18-50% of its old lift.
   float oceanFresnel = pow(1.0 - clamp(dot(normal, viewDir), 0.0, 1.0), 5.0); // st9 D5: the dot can round above 1 (negative base = NaN)
-  float sheenLobe = specular * 0.25 * clamp(NdotL, 0.0, 1.0);
+  float sheenLobe = specular * (uGlareB > 0.5 ? ${glf(GB.SHEEN_GAIN)} : 0.25) * clamp(NdotL, 0.0, 1.0);
   vec3 oceanSpec = oceanMask * dayFactor * sunAboveHorizon
-    * (sheenLobe * vec3(1.0, 0.97, 0.90) + vec3(oceanFresnel * 0.30));
+    * (sheenLobe * vec3(1.0, 0.97, 0.90) + vec3(oceanFresnel * (uGlareB > 0.5 ? ${glf(GB.FRESNEL_GAIN)} : 0.30)));
 
   // E1 — Tight ocean sun-glint (the iconic orbital-photo cue). A very sharp
   // (pow 300) highlight where the sun mirrors off the water gives a moving
@@ -304,8 +311,8 @@ void main() {
   // misplaced pre-fix). Strength 1.2 → 1.8 starting point (plan allows up to 2.0);
   // pow-300 keeps it tight — may bloom slightly past threshold 4.0 (acceptable
   // sparkle). Verify on screenshots.
-  float oceanGlintTerm = pow(max(dot(normal, halfVec), 0.0), 300.0)
-    * 1.8 * oceanMask * dayFactor * sunAboveHorizon;
+  float oceanGlintTerm = pow(max(dot(normal, halfVec), 0.0), (uGlareB > 0.5 ? ${glf(GB.GLINT_POW)} : 300.0))
+    * (uGlareB > 0.5 ? ${glf(GB.GLINT_GAIN)} : 1.8) * oceanMask * dayFactor * sunAboveHorizon;
   vec3 oceanGlint = oceanGlintTerm * vec3(1.0, 0.95, 0.8);
 
   // === CLOUD SHADOWS (P1 visual, 2026-07-20) ===
@@ -383,7 +390,7 @@ void main() {
   // gain 0.22 → 0.32, exponent 3.2 → 2.8 for a livelier limb without disc wash.
   // Verify on screenshots (nadir disc-center must stay clean).
   float fresnel = pow(1.0 - clamp(dot(normal, viewDir), 0.0, 1.0), 2.8); // st9 D5: same clamp as the ocean fresnel
-  finalColor += vec3(0.30, 0.50, 0.85) * fresnel * 0.32 * dayFactor;
+  finalColor += vec3(0.30, 0.50, 0.85) * fresnel * (uGlareB > 0.5 ? ${glf(GB.HAZE_GAIN)} : 0.32) * dayFactor;
 
   gl_FragColor = vec4(finalColor, 1.0);
 
@@ -528,6 +535,7 @@ uniform vec3 uSunDirection;
 uniform vec3 uCenter;            // Earth center, world space (CPU-fed)
 uniform float uEarthRadius;
 uniform float uInvShellDepth;    // 1.0 / (ATMOSPHERE_RADIUS - EARTH_RADIUS)
+uniform float uGlareB;           // floor 4 glare balance (?glare=b, floors >= 4): 1 = variant-b values, 0 = today's (Earth.setGlareB)
 
 varying vec3 vWorldPosition;
 
@@ -553,7 +561,8 @@ void main() {
 
   // Exponential density falloff; forced to exactly 0 at the shell top so the
   // mesh edge is invisible.
-  float density = exp(-h01 * 4.0) * smoothstep(1.0, 0.75, h01);
+  float density = exp(-h01 * (uGlareB > 0.5 ? ${glf(GB.LIMB_FALLOFF)} : 4.0)) * smoothstep(1.0, 0.75, h01);
+  float densityMie = exp(-h01 * 4.0) * smoothstep(1.0, 0.75, h01);   // the gold lobe keeps today's depth: variant b narrows it in angle only
 
   // === LIGHTING at the closest-approach point (what the viewer perceives) ===
   vec3 limbNormal = rel / max(b, 0.0001);
@@ -564,7 +573,7 @@ void main() {
   // T2.3: lowCol base pulled toward electric blue (0.75,0.88,1.00)→(0.60,0.80,1.00)
   // so the limb reads saturated blue rather than white now that ACES no longer
   // clips it to a flat plateau.
-  vec3 lowCol  = vec3(0.60, 0.80, 1.00);
+  vec3 lowCol  = (uGlareB > 0.5 ? vec3(${GB.LIMB_LOW_COL.map(glf).join(', ')}) : vec3(0.60, 0.80, 1.00));
   vec3 midCol  = vec3(0.25, 0.55, 1.00);
   vec3 highCol = vec3(0.15, 0.25, 0.90);
   vec3 rayleigh = mix(lowCol, midCol, smoothstep(0.0, 0.45, h01));
@@ -581,14 +590,14 @@ void main() {
   // (rayDir, not viewDir — dot(viewDir,sun) was backscatter, a bug.)
   float VdotS = max(dot(rayDir, uSunDirection), 0.0);
   float v2 = VdotS * VdotS;
-  float mie = v2 * v2 * v2;
+  float mie = uGlareB > 0.5 ? pow(v2, ${glf(GB.MIE_POW)}) : v2 * v2 * v2;
 
   // === LINEAR ADDITIVE OUTPUT (alpha=1; falloff lives in rgb) ===
   // T2.3: limb multiplier 2.2→1.8. The old value clipped to a white plateau under
   // pass-through; with ACES rolloff now active a lower value gives a smooth
   // electric-blue gradient instead of an overexposed band.
-  vec3 atmos = scatter * density * dayFactor * 1.8;
-  atmos += vec3(1.0, 0.88, 0.65) * mie * density * dayFactor * 1.5;
+  vec3 atmos = scatter * density * dayFactor * (uGlareB > 0.5 ? ${glf(GB.LIMB_GAIN)} : 1.8);
+  atmos += vec3(1.0, 0.88, 0.65) * mie * densityMie * dayFactor * 1.5;
 
   // === NIGHT: thin greenish airglow layer (~90-100 km, ISS-observed) ===
   float ag = (h01 - 0.62) / 0.18;
@@ -2118,6 +2127,9 @@ export class Earth {
     // tier (A/B of the procedural-terrain cost).
     this._useLowDetail = profileFlags.disableEarthNoise === true;
 
+    // Floor 4 glare balance (owner 2026-11-22): `?glare=b` on a dev host lets setGlareB(true) switch the variant-b look on (floors >= 4).
+    this._glareBSwitch = devGlareB();
+    this._glareB = false;
     // Texture resolution by hardware. `quality` = hardware tier (mesh detail, anisotropy, cloud file); day and night
     // follow it (16k on a capable desktop, DECISIONS §16).
     const { quality, dayQuality, nightQuality } = getTextureQuality({ renderer: options && options.renderer });
@@ -2426,6 +2438,7 @@ export class Earth {
         uCloudW: { value: new THREE.Vector3(0, 0, 1) },
         uCloudRotation: { value: 0 },
         uSunDirection: { value: this.sunDirection },
+        uGlareB: { value: this._glareB ? 1 : 0 },
       },
       // `defines` controls the LOW_DETAIL branch (setLowDetail touches only that key). NO_CLOUD_SHADOWS compiles the
       // surface cloud-shadow fetch out when clouds are profiling-disabled, so the ?disableClouds A/B stays pure; it survives tier flips.
@@ -2535,6 +2548,7 @@ export class Earth {
         uCenter: { value: new THREE.Vector3() },
         uEarthRadius: { value: Constants.EARTH_RADIUS },
         uInvShellDepth: { value: 1 / (Constants.ATMOSPHERE_RADIUS - Constants.EARTH_RADIUS) },
+        uGlareB: { value: this._glareB ? 1 : 0 },
       },
       transparent: true,
       depthWrite: false,
@@ -2546,6 +2560,20 @@ export class Earth {
     this.atmosphereMesh.name = 'EarthAtmosphere';
     // Layer 0 only, no bloom layer: threshold bloom glows only very bright objects (emissive > 0.85).
     this.group.add(this.atmosphereMesh);
+  }
+
+  /**
+   * Floor 4 glare balance (owner 2026-11-22): turn the variant-b look of the ocean glint / sheen, the surface limb haze and the atmosphere
+   * limb on (floors >= 4) or off. Does nothing unless the page is a dev host with `?glare=b` (DevHost.devGlareB): the public game never turns it on.
+   * @param {boolean} on
+   */
+  setGlareB(on) {
+    const want = !!on && this._glareBSwitch;
+    if (want === this._glareB) return;
+    this._glareB = want;
+    for (const m of [this.surfaceMaterial, this.atmosphereMaterial]) {
+      if (m && m.uniforms.uGlareB) m.uniforms.uGlareB.value = want ? 1 : 0;
+    }
   }
 
   /** @param {THREE.Vector3} dir  normalized sun direction */

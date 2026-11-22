@@ -48,6 +48,17 @@ export function devStartMission(loc = globalThis.location) {
 }
 
 /**
+ * `?glare=b` (dev host only): the floor 4 glare balance study (owner 2026-11-22: the Sun's glare, the ocean glint, the limb haze and the
+ * atmosphere limb take attention from the dots). True only on a dev host with that exact switch; the public site, and any other value,
+ * give false (today's look). SunLight, Earth and RealSkyLayer each read it; the look then applies on floor 4 and above only.
+ * @param {{protocol?:string, hostname?:string, search?:string}|null|undefined} [loc]
+ * @returns {boolean}
+ */
+export function devGlareB(loc = globalThis.location) {
+  return new URLSearchParams(devSearch(loc)).get('glare') === 'b';
+}
+
+/**
  * Make a NEW game start at training mission `mission` (the `?mission=N` look; training-3-movers plan T5). Once, after the next new game
  * has finished resetting, entered the orbit view and posted its start lines (the opening dance's hand-over, else 10 s later), it gives the game the catches a finished mission N-1 leaves (`debrisCleared`) and
  * lets the scoring system fire the boundary `MISSION_START { missionNumber: N, profile }`: the coach arms chapter N, the field registry and

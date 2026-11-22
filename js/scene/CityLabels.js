@@ -19,7 +19,8 @@
  * sort made same-tier neighbours swap and blink); (2) the layer root is the FIRST child
  * of its container, so HUD panes paint over the pills; (3) attach({ occluders }) hides
  * a dot behind the ship's screen circle; (4) a tier-1 label that loses every pill slot
- * but has a free dot square keeps its dot.
+ * but has a free dot square keeps its dot; (5) at floor-4 mid zoom (discFlipFrom) a pill that would cross Earth's screen-disc
+ * edge takes the inward slot or fades (pickSlotOnDisc).
  *
  * Pure helpers (`parseCityList`, `isCityVisible`, `distanceFade`, `compareLabelPriority`,
  * `holdAfterLoss`, `occluderCircle`) are Node-testable; THREE/DOM lives behind init guards.
@@ -129,6 +130,7 @@ const _world = new THREE.Vector3();
 const _cam = new THREE.Vector3();
 const _proj = new THREE.Vector3();
 const _occV = new THREE.Vector3();
+const _discV = new THREE.Vector3();
 
 /**
  * Declutter priority comparator (pure): lower tier wins, then a label SHOWN last
@@ -441,6 +443,102 @@ export function pickSlot(sx, sy, textW, keptBoxes, prevSlot = null, keptCount = 
   return null;
 }
 
+/**
+ * Earth's screen disc, for keeping name pills over the planet (owner 2026-11-22: names that run past the edge of Earth, floor 4
+ * mid zoom). A pill whose box crosses the disc edge by more than DISC_TOL_PX moves to another slot (E to W is the inward flip
+ * for a dot on the left half); when every free slot still crosses, the label fades over DISC_FADE_PX of overflow.
+ * DISC_TOL_PX also gives the flip a hysteresis: the slot held last frame stays while it crosses by at most this much, a new
+ * slot must lie fully inside.
+ */
+export const DISC_TOL_PX = 3;
+export const DISC_FADE_PX = 20;
+/** Bias (px) in favour of the held slot when no slot lies inside the disc and the least-overflowing one is picked. */
+const DISC_STAY_BIAS_PX = 6;
+
+/**
+ * Per-frame disc state; `on` is false when the disc is not usable (centre behind the camera). Camera-space centre
+ * (cx, cy, cz), its length, the limb half-angle `theta`, the projection's x/y focal terms e0/e5 (NDC per unit tan), the
+ * viewport and the focal length in px.
+ */
+export function makeDisc() {
+  return { on: false, cx: 0, cy: 0, cz: 0, len: 1, theta: 0, e0: 1, e5: 1, W: 1, H: 1, f: 1 };
+}
+
+/**
+ * Fill `disc` for a sphere of world radius `radius` whose centre is (cx, cy, cz) in camera space. A perspective
+ * silhouette of a sphere is exactly the set of view rays within asin(radius / dist) of the centre direction, so no
+ * circle approximation is needed whatever the camera's aim.
+ * @returns {object} `disc` (`on` false when the centre is behind the camera or the camera is inside the sphere)
+ */
+export function setupDisc(disc, cx, cy, cz, radius, e0, e5, W, H) {
+  const len = Math.sqrt(cx * cx + cy * cy + cz * cz);
+  disc.on = cz < 0 && len > radius && e0 > 0 && e5 > 0;
+  if (!disc.on) return disc;
+  disc.cx = cx; disc.cy = cy; disc.cz = cz; disc.len = len;
+  disc.theta = Math.asin(radius / len);
+  disc.e0 = e0; disc.e5 = e5; disc.W = W; disc.H = H; disc.f = e5 * H * 0.5;
+  return disc;
+}
+
+/**
+ * How far (px) the box pokes outside the disc: the worst of its four corners (a convex disc: a box is inside iff its
+ * corners are, and the distance outside a convex set peaks at a vertex). <= 0 = inside. Pixel scale is the radial scale
+ * of the projection at the corner, exact for a centred disc.
+ */
+export function boxOverflowPx(b, disc) {
+  let worst = -Infinity;
+  for (let k = 0; k < 4; k++) {
+    const x = (k & 1) ? b.x + b.w : b.x;
+    const y = (k & 2) ? b.y + b.h : b.y;
+    const dx = ((x / disc.W) * 2 - 1) / disc.e0;
+    const dy = (1 - (y / disc.H) * 2) / disc.e5;
+    const t2 = dx * dx + dy * dy;
+    let cosA = (disc.cx * dx + disc.cy * dy - disc.cz) / (disc.len * Math.sqrt(t2 + 1));
+    cosA = cosA > 1 ? 1 : (cosA < -1 ? -1 : cosA);
+    const o = (Math.acos(cosA) - disc.theta) * disc.f * (1 + t2);
+    if (o > worst) worst = o;
+  }
+  return worst;
+}
+
+/**
+ * pickSlot with the disc rule. Tries the held slot first (like pickSlot), skipping slots a screen edge cuts or another
+ * label blocks. First slot lying in the disc wins (held slot: up to DISC_TOL_PX over the edge allowed). If none does,
+ * the least-overflowing free slot (the held one favoured by DISC_STAY_BIAS_PX) is used and `out.fade` is
+ * 1 - smoothstep((overflow - DISC_TOL_PX) / DISC_FADE_PX); `out.hide` is set when that is ~0. A `pinned` label is
+ * never faded or hidden: it takes the least-overflowing slot at full strength.
+ * @param {{fade:number, hide:boolean}} out written on every call
+ * @returns {string|null} slot, or null when every slot is blocked (or `out.hide`)
+ */
+export function pickSlotOnDisc(sx, sy, textW, keptBoxes, prevSlot, keptCount, offX, offY, view, disc, pinned, out) {
+  out.fade = 1; out.hide = false;
+  const order = prevSlot && LABEL_SLOTS.includes(prevSlot)
+    ? [prevSlot, ...LABEL_SLOTS.filter(s => s !== prevSlot)]
+    : LABEL_SLOTS;
+  let best = null, bestScore = Infinity, bestO = 0;
+  for (const slot of order) {
+    slotBox(sx, sy, textW, slot, _scanBox, offX, offY);
+    if (view && !boxInViewport(_scanBox, view.W, view.H)) continue;
+    let blocked = false;
+    for (let j = 0; j < keptCount; j++) {
+      if (_boxesOverlap(_scanBox, keptBoxes[j])) { blocked = true; break; }
+    }
+    if (blocked) continue;
+    const held = slot === prevSlot;
+    const o = boxOverflowPx(_scanBox, disc);
+    if (o <= (held ? DISC_TOL_PX : 0)) return slot;
+    const score = held ? o - DISC_STAY_BIAS_PX : o;
+    if (score < bestScore) { bestScore = score; best = slot; bestO = o; }
+  }
+  if (!best) return null;
+  if (!pinned) {
+    const t = Math.min(1, Math.max(0, (bestO - DISC_TOL_PX) / DISC_FADE_PX));
+    out.fade = 1 - smoothstep01(t);
+    if (out.fade < 0.01) { out.hide = true; return null; }
+  }
+  return best;
+}
+
 // Browser-only past this point.
 
 export class CityLabels {
@@ -572,6 +670,9 @@ export class CityLabels {
    * @param {number} [opts.fadeNear=radius*2] @param {number} [opts.fadeFar=radius*18]
    * @param {number} [opts.farFadeNear] @param {number} [opts.farFadeEnd] — the whole label (pinned too) fades out between
    *   these camera distances (farLabelFade); both absent = no far fade
+   * @param {number} [opts.discFlipFrom] — from this camera distance outward a pill that would cross Earth's screen-disc
+   *   edge goes to the inward slot, or fades when none fits (pickSlotOnDisc); absent = rule off. Below it (the orbit
+   *   floors, camera within ~1.1 radii) the horizon is not a disc edge and labels behave as before.
    * @param {number} [opts.lodNear=radius*3] — at/under this camera distance all
    *   tiers show; @param {number} [opts.lodFar=radius*10] — at/over this only tier 1.
    * @param {number} [opts.maxVisible=Infinity] — cap on placed non-launch labels per frame
@@ -583,7 +684,7 @@ export class CityLabels {
    */
   attach({ parent, radius, camera, container, isActive = null,
            lonOffsetDeg = 0, mirrorLon = false,
-           fadeNear, fadeFar, lodNear, lodFar, farFadeNear, farFadeEnd,
+           fadeNear, fadeFar, lodNear, lodFar, farFadeNear, farFadeEnd, discFlipFrom,
            maxVisible = Infinity, maxVisibleLaunch = Infinity,
            occluders = null }) {
     if (!parent || !camera || !this._cities.length) return null;
@@ -620,6 +721,8 @@ export class CityLabels {
         anchor: new THREE.Vector3(pos.x, pos.y, pos.z),
         shown: false, _sx: 0, _sy: 0, _op: 1, _dist: 0,
         _slot: null,
+        // Disc rule fade (pickSlotOnDisc): 1 = pill lies on the disc.
+        _discFade: 1,
         // ms timestamp this shown label lost its pill slot (-1 = not losing); dot drawn with no pill.
         _lostAt: -1, _dotOnly: false,
         // Tier 1 full strength, 2/3 dimmer.
@@ -645,6 +748,8 @@ export class CityLabels {
       lodFar: lodFar != null ? lodFar : radius * 10,
       farFadeNear: Number.isFinite(farFadeNear) ? farFadeNear : null,
       farFadeEnd: Number.isFinite(farFadeEnd) ? farFadeEnd : null,
+      discFlipFrom: Number.isFinite(discFlipFrom) ? discFlipFrom : null,
+      radius, disc: makeDisc(), _pick: { fade: 1, hide: false },
       maxVisible, maxVisibleLaunch,
     };
     // Pinned labels bypass both caps, so they need boxes on top of the two budgets.
@@ -691,6 +796,17 @@ export class CityLabels {
       if (farFade <= 0) {
         for (const item of layer.items) this._hide(item);
         continue;
+      }
+
+      // Earth's screen disc for the keep-on-disc rule (floor 4 mid zoom); off below discFlipFrom and for a layer without it.
+      const disc = layer.disc;
+      if (layer.discFlipFrom !== null && _cam.distanceTo(_center) >= layer.discFlipFrom) {
+        _discV.copy(_center).applyMatrix4(camera.matrixWorldInverse);
+        const pe = camera.projectionMatrix.elements;
+        setupDisc(disc, _discV.x, _discV.y, _discV.z, layer.radius * layer.parent.matrixWorld.getMaxScaleOnAxis(),
+                  pe[0], pe[5], W, H);
+      } else {
+        disc.on = false;
       }
 
       // Occluders (the ship): one screen circle each per frame.
@@ -776,7 +892,7 @@ export class CityLabels {
           item.textEl.style.transform = slotTransform(slot, item.w, item.offX, item.offY);
           item._slot = slot;
         }
-        item.el.style.opacity = (item._op * item._opScale).toFixed(3);
+        item.el.style.opacity = (item._op * item._opScale * item._discFade).toFixed(3);
         if (!item.shown) { item.el.style.display = 'flex'; item.shown = true; }
 
         // Cameo pulse: the fired pad's pill breathes cyan until _pulseEnd (one label at a time).
@@ -816,8 +932,16 @@ export class CityLabels {
           this._hide(item);
           return false;
         }
-        const slot = pickSlot(item._sx, item._sy, item.w, kept, item._slot, keptCount,
-                              item.offX, item.offY, view);
+        const slot = disc.on
+          ? pickSlotOnDisc(item._sx, item._sy, item.w, kept, item._slot, keptCount,
+                           item.offX, item.offY, view, disc, item.pin, layer._pick)
+          : pickSlot(item._sx, item._sy, item.w, kept, item._slot, keptCount,
+                     item.offX, item.offY, view);
+        if (disc.on && layer._pick.hide) {   // every free slot is too far off the disc: the label faded out
+          this._hide(item);
+          return false;
+        }
+        item._discFade = disc.on ? layer._pick.fade : 1;
         if (slot) {
           // Pill box, then dot square (no pill may cover another entry's dot).
           slotBox(item._sx, item._sy, item.w, slot, kept[keptCount++], item.offX, item.offY);
@@ -835,6 +959,7 @@ export class CityLabels {
           const d = kept[keptCount++];
           d.x = item._sx - DOT_PX / 2; d.y = item._sy - DOT_PX / 2; d.w = DOT_PX; d.h = DOT_PX;
           item._lostAt = -1;
+          item._discFade = 1;
           draw(item, null, true);
           return true;
         }
