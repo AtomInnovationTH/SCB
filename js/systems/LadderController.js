@@ -681,12 +681,10 @@ export class LadderController {
       this._rideTailArmed = false;
     }
     this._lastInputMs = t;
-    // On a page (the row's floor): zooming in is the way back to the globe, zooming out does nothing (plan sky-top-1121 D3).
-    // Neither moves the camera: the page is a chart, not a place to fly to.
-    if (this._pageRow && this._ladder.floorId() === PAGE_ROW_FLOOR) {
-      if (dir === 'in' && !this._ladder.isRiding()) this._pageRow.toGlobe();
-      return [];
-    }
+    // On a page (the row's floor) a zoom, in or out, does nothing (owner 2026-11-22, Sky 19: zooming in jumped to the globe,
+    // "jarring and unexpected"; before, plan sky-top-1121 D3 made zoom-in the way back). The page is a chart, not a place
+    // to fly to; the way back is a swipe, Esc / PageDown or the dots.
+    if (this._pageRow && this._ladder.floorId() === PAGE_ROW_FLOOR) return [];
     // Daughter focus (wait view / her haul / her reel view; owner 2026-10-27): a zoom moves in or out on her and keeps the
     // view; only a zoom out past floor 3's edge ends it (after the ladder is put on that distance).
     const fz = this._focusZoomWheel(dir, mag, t);
