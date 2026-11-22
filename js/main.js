@@ -3206,9 +3206,10 @@ async function init() {
       const hit = tapNearestWithin(proxNetFloor.lastInsertionPoints(), x, y);
       if (hit) { proxNetFloor.selectInsertion(hit.point.zone); return 'insertion'; }
     }
-    // Floors 4 and 5: a tap on a real catalogue dot opens its card (RealSkyLayer.tap: the nearest painted dot inside the tap
-    // radius); a miss keeps today's behaviour on these floors (nothing).
-    if (floor === 4 || floor === 5) return (realSkyLayer && realSkyLayer.tap(x, y, { mouse: !!(opts && opts.mouse) })) ? 'sky' : null;
+    // Floor 4: a tap on a real catalogue dot opens its card (RealSkyLayer.tap: the nearest painted dot inside the tap
+    // radius); a miss keeps today's behaviour on these floors (nothing). Floor 5 (page 1) has no card (Sky 19): a tap there does nothing.
+    if (floor === 4) return (realSkyLayer && realSkyLayer.tap(x, y, { mouse: !!(opts && opts.mouse) })) ? 'sky' : null;
+    if (floor === 5) return null;
     if (floor !== 2 && floor !== 3) return null;
     // The ONE eligibility rule is TargetAcquisition.getEligibleTargets (the same rule InputManager._cycleTarget
     // applies), so the tap can never split the selection universe from the Tab/T cycle.
@@ -3402,14 +3403,14 @@ async function init() {
       if (!ladderController || !ladderController.isActive() || ladderController.currentFloor() !== 4) return;
       if (realSkyLayer) realSkyLayer.flyAt(e.clientX, e.clientY, { mouse: true });
     });
-    // Mouse hover on floors 4-5 (lane sky-look-1119; owner 2026-11-19): the layer picks under the pointer once per frame, at most. Canvas events
+    // Mouse hover on floor 4 (lane sky-look-1119; owner 2026-11-19; floor 5 = page 1 has no card since Sky 19): the layer picks under the pointer once per frame, at most. Canvas events
     // only, so a card, a menu or any other element over the spot never gets a hover; touch and pen (pointerType !== 'mouse') and a held button
     // (a drag) clear it. The layer itself ignores it with no floor-4/5 layer on show and during the opening dive.
     let _hoverDown = null;   // {x, y} of the press in progress (for the hover restore on pointerup)
     canvas.addEventListener('pointermove', (e) => {
       if (!realSkyLayer) return;
       const f = (ladderController && ladderController.isActive()) ? ladderController.currentFloor() : null;
-      if ((f !== 4 && f !== 5) || (gameFlowManager && gameFlowManager.paused)) { realSkyLayer.hoverClear(); return; }
+      if ((f !== 4) || (gameFlowManager && gameFlowManager.paused)) { realSkyLayer.hoverClear(); return; }
       realSkyLayer.hoverMove(e.clientX, e.clientY, { mouse: e.pointerType === 'mouse', buttons: e.buttons });
     }, { passive: true });
     canvas.addEventListener('pointerleave', () => { if (realSkyLayer) realSkyLayer.hoverClear(); }, { passive: true });
@@ -3420,7 +3421,7 @@ async function init() {
       const d = _hoverDown; _hoverDown = null;
       if (!realSkyLayer || !d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) return;
       const f = (ladderController && ladderController.isActive()) ? ladderController.currentFloor() : null;
-      if ((f !== 4 && f !== 5) || (gameFlowManager && gameFlowManager.paused)) return;
+      if ((f !== 4) || (gameFlowManager && gameFlowManager.paused)) return;
       realSkyLayer.hoverMove(e.clientX, e.clientY, { mouse: e.pointerType === 'mouse', buttons: e.buttons });
     }, { passive: true });
     // The DESKTOP edge wake: ONE passive `document` handler for `pointermove` (≤ 10 Hz by timestamp: a hover sweep
@@ -6512,7 +6513,10 @@ function gameLoop(timestamp) {
   // and 100x / 1000x are dimmed (her choice is kept and returns when she is home). Write-on-change inside; the per-frame calls are cheap.
   if (_mapFloor == null) mapClock.observeFloor(null);
   if (mapClockSlider) {
-    const _mapShow = _mapFloor != null && FloorContract.TIME_RULES.MAP_CLOCK_FLOORS.includes(_mapFloor);
+    // Page 1 of the page row (the debris chart, SdaFloor active) has no speed control (Sky 19, owner 2026-11-22): the control is hidden
+    // there, and MapClock keeps the step she set on the globe (this only shows / hides the row; the game clock above is untouched).
+    const _mapShow = _mapFloor != null && FloorContract.TIME_RULES.MAP_CLOCK_FLOORS.includes(_mapFloor)
+      && !(sdaFloor && sdaFloor.isActive());
     mapClockSlider.setShown(_mapShow);
     if (_mapShow) {
       const _tripBurn = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
@@ -6614,7 +6618,8 @@ function gameLoop(timestamp) {
   // band; the hub never measures it.
   if (_ladderActive && detailSlider) {
     detailSlider.refresh();
-    if (edgeChrome) detailSlider.setPhase(edgeChrome.phase('slider', timestamp));
+    // Page 1 (the debris chart) hides it (Sky 19, owner 2026-11-22): on arrival it woke over the timeline's right end and the year labels.
+    if (edgeChrome) detailSlider.setPhase((sdaFloor && sdaFloor.isActive()) ? 'hidden' : edgeChrome.phase('slider', timestamp));
   }
   // The hull callout columns clear the WHERE rail — the rail is MotherCallouts' SECOND inset source, merged with
   // the drawers' by max (write-on-change inside setRailInsets). The accessor is a cached number from the rail's own

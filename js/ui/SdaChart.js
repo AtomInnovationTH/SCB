@@ -40,6 +40,8 @@ import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { mono, fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { clamp01 } from '../core/MathUtil.js';
+import { CLASS_COLORS } from './RealSkyCard.js';
+import { hudScaleFor } from './HudScale.js';
 
 /** The SDA DOWNLINK (id 5) contract row (chart framing + labelBudget + lenses). */
 const FLOOR = FloorContract.byId(5);
@@ -353,9 +355,13 @@ export const CHART_TOP_CLEAR_PX = 62; // 56 left the tag's glyphs 5 px under the
  * and the top 112 (the plot is 60 px tall: a 32 px plot made the 1957-2026 climb a hairline. The page title "Debris by height" is
  * centred with its bottom at h-108, so the forecast must stay under it: it is at most 0.78 of the plot high over the title's width.
  * The page dots' circles sit at h-80 +-5, centred; the line passes over them.)
+ * 2026-11-22 (sky 19, owner: the title and dots sat ON the strip): the strip now stands wholly above the page row's band. That band is
+ * the title (PageRow TITLE_BOTTOM_PX 108, about 16 px tall: glyphs h-124..h-108) and the dots (hit targets h-104..h-56, circles h-80 +-5),
+ * so the strip's bottom is 150 (ticks end at h-146, the 20-year labels' baseline h-135, descenders h-132: 8 px above the title's glyphs)
+ * and its top 202 (the plot is 52 px tall). One credit line sits under the dots at h-7.
  */
-export const STRIP_TOP_FROM_BOTTOM_PX = 112;
-export const STRIP_BOTTOM_FROM_BOTTOM_PX = 52;
+export const STRIP_TOP_FROM_BOTTOM_PX = 202;
+export const STRIP_BOTTOM_FROM_BOTTOM_PX = 150;
 /** Decade ticks hang this far under the strip's bottom edge. */
 export const STRIP_TICK_PX = 4;
 /** The 20-year labels' baseline, px under the strip's bottom edge. */
@@ -386,10 +392,14 @@ const COLUMN_CLEAR_PX = 10;
 /** Where each leader leaves its ring: this many degrees clockwise from 12 o'clock (about half past one). */
 const LEADER_ANGLE_DEG = 50;
 /**
- * What the search/filter panel at the top right covers (CSS px, measured in the browser 2026-11-22 at 1728x1117 and 1366x1024):
- * it is 12 px from the right edge, 270 px wide, from y 176 to 318. The column keeps its text off it.
+ * The colour key above the label column (Sky 19: the search / tick-box panel and its key are not on page 1 any more): one short line,
+ * each half drawn in its own colour. Ring dots are warm (orange) for debris, rocket stages and dead satellites and grey-blue for working,
+ * "sat" and unknown ones (RealSkyCard CLASS_COLORS, the colours RealSkyLayer's floor-5 canvas fills with). It stands this far above the
+ * column's first label baseline.
  */
-export const LEGEND_PANEL = Object.freeze({ right: 12, w: 275, top: 170, bottom: 322 });
+export const KEY_ABOVE_PX = 18;
+export const KEY_WARM = { text: '\u25cf debris, stage, dead', color: CLASS_COLORS[1] };
+export const KEY_COOL = { text: '\u25cf working, sat, unknown', color: CLASS_COLORS[3] };
 /** Width of one 10 px label when there is no canvas to measure it (the face is about 6.1 px a glyph). */
 const GLYPH_PX = 6.6;
 
@@ -398,7 +408,8 @@ const GLYPH_PX = 6.6;
  * outermost band first at fixed `minGap` spacing, entirely outside the outermost ring (`outerPx`, the outer radius of the last
  * band): the column's left edge sits at 0.72 of that radius + 16 px, and its lowest box ends where the circle (radius + 10 px)
  * passes it. Each label has a leader from its OWN ring (its `rPx`, about half past one o'clock) to the column. When the column
- * would meet the legend panel (`avoid`: {x0, x1, y0, y1} as offsets from the centre/top) it goes up above the panel instead. Any
+ * would meet a box that sits over it (`avoid`: {x0, x1, y0, y1} as offsets from the centre/top; the Mac radio box) the column, with its colour key,
+ * goes under that box instead. Any
  * other label (the GEO ring's) sits at the top beside the centre line. The input is not mutated; the strip title (rPx 0, painted
  * with the strip) passes through untouched.
  * @param {Array<{id:*, rPx:number, text?:string}>} labels
@@ -418,15 +429,22 @@ export function layoutLabels(labels, cy, minGap = LABEL_MIN_GAP_PX, minY = 12, o
   const bands = out.filter((l) => String(l.id).startsWith('band-')).sort((a, b) => b.rPx - a.rPx);
   if (!bands.length) return out;
   const edge = outerPx > 0 ? outerPx : bands[0].rPx + 4;
-  const x = edge * COLUMN_X_FRAC + COLUMN_X_PAD_PX;
+  const x0 = edge * COLUMN_X_FRAC + COLUMN_X_PAD_PX;
+  let x = x0;
   const reach = edge + COLUMN_CLEAR_PX;
   const dy = Math.sqrt(Math.max(0, reach * reach - x * x));
   let bottom = cy - dy - 3;                       // baseline of the lowest label; its box ends 3 px lower
   const span = (bands.length - 1) * minGap;
   if (avoid) {
-    const right = x + Math.max(...bands.map((l) => (l.text ? String(l.text).length : 0) * GLYPH_PX));
-    const colTop = bottom - span - 9, colBottom = bottom + 3;
-    if (right > avoid.x0 && x < avoid.x1 && colBottom > avoid.y0 && colTop < avoid.y1) bottom = Math.min(bottom, avoid.y0 - 8 - 3);
+    // The colour key stands KEY_ABOVE_PX over the first label (glyph top 9 px over its baseline), so it counts as part of the column.
+    const colTop = bottom - span - KEY_ABOVE_PX - 9, colBottom = bottom + 3;
+    if (x + 400 > avoid.x0 && x < avoid.x1 && colBottom > avoid.y0 && colTop < avoid.y1) {
+      // Under the rectangle (the radio box): key 6 px below it, the column under the key. Lower down the ring is wider at the column's
+      // height, so the column also moves right until its nearest corner is outside the circle again (the leaders get longer).
+      bottom = avoid.y1 + 6 + KEY_ABOVE_PX + 9 + span;
+      const below = cy - (bottom + 3);
+      if (below > 0 && below < reach) x = Math.max(x0, Math.sqrt(reach * reach - below * below));
+    }
   }
   const top = Math.max(minY + 14, bottom - span);   // one row under the first top line, whose box ends 3 px under its baseline (the GEO label)
   const a = LEADER_ANGLE_DEG * Math.PI / 180;
@@ -449,6 +467,39 @@ export const LENS_BUTTONS = Object.freeze([
 export const LENS_BTN_H = 46;
 const LENS_BTN_W = 96;
 const LENS_BTN_TEXT = '#eef2f7';
+/** The buttons stand in a column: Danger under Tonnes, this far apart, this far from the screen's top and left (CSS px). */
+export const LENS_STACK_GAP_PX = 8;
+export const LENS_STACK_EDGE_PX = 16;
+/** Page 1's radio notice sits at the top left, this far right of the buttons and at least this far before the score bar's left edge. */
+export const NOTICE_GAP_PX = 12;
+export const NOTICE_SCORE_GAP_PX = 16;
+/** Narrower than this and the notice goes under the buttons instead. */
+export const NOTICE_MIN_W_PX = 340;
+/** The score bar's half width: 140 px (the 280 px strip, #hud-score-panel) x the HUD scale (measured 350 wide at 1728 and 1366). */
+const SCORE_HALF_W_PX = 140;
+/** The once-only "GEO means ..." toast's bottom edge on page 1: just above the timeline strip's top label (strip top h-202, label glyphs h-222). */
+export const TOAST_BOTTOM_PX = 228;
+export const PAGE_ATTR = 'data-sda-page';
+const PAGE_STYLE_ID = 'sda-page-chrome-style';
+
+/**
+ * Where the radio notice (`#hud-comms-panel`) goes on page 1 (CSS px; pure). The box is a HUD group scaled by `scale` from its top-right
+ * corner, so the width is given before scaling and the move is the `translate` property (outside the scale): from its natural place
+ * (flush right, top 0) to the target left edge and top. Right of the stacked buttons when that leaves {@link NOTICE_MIN_W_PX}, else under them.
+ * @returns {{x:number, y:number, wScreen:number, wCss:number, under:boolean}} x, y: the translate; wScreen: the width on screen
+ */
+export function noticePlacement(wPx, hPx, scale = hudScaleFor(wPx, hPx)) {
+  const stackBottom = LENS_STACK_EDGE_PX + 2 * LENS_BTN_H + LENS_STACK_GAP_PX;
+  const right = wPx / 2 - SCORE_HALF_W_PX * scale - NOTICE_SCORE_GAP_PX;
+  const leftSide = LENS_STACK_EDGE_PX + LENS_BTN_W + NOTICE_GAP_PX;
+  const sideW = right - leftSide;
+  const under = sideW < NOTICE_MIN_W_PX;
+  const left = under ? LENS_STACK_EDGE_PX : leftSide;
+  const top = under ? stackBottom + NOTICE_GAP_PX : LENS_STACK_EDGE_PX;
+  const wScreen = Math.max(0, Math.min(right - left, 480 * scale));
+  const wCss = wScreen / scale;
+  return { x: left - (wPx - wScreen), y: top, wScreen, wCss, under };
+}
 
 /** The strip's title (plain words; the forecast starts at "today"). */
 export const STRIP_TITLE = 'Objects in orbit, 1957\u20132126 \u00b7 after today: forecast';
@@ -460,6 +511,24 @@ export const NOTE_THREAT = 'Some jumps before 2020 are better tracking, not new 
 
 /** The lowest count the strip's log axis shows (the 1957 start of zero sits on this line), and the decades it spans. */
 export const STRIP_LOG_MIN = 1000;
+
+/**
+ * The page's one credit line: the GCAT credit (CC BY 4.0) plus the other sources the real-sky layer names, in a few words (the search
+ * panel used to carry them; owner 2026-11-22: the credit shows on floor 5 too). Only sources the layer's own credit text claims are named
+ * (CelesTrak only with the status join), and an old snapshot says so, as the panel's short credit did.
+ * @param {string} gcatCredit  realSky.credit
+ * @param {string} [layerCredit]  RealSkyLayer.creditLine() (its full wording)
+ * @returns {string}
+ */
+export function footerCredit(gcatCredit, layerCredit = '') {
+  const t = String(layerCredit || '');
+  const names = [];
+  if (/Space-Track/i.test(t)) names.push('Space-Track');
+  if (/CelesTrak/i.test(t)) names.push('CelesTrak');
+  const old = t.match(/Snapshot (\d+) days old\./);
+  const extra = [names.join(', '), old ? `snapshot ${old[1]} days old` : ''].filter(Boolean).join(' \u00b7 ');
+  return extra ? `${gcatCredit} \u00b7 ${extra}` : String(gcatCredit);
+}
 
 export class SdaChart {
   /**
@@ -525,13 +594,14 @@ export class SdaChart {
         + (b.realCount != null ? `/r${b.realCount}/m${Math.round((b.massT || 0) * 10)}/${b.estimate ? 1 : 0}` : ''))
       .join('|');
     const rs = m.realSky ? `|rs${(m.realSky.beyond2000 && m.realSky.beyond2000.n) || 0}` : '';
+    const sc = m.skyCredit ? `|sc${m.skyCredit}` : '';
     const oob = m.outOfBand ? `${m.outOfBand.count}` : '0';
     const proj = m.timeline && m.timeline.projection
       ? m.timeline.projection.map((p) => p.tracked).join(',')
       : '';
     const risk = Math.round((m.riskFraction || 0) * 100);
     const epoch = (typeof m.fontEpoch === 'number') ? m.fontEpoch : 0;
-    return `${m.lens}|${m.wPx}x${m.hPx}|${bands}|${oob}|${proj}|r${risk}${rs}|e${epoch}`;
+    return `${m.lens}|${m.wPx}x${m.hPx}|${bands}|${oob}|${proj}|r${risk}${rs}${sc}|e${epoch}`;
   }
 
   /** @private */
@@ -560,7 +630,7 @@ export class SdaChart {
     const root = document.createElement('div');
     root.id = 'sda-lens-buttons';
     root.style.cssText = [
-      'position:absolute', 'left:16px', 'top:16px', 'display:none', 'flex-direction:row', 'gap:10px', 'z-index:36',
+      'position:absolute', `left:${LENS_STACK_EDGE_PX}px`, `top:${LENS_STACK_EDGE_PX}px`, 'display:none', 'flex-direction:column', 'align-items:stretch', `gap:${LENS_STACK_GAP_PX}px`, 'z-index:36',
       'pointer-events:none', 'opacity:0', 'transition:opacity 0.3s', 'font-family:var(--font-mono)',
       'user-select:none', '-webkit-user-select:none',
     ].join(';');
@@ -608,6 +678,40 @@ export class SdaChart {
     }
   }
 
+  /**
+   * @private While page 1 shows: the radio notice goes to the top left and the "GEO means" toast above the strip. One attribute on <html>
+   * and three variables feed two rules (`!important`: the box's inline width and the sky panel's dodge translate would win otherwise);
+   * write-on-change; hide() / dispose() take it all away, so the globe has the box back at the top right.
+   */
+  _syncPageChrome(wPx, hPx) {
+    if (typeof document === 'undefined' || !document.documentElement || !document.head || !this._visible) return;
+    const de = document.documentElement;
+    if (!document.getElementById(PAGE_STYLE_ID)) {
+      const st = document.createElement('style');
+      st.id = PAGE_STYLE_ID;
+      st.textContent = `html[${PAGE_ATTR}] #hud-comms-panel { translate: var(--sda-notice-x) var(--sda-notice-y) !important; width: var(--sda-notice-w) !important; }`
+        + ` html[${PAGE_ATTR}] #notification-zone { bottom: ${TOAST_BOTTOM_PX}px !important; }`;
+      document.head.appendChild(st);
+    }
+    const p = noticePlacement(wPx, hPx);
+    const key = `${Math.round(p.x)}|${Math.round(p.y)}|${Math.round(p.wCss)}`;
+    if (this._pageKey === key && de.hasAttribute(PAGE_ATTR)) return;
+    this._pageKey = key;
+    de.style.setProperty('--sda-notice-x', `${Math.round(p.x)}px`);
+    de.style.setProperty('--sda-notice-y', `${Math.round(p.y)}px`);
+    de.style.setProperty('--sda-notice-w', `${Math.round(p.wCss)}px`);
+    de.setAttribute(PAGE_ATTR, '');
+  }
+
+  /** @private Undo {@link SdaChart#_syncPageChrome}. */
+  _clearPageChrome() {
+    this._pageKey = '';
+    if (typeof document === 'undefined' || !document.documentElement || !document.documentElement.removeAttribute) return;
+    const de = document.documentElement;
+    de.removeAttribute(PAGE_ATTR);
+    for (const v of ['--sda-notice-x', '--sda-notice-y', '--sda-notice-w']) de.style.removeProperty(v);
+  }
+
   isVisible() { return this._visible; }
 
   /** The chart's canvas (built on first use; null headless): the page row slides this node. */
@@ -631,6 +735,7 @@ export class SdaChart {
 
   hide() {
     this._visible = false;
+    this._clearPageChrome();
     this._boxes = [];
     _setChartTextBoxes([]);
     if (this._buttonsRoot) { this._buttonsRoot.style.opacity = '0'; this._buttonsRoot.style.display = 'none'; }
@@ -707,21 +812,24 @@ export class SdaChart {
       text: STRIP_TITLE,
       rPx: 0,
     });
+    // Nothing sits at the top right of page 1 to avoid (the search panel is gone; the radio notice is at the top left here): the column
+    // stands where the rings put it.
     const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2, LABEL_MIN_GAP_PX, LABEL_TOP_PX,
-      map.leoTopPx, { x0: wPx / 2 - LEGEND_PANEL.right - LEGEND_PANEL.w, x1: wPx / 2, y0: LEGEND_PANEL.top, y1: LEGEND_PANEL.bottom });
+      map.leoTopPx, null);
+    this._syncPageChrome(wPx, hPx);
 
     const timeline = m.timeline || null;
     const sig = SdaChart.frameSig({
       lens, wPx, hPx, bands,
       outOfBand: m.outOfBand, timeline, riskFraction: m.riskFraction,
-      fontEpoch: this._fontEpoch.value(), realSky,
+      fontEpoch: this._fontEpoch.value(), realSky, skyCredit: m.skyCredit || '',
     });
     const now = this._now();
     const wouldPaint = SdaChart.shouldPaint(sig, this._lastSig, lens, now, this._lastPaintMs);
 
     let painted = false;
     if (wouldPaint && this._canvas && this._ctx2d && this._visible) {
-      this._paint({ wPx, hPx, lens, map, rings, labels, timeline, outOfBand: m.outOfBand, realSky, now });
+      this._paint({ wPx, hPx, lens, map, rings, labels, timeline, outOfBand: m.outOfBand, realSky, skyCredit: m.skyCredit || '', now });
       painted = true;
     }
     if (wouldPaint) {
@@ -800,39 +908,44 @@ export class SdaChart {
       this._text(g, l.text, cx + l.x, l.y);
     }
 
+    // The colour key: one line above the label column, each half in its dot's colour (what the ring dots mean now that the panel's key is gone).
+    const column = labels.filter((l) => l.leader);
+    if (column.length) {
+      const kx = cx + column[0].x, ky = Math.min(...column.map((l) => l.y)) - KEY_ABOVE_PX;
+      g.textAlign = 'left';
+      g.globalAlpha = 0.95;
+      g.fillStyle = KEY_WARM.color;
+      this._text(g, KEY_WARM.text, kx, ky);
+      const m1 = typeof g.measureText === 'function' ? g.measureText(KEY_WARM.text) : null;
+      const w1 = m1 && Number.isFinite(m1.width) ? m1.width : KEY_WARM.text.length * 6.1;
+      g.fillStyle = KEY_COOL.color;
+      this._text(g, KEY_COOL.text, kx + w1 + 14, ky);
+      g.globalAlpha = 1;
+    }
+
     // Honesty chrome (not world labels): the scale tag + ESTIMATE provenance.
     g.textAlign = 'center';
     g.fillStyle = VisualLaw.COLORS.INFO;
     g.globalAlpha = 0.8;
-    if (map.compressed) this._text(g, FLOOR.chart.compressionTag, cx, CHART_TOP_CLEAR_PX);
     const realSky = f.realSky || null;
+    // Objects beyond the LEO shells are counted, never silently dropped: in the top caption with the scale tag (Sky 19; it was bottom right).
+    const topKm = rings.length ? rings[rings.length - 1].altKm[1] : 2000;
+    let far = '';
+    if (realSky && realSky.beyond2000 && Number.isFinite(realSky.beyond2000.n)) far = `${_thousands(realSky.beyond2000.n)} tracked out there`;
+    else if (f.outOfBand && f.outOfBand.count > 0) far = `${_thousands(f.outOfBand.count)} ${f.outOfBand.count === 1 ? 'object' : 'objects'} out there`;
+    if (map.compressed) this._text(g, far ? `${FLOOR.chart.compressionTag} \u00b7 ${far}` : FLOOR.chart.compressionTag, cx, CHART_TOP_CLEAR_PX);
+    else if (far) this._text(g, `beyond ${_thousands(topKm)} km: ${far}`, cx, CHART_TOP_CLEAR_PX);
     if (lens === 'VALUE') {
       // The estimate line stays only while some band still shows an estimate (a real band has none).
       if (rings.some((r) => r.estimate)) this._text(g, NOTE_ESTIMATES, cx, CHART_TOP_CLEAR_PX + 14);
     } else {
       this._text(g, NOTE_THREAT, cx, CHART_TOP_CLEAR_PX + 14);
     }
-    // Objects beyond the LEO shells are counted, never silently dropped.
-    const topKm = rings.length ? rings[rings.length - 1].altKm[1] : 2000;
-    if (realSky && realSky.beyond2000 && Number.isFinite(realSky.beyond2000.n)) {
-      // Bottom right on the credit's baseline (h-7): the top edge clips it at 1728×1117 and the Houston panel covers it at
-      // 1366×1024, and the field-heights row (h-20) is taken by the strip's last year label (2126) at the right.
-      g.textAlign = 'right';
-      this._text(g, `beyond ${_thousands(topKm)} km: ${_thousands(realSky.beyond2000.n)} tracked`, w - 10, h - 7);
-    } else if (f.outOfBand && f.outOfBand.count > 0) {
-      g.textAlign = 'right';
-      this._text(g, `beyond ${_thousands(topKm)} km: ${_thousands(f.outOfBand.count)} ${f.outOfBand.count === 1 ? 'object' : 'objects'}`, w - 10, h - 7);
-    }
-    // Real numbers need their credit (CC BY 4.0): bottom centre, both lenses, under the strip (h-34); the strip's year
-    // labels (h-20) sit at its far left and right, so the centred field-heights line on that row clears them.
+    // Real numbers need their credit (CC BY 4.0): ONE line at the very bottom centre, both lenses, with the sources the search panel
+    // used to name (Space-Track, CelesTrak; Sky 19). The page title and dots stand above it (h-56 and up).
     if (realSky && typeof realSky.credit === 'string' && realSky.credit) {
       g.textAlign = 'center';
-      const fb = Array.isArray(realSky.fieldBands) ? realSky.fieldBands : [];
-      if (fb.length) {
-        const parts = fb.map((b) => `${b.altKm[0]}\u2013${b.altKm[1]} km ${_thousands(b.n)}`);
-        this._text(g, `Real objects at her field heights: ${parts.join(' \u00b7 ')}`, cx, h - 23);   // 3 px more air above the credit (visual check 2026-11-17: the two lines touched)
-      }
-      this._text(g, realSky.credit, cx, h - 7);
+      this._text(g, footerCredit(realSky.credit, f.skyCredit), cx, h - 7);
     }
     g.globalAlpha = 1;
 
@@ -930,6 +1043,7 @@ export class SdaChart {
   }
 
   dispose() {
+    this._clearPageChrome();
     if (this._canvas && this._canvas.remove) this._canvas.remove();
     if (this._buttonsRoot && this._buttonsRoot.remove) this._buttonsRoot.remove();
     this._buttonsRoot = null;

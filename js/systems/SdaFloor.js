@@ -172,6 +172,8 @@ export class SdaFloor {
       bands: this._bands,
       outOfBand: this._outOfBand,
       realSky: this._realSky,
+      // the layer's own credit wording: the chart's one credit line names the sources from it (Space-Track, CelesTrak) as the search panel did
+      skyCredit: this._realSkyLayer && typeof this._realSkyLayer.creditLine === 'function' ? this._realSkyLayer.creditLine() : '',
       timeline: this._timeline,
       riskFraction: this._risk,
       wPx: ctx.wPx,

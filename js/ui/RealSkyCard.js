@@ -122,7 +122,9 @@ export function panelPlacement(glass, floor) {
   if (glass && floor === FLOOR_GLOBE) return { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: 'calc(100vh - 260px)' };
   // Mac floor 4 (lane sky-skylook-1119, owner 2026-11-19: "move the right panel to top right to improve visibility of the object cloud"):
   // the panel's top edge is 12 px from the top. The radio box and the right column (Targets, Target info, NEXT when `+` brings it back; NEXT is gone on floor 4 by default since DECISIONS §78 row 11) that sat there move out of its way (see `SKY_PANEL_TOP_ATTR`).
-  if (!glass && floor === FLOOR_GLOBE) return { top: 'calc(12px + env(safe-area-inset-top, 0px))', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
+  // Floor 5 = page 1 of the page row (Sky 19, owner 2026-11-22: "a cleaner layout, remove irrelevant panes"): the panel is HIDDEN there
+  // (see `_place`), but with a mouse it keeps the floor-4 place, so the radio box stays at the same screen spot as on the globe.
+  if (!glass && (floor === FLOOR_GLOBE || floor === FLOOR_CHART)) return { top: 'calc(12px + env(safe-area-inset-top, 0px))', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
   return { top: '176px', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
 }
 
@@ -337,6 +339,10 @@ export class RealSkyCard {
     root.style.top = p.top;
     root.style.bottom = p.bottom;
     root.style.maxHeight = p.maxHeight;
+    // Page 1 (floor 5) draws no search panel: `visibility` keeps its box (the radio box's dodge measures it) but it shows and takes nothing.
+    const away = this._floor === FLOOR_CHART;
+    root.style.visibility = away ? 'hidden' : 'visible';
+    if (away && this._els.input && this._doc && this._doc.activeElement === this._els.input) this._els.input.blur();
     this._placed = true;
     this._syncDodge();
   }
