@@ -744,9 +744,9 @@ export const Constants = {
   // stops (bodyGeometry.SUN_GLARE_STOPS) 0.10 puts the mask at 0.90 of the sprite = 1.341° vs the 1.49° disc.
   SUN_GLARE_VISIBLE_ALPHA: 0.10,
   SUN_LABEL_OFFSET: 15,         // world units below the disc (camera-relative)
-  // --- Floor 4 glare balance, variant b (dev host `?glare=b` only; applies on floors >= 4; DevHost.devGlareB) ---
+  // --- Floor 4 glare balance, variant b (the game's look since his pick, DECISIONS §88; `?glare=0` on a dev host = old; floors >= 4; DevHost.devGlareB) ---
   // Owner 2026-11-22: "the glare from sun is a little too strong ... find the right balance of gorgeous Earth visuals and object
-  // visibility". Measured before-values are in the comments (tmp/f4glare/matrix/summary.md). Public host / no switch: the values
+  // visibility". Measured before-values are in the comments (tmp/f4glare/matrix/summary.md). With `?glare=0`, and on floors 1-3, the values
   // beside "was" are what runs.
   GLARE_B: {
     // Sun: a core at the REAL angular size with a small soft halo, no lens flare (was a 1.49° sprite, core 0.82°, plus 3 flare sprites).

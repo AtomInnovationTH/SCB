@@ -48,14 +48,14 @@ export function devStartMission(loc = globalThis.location) {
 }
 
 /**
- * `?glare=b` (dev host only): the floor 4 glare balance study (owner 2026-11-22: the Sun's glare, the ocean glint, the limb haze and the
- * atmosphere limb take attention from the dots). True only on a dev host with that exact switch; the public site, and any other value,
- * give false (today's look). SunLight, Earth and RealSkyLayer each read it; the look then applies on floor 4 and above only.
+ * The floor 4 glare balance, variant b (owner 2026-11-22, DECISIONS §88: the Sun's glare, the ocean glint, the limb haze and the
+ * atmosphere limb took attention from the dots; his pick "Use the softer look"): the game's look everywhere, so true by default and on
+ * the public site. `?glare=0` on a dev host gives the old look. SunLight, Earth and RealSkyLayer each read it; it applies on floor 4 and up.
  * @param {{protocol?:string, hostname?:string, search?:string}|null|undefined} [loc]
  * @returns {boolean}
  */
 export function devGlareB(loc = globalThis.location) {
-  return new URLSearchParams(devSearch(loc)).get('glare') === 'b';
+  return new URLSearchParams(devSearch(loc)).get('glare') !== '0';
 }
 
 /**
