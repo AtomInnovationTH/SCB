@@ -214,10 +214,18 @@ export const DEFAULT_ROOMS = Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone', f1bar: 'gone',
-    score: 'shown',
+    // Sky 20 (owner 2026-11-23, "remove score pane" on both side pages): floor 5 carries no score bar; the page's own title sits at the top centre instead.
+    score: 'gone',
     vitals: 'gone',
   }),
 });
+
+/**
+ * Floors where the room table is the whole truth: a remembered "shown" never beats it (Sky 20, owner 2026-11-23: mother, meters and
+ * daughters must not show on the two side pages whatever the player kept from floors 2-4). Nothing is remembered FOR these floors
+ * and nothing remembered for them is read back; the memory of the other floors is untouched.
+ */
+export const TABLE_WINS_FLOORS = Object.freeze([5]);
 
 function _prefersReducedMotion() {
   try {
@@ -455,7 +463,7 @@ export class FloorMask {
 
   _captureMemory() {
     const floor = this._appliedFloor;
-    if (floor == null) return;
+    if (floor == null || TABLE_WINS_FLOORS.includes(floor)) return;   // a table-wins floor remembers nothing (Sky 20)
     let row = this._memory.get(floor);
     if (!row) { row = new Map(); this._memory.set(floor, row); }
     for (const [id, pane] of Object.entries(MASK_PANES)) {
@@ -468,7 +476,7 @@ export class FloorMask {
   _applyRoom(floor) {
     this._appliedFloor = floor;
     const room = this._rooms[floor] || null;   // no row (out-of-table id) → all shown
-    const mem = this._memory.get(floor) || null;
+    const mem = TABLE_WINS_FLOORS.includes(floor) ? null : (this._memory.get(floor) || null);   // table-wins floor: memory never read (Sky 20)
     const fadeMs = this._reducedMotion() ? REDUCED_CROSSFADE_MS : TRANSITION_FADE_MS;
     for (const [id, pane] of Object.entries(MASK_PANES)) {
       const tier = (room && room[id]) || 'shown';

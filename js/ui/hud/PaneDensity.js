@@ -129,6 +129,14 @@ export class PaneDensity {
      * @type {boolean}
      */
     this.clearOnDown = false;
+    /**
+     * Key lock (Sky 20, owner 2026-11-23: the two side pages show only their own things): when set and it returns true at press
+     * time, the bus `-` / `+` do nothing (no step, no notice). main.js sets it inside the LADDER gate to "ladder floor 5 is
+     * showing". Only the keys read it: setLevel() / down() / up() called directly (the slider, tests) are not gated, and nothing
+     * here touches the rungs or the remembered choices.
+     * @type {(() => boolean)|null}
+     */
+    this.keyLock = null;
     /** @private the rung ids a clearAll() hid — what `+` brings back; null = none */
     this._stash = null;
   }
@@ -348,9 +356,12 @@ export class PaneDensity {
    */
   attach(bus, events) {
     if (!bus || !events) return;
-    bus.on(events.HUD_DENSITY_DOWN, () => (this.clearOnDown ? this.clearAll() : this.down()));
-    bus.on(events.HUD_DENSITY_UP, () => ((this.clearOnDown && this._stash && this.visibleCount() === 0)
-      ? this.restore() : this.up()));
+    const locked = () => { try { return !!(this.keyLock && this.keyLock()); } catch (_) { return false; } };
+    bus.on(events.HUD_DENSITY_DOWN, () => { if (!locked()) (this.clearOnDown ? this.clearAll() : this.down()); });
+    bus.on(events.HUD_DENSITY_UP, () => {
+      if (locked()) return;
+      if (this.clearOnDown && this._stash && this.visibleCount() === 0) this.restore(); else this.up();
+    });
   }
 
   /**

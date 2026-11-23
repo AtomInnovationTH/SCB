@@ -63,6 +63,12 @@ export const PULSE_PERIOD_MS = 2000;
  * half-height; the MEO compression factor follows from what is left to the left/right screen edge.
  */
 export const LEO_VFRAC = 0.6;
+/**
+ * Sky 20 (owner 2026-11-23: "move 'objects in orbit' pane to bottom to improve view of debris"): the timeline strip moved down, so the LEO
+ * ring may grow until its bottom edge is this far above the screen bottom (the strip's top label row glyphs end at h-191, plus 10 px of air).
+ * The ring still never shrinks below LEO_VFRAC of the half-height. Both numbers are in `meoRadialMap`.
+ */
+export const RING_BOTTOM_RESERVE_PX = 201;
 
 /**
  * Projected-cascade display ceiling (× base count). The hyperbolic BAU curve has a finite-time singularity (the
@@ -299,7 +305,7 @@ export function meoRadialMap(vp) {
   const leoTopU = RE_U + leoTopKm * Constants.SCENE_SCALE; // 83.71 u
   const geoU = FLOOR.chart.geoRingU;
 
-  const leoTopPx = (h / 2) * LEO_VFRAC;
+  const leoTopPx = Math.max((h / 2) * LEO_VFRAC, h / 2 - RING_BOTTOM_RESERVE_PX);
   const sLeoPxPerU = leoTopPx / leoTopU;
   const geoPx = w / 2;
   const cFactor = (geoPx - leoTopPx) / (sLeoPxPerU * (geoU - leoTopU));
@@ -342,10 +348,11 @@ export function rankLabels(candidates, budget = FLOOR.labelBudget) {
 export const LABEL_MIN_GAP_PX = 14;
 /**
  * First baseline the chart's own text may use at the top, px (owner 2026-11-17, DECISIONS §74 row 3 / lane T6). The score bar
- * covers y 8-43 at the top centre (measured at 1728x1117 and 1366x1024: x 689-1039 / 508-858), so the "MEO compressed" tag,
- * its caveat line and the GEO ring label used to print under it. They now start below it, one 14 px row apart.
+ * covered y 8-43 at the top centre (measured at 1728x1117 and 1366x1024: x 689-1039 / 508-858), so the "MEO compressed" tag,
+ * its caveat line and the GEO ring label start below it, one 14 px row apart. Sky 20 (2026-11-23): the page's title stands there now
+ * (PageRow TITLE_TOP_PX 14, line box 32 px tall: bottom y 46), so the first line's glyphs (tops 9 px over the baseline: y 53) still clear it.
  */
-export const CHART_TOP_CLEAR_PX = 62; // 56 left the tag's glyphs 5 px under the score bar on the iPad (visual check 2026-11-18): 11 px now
+export const CHART_TOP_CLEAR_PX = 62;
 /**
  * The Kessler strip's top and bottom edges as distances from the screen bottom, px (lane fix F2, 2026-11-18). The bottom used to be
  * 34: the field-heights line (baseline h-23, glyph tops h-31) touched the decade ticks (to h-30) and the trace. At 44 the ticks end at
@@ -357,15 +364,19 @@ export const CHART_TOP_CLEAR_PX = 62; // 56 left the tag's glyphs 5 px under the
  * The page dots' circles sit at h-80 +-5, centred; the line passes over them.)
  * 2026-11-22 (sky 19, owner: the title and dots sat ON the strip): the strip now stands wholly above the page row's band. That band is
  * the title (PageRow TITLE_BOTTOM_PX 108, about 16 px tall: glyphs h-124..h-108) and the dots (hit targets h-104..h-56, circles h-80 +-5),
- * so the strip's bottom is 150 (ticks end at h-146, the 20-year labels' baseline h-135, descenders h-132: 8 px above the title's glyphs)
- * and its top 202 (the plot is 52 px tall). One credit line sits under the dots at h-7.
+ * so the strip's bottom was 150 (ticks end at h-146, the 20-year labels' baseline h-135, descenders h-132: 8 px above the title's glyphs)
+ * and its top 202 (the plot was 52 px tall).
+ * 2026-11-23 (Sky 20, owner: the strip to the bottom, "just above the page dots"): the page title left for the top centre, so only the dots
+ * (hit boxes h-104..h-56, circles h-80 +-5) stand at the bottom now. The strip's bottom is 124 (ticks end at h-120, the 20-year labels'
+ * baseline h-109, descenders h-106: 2 px above the dots' hit boxes) and its top 176 (the plot stays 52 px tall; the top label row's glyphs
+ * run h-191..h-179). One line of credit used to stand under the dots: it is in the Tech library now.
  */
-export const STRIP_TOP_FROM_BOTTOM_PX = 202;
-export const STRIP_BOTTOM_FROM_BOTTOM_PX = 150;
+export const STRIP_TOP_FROM_BOTTOM_PX = 176;
+export const STRIP_BOTTOM_FROM_BOTTOM_PX = 124;
 /** Decade ticks hang this far under the strip's bottom edge. */
 export const STRIP_TICK_PX = 4;
 /** The 20-year labels' baseline, px under the strip's bottom edge. */
-const STRIP_LABEL_DROP_PX = 15;
+export const STRIP_LABEL_DROP_PX = 15;
 
 /**
  * Every string the chart painted last (CSS px: x, y top, w, h) - the real-sky dots canvas (z 34) sits over the chart (z 33) and
@@ -470,15 +481,22 @@ const LENS_BTN_TEXT = '#eef2f7';
 /** The buttons stand in a column: Danger under Tonnes, this far apart, this far from the screen's top and left (CSS px). */
 export const LENS_STACK_GAP_PX = 8;
 export const LENS_STACK_EDGE_PX = 16;
-/** Page 1's radio notice sits at the top left, this far right of the buttons and at least this far before the score bar's left edge. */
+/** Page 1's radio notice sits at the top left, this far right of the buttons and at least this far before the page title's left edge. */
 export const NOTICE_GAP_PX = 12;
-export const NOTICE_SCORE_GAP_PX = 16;
+export const NOTICE_TITLE_GAP_PX = 16;
 /** Narrower than this and the notice goes under the buttons instead. */
 export const NOTICE_MIN_W_PX = 340;
-/** The score bar's half width: 140 px (the 280 px strip, #hud-score-panel) x the HUD scale (measured 350 wide at 1728 and 1366). */
-const SCORE_HALF_W_PX = 140;
-/** The once-only "GEO means ..." toast's bottom edge on page 1: just above the timeline strip's top label (strip top h-202, label glyphs h-222). */
-export const TOAST_BOTTOM_PX = 228;
+/**
+ * The page title's half width, CSS px (Sky 20): "DEBRIS BY HEIGHT" in 26 px bold caps with 0.12 em spacing, centred (the score bar that stood
+ * there was 350 px wide). Measured by the browser probe (tmp/sky20-pages/p1.mjs prints the title's rect); not scaled by the HUD scale (the title is not a HUD group).
+ */
+export const TITLE_HALF_W_PX = 160;
+/**
+ * The once-only "GEO means ..." toast's top edge on page 1 (Sky 20): in the free band at the top, under the radio notice box (its bottom
+ * about y 117, measured by tmp/sky20-pages/p1.mjs) and the chart's top lines (the "36,000 km ring + graveyard" label ends y 93), over the
+ * ring's top (y 201 on both screens). Even two lines at the 1.25 HUD scale (about 50 px) end above y 201.
+ */
+export const TOAST_TOP_PX = 124;
 export const PAGE_ATTR = 'data-sda-page';
 const PAGE_STYLE_ID = 'sda-page-chrome-style';
 
@@ -490,7 +508,7 @@ const PAGE_STYLE_ID = 'sda-page-chrome-style';
  */
 export function noticePlacement(wPx, hPx, scale = hudScaleFor(wPx, hPx)) {
   const stackBottom = LENS_STACK_EDGE_PX + 2 * LENS_BTN_H + LENS_STACK_GAP_PX;
-  const right = wPx / 2 - SCORE_HALF_W_PX * scale - NOTICE_SCORE_GAP_PX;
+  const right = wPx / 2 - TITLE_HALF_W_PX - NOTICE_TITLE_GAP_PX;
   const leftSide = LENS_STACK_EDGE_PX + LENS_BTN_W + NOTICE_GAP_PX;
   const sideW = right - leftSide;
   const under = sideW < NOTICE_MIN_W_PX;
@@ -513,22 +531,13 @@ export const NOTE_THREAT = 'Some jumps before 2020 are better tracking, not new 
 export const STRIP_LOG_MIN = 1000;
 
 /**
- * The page's one credit line: the GCAT credit (CC BY 4.0) plus the other sources the real-sky layer names, in a few words (the search
- * panel used to carry them; owner 2026-11-22: the credit shows on floor 5 too). Only sources the layer's own credit text claims are named
- * (CelesTrak only with the status join), and an old snapshot says so, as the panel's short credit did.
- * @param {string} gcatCredit  realSky.credit
- * @param {string} [layerCredit]  RealSkyLayer.creditLine() (its full wording)
- * @returns {string}
+ * The speed control's width (CSS px, measured 2026-11-23 by tmp/sky20-pages/p1.mjs at both screens) and the gap the strip keeps before the
+ * bottom-right column (card + control) when a card is open there (the iPad).
  */
-export function footerCredit(gcatCredit, layerCredit = '') {
-  const t = String(layerCredit || '');
-  const names = [];
-  if (/Space-Track/i.test(t)) names.push('Space-Track');
-  if (/CelesTrak/i.test(t)) names.push('CelesTrak');
-  const old = t.match(/Snapshot (\d+) days old\./);
-  const extra = [names.join(', '), old ? `snapshot ${old[1]} days old` : ''].filter(Boolean).join(' \u00b7 ');
-  return extra ? `${gcatCredit} \u00b7 ${extra}` : String(gcatCredit);
-}
+export const SPEED_CONTROL_W_PX = 300;
+export const STRIP_KEEPOUT_GAP_PX = 16;
+/** The "today" label keeps at least this far from the strip's title; closer than that it moves to the right of its line. */
+const TODAY_TITLE_GAP_PX = 12;
 
 export class SdaChart {
   /**
@@ -594,14 +603,14 @@ export class SdaChart {
         + (b.realCount != null ? `/r${b.realCount}/m${Math.round((b.massT || 0) * 10)}/${b.estimate ? 1 : 0}` : ''))
       .join('|');
     const rs = m.realSky ? `|rs${(m.realSky.beyond2000 && m.realSky.beyond2000.n) || 0}` : '';
-    const sc = m.skyCredit ? `|sc${m.skyCredit}` : '';
+    const cb = m.cardBox ? `|cb${m.cardBox.x0},${m.cardBox.y0},${m.cardBox.x1},${m.cardBox.y1}` : '';
     const oob = m.outOfBand ? `${m.outOfBand.count}` : '0';
     const proj = m.timeline && m.timeline.projection
       ? m.timeline.projection.map((p) => p.tracked).join(',')
       : '';
     const risk = Math.round((m.riskFraction || 0) * 100);
     const epoch = (typeof m.fontEpoch === 'number') ? m.fontEpoch : 0;
-    return `${m.lens}|${m.wPx}x${m.hPx}|${bands}|${oob}|${proj}|r${risk}${rs}${sc}|e${epoch}`;
+    return `${m.lens}|${m.wPx}x${m.hPx}|${bands}|${oob}|${proj}|r${risk}${rs}${cb}|e${epoch}`;
   }
 
   /** @private */
@@ -679,7 +688,8 @@ export class SdaChart {
   }
 
   /**
-   * @private While page 1 shows: the radio notice goes to the top left and the "GEO means" toast above the strip. One attribute on <html>
+   * @private While page 1 shows: the radio notice goes to the top left and the "GEO means" toast to the top band (TOAST_TOP_PX; the toast grows
+   * downward from its top edge). One attribute on <html>
    * and three variables feed two rules (`!important`: the box's inline width and the sky panel's dodge translate would win otherwise);
    * write-on-change; hide() / dispose() take it all away, so the globe has the box back at the top right.
    */
@@ -690,7 +700,7 @@ export class SdaChart {
       const st = document.createElement('style');
       st.id = PAGE_STYLE_ID;
       st.textContent = `html[${PAGE_ATTR}] #hud-comms-panel { translate: var(--sda-notice-x) var(--sda-notice-y) !important; width: var(--sda-notice-w) !important; }`
-        + ` html[${PAGE_ATTR}] #notification-zone { bottom: ${TOAST_BOTTOM_PX}px !important; }`;
+        + ` html[${PAGE_ATTR}] #notification-zone { top: ${TOAST_TOP_PX}px !important; bottom: auto !important; transform-origin: 0 0 !important; }`;
       document.head.appendChild(st);
     }
     const p = noticePlacement(wPx, hPx);
@@ -812,24 +822,26 @@ export class SdaChart {
       text: STRIP_TITLE,
       rPx: 0,
     });
-    // Nothing sits at the top right of page 1 to avoid (the search panel is gone; the radio notice is at the top left here): the column
-    // stands where the rings put it.
+    // An open object card (page 1, Sky 20) is a box the label column and its colour key must stay clear of: `avoid` is in the layout's own terms
+    // (x from the centre, y from the top). With no card open nothing is avoided and the column stands where the rings put it.
+    const cardBox = m.cardBox && Number.isFinite(m.cardBox.x0) ? m.cardBox : null;
+    const avoid = cardBox ? { x0: cardBox.x0 - wPx / 2, x1: cardBox.x1 - wPx / 2, y0: cardBox.y0, y1: cardBox.y1 } : null;
     const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2, LABEL_MIN_GAP_PX, LABEL_TOP_PX,
-      map.leoTopPx, null);
+      map.leoTopPx, avoid);
     this._syncPageChrome(wPx, hPx);
 
     const timeline = m.timeline || null;
     const sig = SdaChart.frameSig({
       lens, wPx, hPx, bands,
       outOfBand: m.outOfBand, timeline, riskFraction: m.riskFraction,
-      fontEpoch: this._fontEpoch.value(), realSky, skyCredit: m.skyCredit || '',
+      fontEpoch: this._fontEpoch.value(), realSky, cardBox,
     });
     const now = this._now();
     const wouldPaint = SdaChart.shouldPaint(sig, this._lastSig, lens, now, this._lastPaintMs);
 
     let painted = false;
     if (wouldPaint && this._canvas && this._ctx2d && this._visible) {
-      this._paint({ wPx, hPx, lens, map, rings, labels, timeline, outOfBand: m.outOfBand, realSky, skyCredit: m.skyCredit || '', now });
+      this._paint({ wPx, hPx, lens, map, rings, labels, timeline, outOfBand: m.outOfBand, realSky, cardBox, now });
       painted = true;
     }
     if (wouldPaint) {
@@ -941,16 +953,19 @@ export class SdaChart {
     } else {
       this._text(g, NOTE_THREAT, cx, CHART_TOP_CLEAR_PX + 14);
     }
-    // Real numbers need their credit (CC BY 4.0): ONE line at the very bottom centre, both lenses, with the sources the search panel
-    // used to name (Space-Track, CelesTrak; Sky 19). The page title and dots stand above it (h-56 and up).
-    if (realSky && typeof realSky.credit === 'string' && realSky.credit) {
-      g.textAlign = 'center';
-      this._text(g, footerCredit(realSky.credit, f.skyCredit), cx, h - 7);
-    }
+    // The page's credit (CC BY 4.0 and the sources) used to stand here as one line at the very bottom; it is in the Tech library entry for this page now
+    // (Sky 20, owner 2026-11-23: "remove text at bottom ... should be in tech library").
     g.globalAlpha = 1;
 
-    if (timeline) this._paintStrip(g, w, h, lens, timeline, labels, pulse);
+    if (timeline) this._paintStrip(g, w, h, lens, timeline, labels, pulse, f.cardBox || null);
     _setChartTextBoxes(this._boxes);
+  }
+
+  /** @private A string's width in the current font (the fallback _text uses when there is no measureText). */
+  _textW(g, s) {
+    const str = String(s);
+    const m = typeof g.measureText === 'function' ? g.measureText(str) : null;
+    return m && Number.isFinite(m.width) ? m.width : str.length * 6.1;
   }
 
   /** @private fillText that also records the string's box (the glyphs sit about 8 px above the baseline, 3 px of descender). */
@@ -968,8 +983,11 @@ export class SdaChart {
    * at the bottom; the 1957 start of zero sits on that line), so 1957-2026 is a readable climb next to the forecast. The history is a
    * solid line; the forecast after "today" (the last keyframe year) is dashed and fainter than the history.
    */
-  _paintStrip(g, w, h, lens, timeline, labels, pulse) {
-    const x0 = w * 0.08, x1 = w * 0.92;
+  _paintStrip(g, w, h, lens, timeline, labels, pulse, cardBox = null) {
+    const x0 = w * 0.08;
+    // With a card open in the bottom-right corner (the iPad's place) its column - the card and the speed control above it - stands over the strip's right end: stop before it.
+    let x1 = w * 0.92;
+    if (cardBox && cardBox.y1 > h - STRIP_TOP_FROM_BOTTOM_PX + 15) x1 = Math.min(x1, Math.min(cardBox.x0, cardBox.x1 - SPEED_CONTROL_W_PX) - STRIP_KEEPOUT_GAP_PX);
     const y0 = h - STRIP_TOP_FROM_BOTTOM_PX, y1 = h - STRIP_BOTTOM_FROM_BOTTOM_PX;
     const hist = timeline.history || [];
     const proj = timeline.projection || [];
@@ -1029,7 +1047,12 @@ export class SdaChart {
     g.textAlign = 'right';
     this._text(g, STRIP_SCALE_NOTE, x1, y0 - 6);
     g.textAlign = 'right'; // left of its line: centred, it touched the page title on the iPad (visual check 2026-11-22)
-    this._text(g, `today ${today}`, X(today) - 4, y0 - 6);
+    // When the strip is short (iPad with a card open) that spot lies under the title's end: then it stands right of the line instead.
+    const todayStr = `today ${today}`;
+    const titleEnd = title ? x0 + this._textW(g, title.text) : x0;
+    const todayW = this._textW(g, todayStr);
+    if (X(today) - 4 - todayW >= titleEnd + TODAY_TITLE_GAP_PX) this._text(g, todayStr, X(today) - 4, y0 - 6);
+    else { g.textAlign = 'left'; this._text(g, todayStr, X(today) + 4, y0 - 6); }
     g.globalAlpha = 0.7;
     g.textAlign = 'center';
     for (let yr = Math.ceil(yr0 / 20) * 20; yr <= yr1; yr += 20) this._text(g, String(yr), X(yr), y1 + STRIP_LABEL_DROP_PX);

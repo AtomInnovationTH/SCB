@@ -56,20 +56,23 @@ export const EDGE_PX = 12;
  * Where the row sits (owner 2026-11-19, DECISIONS §78 row 12). Floor 4: the bottom-right corner (12 px in; the bottom-centre holds REACH and
  * the FLY THERE button, the left the hint box). On touch the real-sky panel holds that corner (his 11-17 pick), so the row stands directly
  * above it, right edges aligned, its bottom edge = 12 px + the panel's live height (`--sky-panel-lift`, set by RealSkyCard, so a tapped dot's
- * taller card pushes it up). Floor 5: the left edge, top 800 px (or 230 px above the bottom on a shorter window): the gap between the Kessler
- * timeline (from y 920) and the left column, measured 2026-11-18 (tmp/clockshots/layout.mjs, 1366x1024 and 1728x1117). Pure.
- * @param {{floor:number|null, glass:boolean}} p
+ * taller card pushes it up). Floor 5 page 1 (the debris chart, Sky 20, owner 2026-11-23: "time slider in same position as Floor 4 top")
+ * takes floor 4's places; on touch the lift is the globe's panel height with no card open (RealSkyCard SKY_PANEL_GLOBE_LIFT_PX: the control stands in the
+ * globe's spot) and the card's own height once a dot's card is open. Floor 5 elsewhere (page 2 hides the
+ * control; the old left-edge spot, top 800 px or 230 px above the bottom, stays for any other caller). Pure.
+ * @param {{floor:number|null, glass:boolean, page1?:boolean}} p `page1`: floor 5 shows the debris page
  * @returns {{left:string, top:string, right:string, bottom:string}}
  */
 export function sliderPlacement(p) {
   const p0 = p || {};
   const right = `calc(${EDGE_PX}px + env(safe-area-inset-right, 0px))`;
   const bottom = `calc(${EDGE_PX}px + env(safe-area-inset-bottom, 0px))`;
-  if (p0.floor === 4 && p0.glass) {
+  const globeSpot = p0.floor === 4 || (p0.floor === 5 && p0.page1 === true);
+  if (globeSpot && p0.glass) {
     // iPad: the real-sky panel holds the corner (right 12 px, bottom 12 px + safe area); stand directly above it, right edges aligned, and follow its height (a tapped dot's card makes it taller)
     return { left: 'auto', top: 'auto', right: `${EDGE_PX}px`, bottom: `calc(${EDGE_PX}px + env(safe-area-inset-bottom, 0px) + var(${SKY_PANEL_LIFT_VAR}, 0px))` };
   }
-  if (p0.floor === 4) return { left: 'auto', top: 'auto', right, bottom };
+  if (globeSpot) return { left: 'auto', top: 'auto', right, bottom };
   return { left: `${EDGE_PX}px`, top: 'min(800px, calc(100vh - 230px))', right: 'auto', bottom: 'auto' };
 }
 
@@ -146,7 +149,7 @@ export class MapClockSlider {
     if (changed && this._root) this._paintState();
   }
 
-  /** @param {{floor?:number|null, glass?:boolean}} p write-on-change placement */
+  /** @param {{floor?:number|null, glass?:boolean, page1?:boolean}} p write-on-change placement */
   setLayout(p) {
     if (!this._root) return;
     const pl = sliderPlacement(p);

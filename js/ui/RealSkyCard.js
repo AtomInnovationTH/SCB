@@ -111,19 +111,21 @@ const NAME_DOUBLE_MS = 350;
  * floor 4 (Earth r 393-417 px, widest point at the screen's middle height, x 1076-1100 vs the card's left edge 1082) and 11 px over the
  * HUD's right-hand status strip (bottom y 187). No top offset clears it: the card is taller than the gap above Earth's widest point.
  * On touch, floor 4, the panel therefore sits in the bottom-right corner (card top y 670; Earth's edge at that height x 1069),
- * growing upward. On floor 5 the top-right stays: Earth's disc there ends at x 917 (card left 1082), and the bottom-right holds the
- * Kessler timeline (a bottom-right card covered it in the probe's screenshot). The Mac (1728 x 1117, mouse) has 151 px between Earth's
+ * growing upward. (Until Sky 20, on floor 5 the top-right stayed: Earth's disc there ends at x 917 (card left 1082), and the bottom-right held the
+ * Kessler timeline (a bottom-right card covered it in the probe's screenshot).) The Mac (1728 x 1117, mouse) has 151 px between Earth's
  * edge and the card on floor 4, so its placement stays as it was.
+ * Sky 20 (owner 2026-11-23: the object card "in same position as Floor 4 top"): floor 5's page 1 takes floor 4's place on both screens,
+ * and the Kessler timeline moved to the bottom, clear of the iPad's bottom-right corner (see SdaChart `STRIP_*`).
  * @param {boolean} glass touch device
  * @param {number|null} [floor] 4 or 5
  * @returns {{top:string, bottom:string, maxHeight:string}} CSS values
  */
 export function panelPlacement(glass, floor) {
-  if (glass && floor === FLOOR_GLOBE) return { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: 'calc(100vh - 260px)' };
+  if (glass && (floor === FLOOR_GLOBE || floor === FLOOR_CHART)) return { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: 'calc(100vh - 260px)' };
   // Mac floor 4 (lane sky-skylook-1119, owner 2026-11-19: "move the right panel to top right to improve visibility of the object cloud"):
   // the panel's top edge is 12 px from the top. The radio box and the right column (Targets, Target info, NEXT when `+` brings it back; NEXT is gone on floor 4 by default since DECISIONS §78 row 11) that sat there move out of its way (see `SKY_PANEL_TOP_ATTR`).
-  // Floor 5 = page 1 of the page row (Sky 19, owner 2026-11-22: "a cleaner layout, remove irrelevant panes"): the panel is HIDDEN there
-  // (see `_place`), but with a mouse it keeps the floor-4 place, so the radio box stays at the same screen spot as on the globe.
+  // Floor 5 = page 1 of the page row (Sky 19, owner 2026-11-22: "a cleaner layout, remove irrelevant panes"; Sky 20: the card only, see `_place`):
+  // with a mouse it keeps the floor-4 place.
   if (!glass && (floor === FLOOR_GLOBE || floor === FLOOR_CHART)) return { top: 'calc(12px + env(safe-area-inset-top, 0px))', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
   return { top: '176px', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
 }
@@ -144,6 +146,12 @@ export const SKY_PANEL_LIFT_VAR = '--sky-panel-lift';
 export const SKY_PANEL_TOP_CSS = `html[${SKY_PANEL_TOP_ATTR}] #hud-comms-panel, html[${SKY_PANEL_TOP_ATTR}] #hud-right-column { translate: 0 var(${SKY_PANEL_DY_VAR}, 0px); }`;
 /** Gap between the panel's bottom edge and the radio box / right column under it, px. */
 export const SKY_PANEL_GAP_PX = 12;
+/**
+ * Touch page 1 with no card open: the speed control stands where it does on the globe, above the globe's always-shown panel (iPad: panel 208 px
+ * high with no card + SKY_PANEL_GAP_PX, measured 2026-11-23 by tmp/sky20-pages/p1.mjs: control y 722-792 of 1024). The lift var holds this until a
+ * card opens, then the card's own height + gap.
+ */
+export const SKY_PANEL_GLOBE_LIFT_PX = 220;
 /**
  * How far the dodge rule has moved the radio box and the right column down right now, px (0 when it is off). HUD reads it so the right
  * column's layout top (radio box bottom + 10) is measured without the radio box's own translate: both carry the same one, and counting it
@@ -339,29 +347,76 @@ export class RealSkyCard {
     root.style.top = p.top;
     root.style.bottom = p.bottom;
     root.style.maxHeight = p.maxHeight;
-    // Page 1 (floor 5) draws no search panel: `visibility` keeps its box (the radio box's dodge measures it) but it shows and takes nothing.
-    const away = this._floor === FLOOR_CHART;
-    root.style.visibility = away ? 'hidden' : 'visible';
-    if (away && this._els.input && this._doc && this._doc.activeElement === this._els.input) this._els.input.blur();
+    // Page 1 (floor 5, Sky 20): the panel is the object card ONLY: no search box, tick boxes or credit row (the page has its own buttons and the
+    // credit is in the Tech library), and nothing at all while no dot is picked (`_syncDisplay`).
+    const page1 = this._floor === FLOOR_CHART;
+    root.style.visibility = 'visible';
+    const e = this._els;
+    if (e.input) e.input.style.display = page1 ? 'none' : '';
+    if (e.msg) e.msg.style.display = page1 ? 'none' : '';
+    if (e.card) {   // the card's own top rule and gap separated it from the search box: not needed when it is alone
+      e.card.style.marginTop = page1 ? '0' : '7px';
+      e.card.style.paddingTop = page1 ? '0' : '6px';
+      e.card.style.borderTop = page1 ? 'none' : '1px solid rgba(160,180,220,0.2)';
+    }
+    if (page1 && e.input && this._doc && this._doc.activeElement === e.input) e.input.blur();
     this._placed = true;
+    this._syncDisplay();
+    this._renderLegend();
     this._syncDodge();
   }
 
+  /** @returns {boolean} the card shows the debris page's card-only form (floor 5) */
+  _page1() { return this._floor === FLOOR_CHART; }
+
+  /** The panel's own display: on the globe it shows whenever the card is on; on page 1 only while a dot is picked. */
+  _syncDisplay() {
+    const root = this._els.root;
+    if (!root) return;
+    const want = this._shown && (!this._page1() || !!this._info);
+    const v = want ? 'block' : 'none';
+    if (root.style.display !== v) root.style.display = v;
+  }
+
   /**
-   * The room the panel takes at the bottom right, for the map speed control (lane sky-floor4-1119, DECISIONS §78 row 12): on touch, floor 4,
-   * the panel sits in the bottom-right corner and grows upward, so the speed control stands just above it. `--sky-panel-lift` on <html> is the
-   * panel's height + SKY_PANEL_GAP_PX while it shows there, else removed; MapClockSlider's bottom edge adds it (CSS only, so the control moves
-   * with the panel when a tapped dot's card opens, with no per-frame work). Same write-on-change and same rect-read moments as the dodge.
+   * The panel's box on screen (CSS px) as measured at the last write moment (a show, a render, a size change), or null while it is not on
+   * screen. Cached so the chart can keep its labels clear of an open card without a per-frame layout read (Sky 20).
+   * @returns {{x0:number,y0:number,x1:number,y1:number}|null}
+   */
+  box() { return this._box || null; }
+
+  /** @private Measure the panel's box now (write moments only). */
+  _measure() {
+    const root = this._els.root;
+    let b = null;
+    if (root && this._shown && root.style.display !== 'none' && typeof root.getBoundingClientRect === 'function') {
+      const r = root.getBoundingClientRect();
+      if (r && r.width > 0 && r.height > 0) b = { x0: Math.round(r.left), y0: Math.round(r.top), x1: Math.round(r.right), y1: Math.round(r.bottom) };
+    }
+    const o = this._box;
+    if ((!o && !b) || (o && b && o.x0 === b.x0 && o.y0 === b.y0 && o.x1 === b.x1 && o.y1 === b.y1)) return;
+    this._box = b;
+  }
+
+  /**
+   * The room the panel takes at the bottom right, for the map speed control (lane sky-floor4-1119, DECISIONS §78 row 12): on touch, floors 4
+   * and 5's page 1, the panel sits in the bottom-right corner and grows upward, so the speed control stands just above it. `--sky-panel-lift`
+   * on <html> is the panel's height + SKY_PANEL_GAP_PX while it shows there, else removed (page 1 with no card open: the globe's no-card lift
+   * SKY_PANEL_GLOBE_LIFT_PX, so the control stays in the globe's spot; a card opened there lifts it by the card's height); MapClockSlider's bottom edge adds it (CSS only, so the control moves with the panel when a tapped dot's card opens, with no
+   * per-frame work). Same write-on-change and same rect-read moments as the dodge.
    * @private
    */
   _syncLift(de, root) {
-    const on = !!root && this._shown && this._glass && this._floor === FLOOR_GLOBE;
+    const on = !!root && this._shown && this._glass && (this._floor === FLOOR_GLOBE || this._floor === FLOOR_CHART);
     if (!on) {
       if (this._liftPx !== undefined) { de.style.removeProperty(SKY_PANEL_LIFT_VAR); this._liftPx = undefined; }
       return;
     }
-    const r = typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null;
-    const lift = Math.round((r && r.height) || 0) + SKY_PANEL_GAP_PX;
+    let lift = SKY_PANEL_GLOBE_LIFT_PX;   // page 1 with no card: the globe's spot
+    if (this._floor === FLOOR_GLOBE || this._info) {
+      const r = typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null;
+      lift = Math.round((r && r.height) || 0) + SKY_PANEL_GAP_PX;
+    }
     if (lift !== this._liftPx) { de.style.setProperty(SKY_PANEL_LIFT_VAR, `${lift}px`); this._liftPx = lift; }
   }
 
@@ -369,15 +424,18 @@ export class RealSkyCard {
    * Mouse + floor 4 or 5 + showing: put the radio box and the right column (Targets / Target info panes, NEXT when shown) under the panel (attribute + the panel's
    * bottom + SKY_PANEL_GAP_PX as a CSS variable on <html>); in every other state take it all back. Floor 5 (D7, review of 2026-11-19):
    * the panel stays at top 176 px, right 12 px, 272 px wide, over `#hud-right-column` (right 0, 350 px), and `+` after a scan shows the
-   * panes there as on floor 4 (no floor test in the `+` walk: PaneDensity, HUD `_densityIsAvailable`), so the same dodge applies. Writes
+   * panes there as on floor 4 (no floor test in the `+` walk: PaneDensity, HUD `_densityIsAvailable`; the `+` / `-` KEYS are locked on floor 5 since Sky 20, the slider is not), so the same dodge applies. Writes
    * only on change; reads the panel's rect only here (a show, a re-render, a size change), never per frame.
    */
   _syncDodge() {
     const d = this._doc, de = d && d.documentElement;
     if (!de || !de.style || typeof de.setAttribute !== 'function') return;
     const root = this._els.root;
+    this._syncDisplay();
+    this._measure();
     this._syncLift(de, root);
-    const on = !!root && this._shown && !this._glass && (this._floor === FLOOR_GLOBE || this._floor === FLOOR_CHART);
+    // Page 1 shows the panel only with a card open: with none there is nothing to dodge.
+    const on = !!root && this._shown && !this._glass && (this._floor === FLOOR_GLOBE || (this._floor === FLOOR_CHART && !!this._info));
     if (!on) {
       if (this._dodgeOn) { de.removeAttribute(SKY_PANEL_TOP_ATTR); de.style.removeProperty(SKY_PANEL_DY_VAR); this._dodgeOn = false; this._dodgeDy = NaN; }
       return;
@@ -410,9 +468,10 @@ export class RealSkyCard {
   _renderLegend() {
     const e = this._els;
     if (!e.root) return;
-    e.fail.style.display = this._loadFailed ? 'block' : 'none';
-    e.legend.style.display = this._loadFailed ? 'none' : 'grid';
-    e.credit.style.display = this._loadFailed ? 'none' : 'block';
+    const p1 = this._page1();                       // page 1 (Sky 20): the card only: no failure line, key or credit row
+    e.fail.style.display = this._loadFailed && !p1 ? 'block' : 'none';
+    e.legend.style.display = this._loadFailed || p1 ? 'none' : 'grid';
+    e.credit.style.display = this._loadFailed || p1 ? 'none' : 'block';
     CLASS_NAMES.forEach((n, i) => {
       const hide = (i === CLS_DEAD || i === CLS_WORKING || i === CLS_STARLINK) && !this._statusJoined;   // Starlink is a working satellite: no status, no Starlink
       const item = e.legendItems[i];
@@ -430,13 +489,12 @@ export class RealSkyCard {
     if (this._isGlass) this._glass = this._isGlass() === true;
     this._build();
     this._shown = true;
-    if (this._els.root) this._els.root.style.display = 'block';
     this._place();
   }
 
   hide() {
     this._shown = false;
-    if (this._els.root) this._els.root.style.display = 'none';
+    this._syncDisplay();
     this._syncDodge();
     if (this._els.input && this._doc && this._doc.activeElement === this._els.input) this._els.input.blur();
   }

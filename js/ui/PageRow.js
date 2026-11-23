@@ -28,12 +28,16 @@ export const SWIPE_FLICK_PX_S = 500;
 /** Dot touch target (CSS px, at least 44). */
 export const DOT_TARGET_PX = 48;
 /**
- * Where the dots and the page title sit (CSS px from the bottom edge, centred). Measured 2026-11-21 at 1728x1117 and 1366x1024:
- * the bottom 6-45 px hold the globe's REACH pill and page 1's two source lines, and the top centre holds the CLEARED HUD (a title
- * there was hidden behind it), so the dots sit above the footer band and the title above them.
+ * Where the dots and the page title sit (CSS px, both centred). The dots stand this far from the bottom edge: measured 2026-11-21 at
+ * 1728x1117 and 1366x1024, the bottom 6-45 px hold the globe's REACH pill. The page title (Sky 20, owner 2026-11-23: "move 'debris by
+ * height' to top so users immediately know what they are looking at") stands at the TOP centre, where the score bar was on floor 5 (the
+ * bar is gone there now), so nothing sits at the old bottom spot. TITLE_FONT_PX is the one size (about 26 px; the old label was 12.8 px).
  */
 export const DOTS_BOTTOM_PX = 56;
-export const TITLE_BOTTOM_PX = 108;
+export const TITLE_TOP_PX = 14;
+export const TITLE_FONT_PX = 26;
+/** The title's line box is this tall (CSS px, line-height 1.2 of TITLE_FONT_PX, rounded up). */
+export const TITLE_H_PX = 32;
 /** The floors on which the dots show: the globe and the row's floor. */
 export const DOT_FLOORS = Object.freeze([4, 5]);
 /** The ladder floor the row lives on (floor 5 in the code; the player never sees it as a floor). */
@@ -433,9 +437,10 @@ export class PageRow {
     const title = document.createElement('div');
     title.id = 'page-row-title';
     title.style.cssText = [
-      'position:fixed', 'left:50%', 'transform:translateX(-50%)', `bottom:${TITLE_BOTTOM_PX}px`, 'display:none',
-      'z-index:36', 'pointer-events:none', 'font-family:var(--font-mono)', 'font-size:0.8rem', 'letter-spacing:0.12em',
-      'text-transform:uppercase', 'color:rgba(0,204,255,0.85)', 'text-shadow:0 0 6px rgba(0,10,22,0.9)', 'white-space:nowrap',
+      'position:fixed', 'left:50%', 'transform:translateX(-50%)', `top:${TITLE_TOP_PX}px`, 'display:none',
+      'z-index:36', 'pointer-events:none', 'font-family:var(--font-mono)', `font-size:${TITLE_FONT_PX}px`, 'font-weight:bold',
+      'line-height:1.2', 'letter-spacing:0.12em',
+      'text-transform:uppercase', 'color:rgba(0,204,255,0.9)', 'text-shadow:0 0 8px rgba(0,10,22,0.95)', 'white-space:nowrap',
     ].join(';');
     document.body.appendChild(title);
     this._titleEl = title;

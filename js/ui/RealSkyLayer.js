@@ -206,6 +206,7 @@ export class RealSkyLayer {
     this._hiPoints = null;
     this._orbitLine = null;
     this._selected = -1;
+    this._globePick = null;             // the globe's pick while page 1 is open (null = none kept aside; -1 = she had none)
     this._lastOrbitMs = -Infinity;
     this._tmp = new Float64Array(3 * (ORBIT_SEGMENTS + 1));
     this._tmp3 = new Float64Array(3);
@@ -239,7 +240,20 @@ export class RealSkyLayer {
   /** A floor (4 or 5) asks for the layer. The first call starts the one fetch of data/sky.json. */
   show(floor) {
     if (floor !== FLOOR_NAVCOM && floor !== FLOOR_SDA) return;
+    // Page 1 (floor 5) opens with no card (Sky 20): the globe's pick is kept aside (`_globePick`) and the card starts empty.
+    // It comes back when floor 4 takes the layer again, by any route (page 1 -> globe directly, or through page 2 / a trip),
+    // and the page-1 pick is dropped then: the order of the two floors' calls is not guaranteed (page 1 -> globe runs
+    // show(4) before hide(5), which then returns early).
+    if (floor === FLOOR_SDA && this._floor !== FLOOR_SDA) {
+      if (this._globePick === null) this._globePick = this._selected;
+      if (this._selected >= 0) this.select(-1);
+    }
     this._floor = floor;
+    if (floor === FLOOR_NAVCOM && this._globePick !== null) {
+      const back = this._globePick;
+      this._globePick = null;
+      this.select(back);
+    }
     if (this._loadState === 'idle' || this._loadState === 'failed') this._loadPromise = this._load();
     this._lastPaintMs = -Infinity;      // a re-show repaints floor 5 at once
     this._apply();
@@ -248,9 +262,17 @@ export class RealSkyLayer {
   /** The floor that asked leaves; ignored when another floor has taken the layer since (activation order is not guaranteed). */
   hide(floor) {
     if (floor != null && this._floor !== floor) return;
+    // Leaving page 1: the card is empty again (Sky 20).
+    if (this._floor === FLOOR_SDA && this._selected >= 0) this.select(-1);
     this._floor = null;
     this._apply();
   }
+
+  /**
+   * The open card's box on screen (CSS px {x0,y0,x1,y1}) for the chart to keep clear of, or null with no card on page 1 (Sky 20). Cached in
+   * the card at its write moments: no layout read here.
+   */
+  cardBox() { return this._floor === FLOOR_SDA && this._card && typeof this._card.box === 'function' ? this._card.box() : null; }
 
   /** Floors 4-5 are showing the layer's slot: the layer draws (once loaded), in training too. */
   isActive() { return this._floor !== null; }

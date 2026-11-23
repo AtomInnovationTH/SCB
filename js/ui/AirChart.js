@@ -19,20 +19,21 @@
 import { VisualLaw } from '../core/VisualLaw.js';
 import { mono, fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { totalDensity, gasDensity, oxygenAtomsDensity, ROW0_KM, ROW_TOP_KM, LEVEL_F107 } from '../systems/AirGases.js';
-import { TITLE_BOTTOM_PX } from './PageRow.js';
+import { DOTS_BOTTOM_PX, DOT_TARGET_PX, TITLE_TOP_PX, TITLE_H_PX } from './PageRow.js';
 
 /**
- * What page 2 keeps clear (CSS px; measured 2026-11-21 at 1728x1117 and 1366x1024, screenshots tmp/sky1121-int/p2-*-page2.s.png).
- * The page row draws its title at TITLE_BOTTOM_PX from the bottom edge (centred, about 16 px tall) with the dots under it, so nothing
- * of the chart may reach below `h - PAGE_ROW_CLEAR_PX` (the x axis title included). The time-speed panel (MapClockSlider on floor 5)
- * stands at left 12 px, top min(800, h - 230), about 275 px wide in Thai (the longest caption) and 72 px tall: the plot and its height
- * labels start right of TIME_PANEL_RIGHT_PX. Page 1 needs neither: its chart keeps a left column clear of that gap by itself.
+ * What page 2 keeps clear (CSS px; the dots measured 2026-11-21 at 1728x1117 and 1366x1024). The page row's dots stand at the bottom
+ * (hit boxes from DOTS_BOTTOM_PX up to DOTS_BOTTOM_PX + DOT_TARGET_PX from the bottom edge), so nothing of the chart may reach below
+ * `h - PAGE_ROW_CLEAR_PX` (the x axis title included). Sky 20 (owner 2026-11-23): the page title now stands at the TOP centre (PageRow
+ * TITLE_TOP_PX, TITLE_H_PX tall) and the time-speed panel is not on this page, so the chart has no heading of its own, its subtitle and
+ * Sun buttons move up under the title, and the plot is centred on the screen with a key on its left and the Sun words on its right.
  */
-export const PAGE_ROW_CLEAR_PX = TITLE_BOTTOM_PX + 28;
-export const TIME_PANEL = Object.freeze({ left: 12, w: 284, h: 80, topMax: 800, fromBottom: 230 });
-export const TIME_PANEL_RIGHT_PX = TIME_PANEL.left + TIME_PANEL.w;
+export const PAGE_ROW_CLEAR_PX = DOTS_BOTTOM_PX + DOT_TARGET_PX + 8;
 /** The widest height label ("900 km" at SIZE.small, 0.6 em per glyph) and its gap to the axis. */
 const Y_LABEL_W = 6 * 13 * 0.6 + 8;
+/** The two side columns (the line key on the left, today's Sun and a storm on the right): width and gap to the height labels. */
+export const SIDE_W = 250;
+export const SIDE_GAP = 24;
 
 /** The four buttons, left to right. */
 export const SUN_BUTTONS = Object.freeze([
@@ -97,12 +98,11 @@ const approxWidth = (s, px) => String(s).length * px * 0.6;
  */
 export function layoutChart(wPx, hPx) {
   const left = 24;
-  const x0 = Math.ceil(TIME_PANEL_RIGHT_PX + 8 + Y_LABEL_W);
-  const panelW = 280;
-  const x1 = Math.max(x0 + 200, wPx - panelW - 24 - 36);
-  const titleY = 80;
-  const subY = 102;
-  const btnTop = 118;
+  // The plot is centred on the screen: the same width of key / words stands on each side of it.
+  const x0 = Math.ceil(left + SIDE_W + SIDE_GAP + Y_LABEL_W);
+  const x1 = Math.max(x0 + 200, wPx - x0);
+  const subY = TITLE_TOP_PX + TITLE_H_PX + 20;   // under the page title (top centre), left aligned
+  const btnTop = subY + 12;
   const btnH = BUTTON_MIN_H;
   const y0 = btnTop + btnH + 12 + LABEL_ROWS * LABEL_ROW_PX;
   const y1 = Math.max(y0 + 200, hPx - PAGE_ROW_CLEAR_PX - 44);   // the x axis title sits 40 px under y1 (baseline)
@@ -114,9 +114,10 @@ export function layoutChart(wPx, hPx) {
     bx += w + 10;
   }
   return {
-    wPx, hPx, left, titleY, subY, buttons,
+    wPx, hPx, left, subY, buttons,
     plot: { x0, x1, y0, y1 },
-    panel: { x: x1 + 36, y: y0, w: panelW },
+    panel: { x: left, y: y0, w: SIDE_W },                 // the line key, left of the height labels
+    panelR: { x: x1 + SIDE_GAP, y: y0, w: SIDE_W },       // today's Sun and a storm, right of the plot
     footerY: hPx - 18,
     labelBaseY: y0 - 8,
     xTickY: y1 + 18,
@@ -514,12 +515,12 @@ export class AirChart {
     g.clearRect(0, 0, w, h);
     this.paintCount++;
     this._placeButtons(f);
-    const { plot, panel } = f.geom;
+    const { plot, panel, panelR } = f.geom;
     const T = (s, x, y, px, color, align = 'left', weight) => {
       g.font = mono(px, weight); g.fillStyle = color; g.textAlign = align; g.fillText(s, x, y);
     };
 
-    T(f.title, f.geom.left, f.geom.titleY, SIZE.title, OFF_WHITE, 'left', 'bold');
+    // No heading here: the page row's title ("Air by height") stands at the top centre (Sky 20).
     T(f.subtitle, f.geom.left, f.geom.subY, SIZE.sub, TEXT_DIM);
 
     // Plot area and grid.
@@ -583,7 +584,7 @@ export class AirChart {
       T(l.text, l.x + LABEL_OFFSET + 3, y, SIZE.small, l.bold ? OFF_WHITE : TEXT_DIM, 'left', l.bold ? 'bold' : undefined);
     }
 
-    // Side panel: the legend, then the Sun words, then a storm.
+    // Side columns: the line key on the left, today's Sun words and a storm on the right.
     let py = panel.y + 6;
     for (const e of f.legend) {
       const mid = py - 5;
@@ -596,9 +597,9 @@ export class AirChart {
       T(e.text, panel.x + 56, py, SIZE.body, TEXT);
       py += 26;
     }
-    py += 14;
+    py = panelR.y + 6;   // today's Sun and a storm: the column right of the plot, from the plot's top
     for (const n of f.notes) {
-      for (const line of n.lines) { T(line, panel.x, py, n.px, n.color); py += Math.round(n.px * 1.4); }
+      for (const line of n.lines) { T(line, panelR.x, py, n.px, n.color); py += Math.round(n.px * 1.4); }
       py += 10;
     }
 
