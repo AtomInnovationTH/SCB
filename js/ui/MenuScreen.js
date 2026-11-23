@@ -239,7 +239,7 @@ export class MenuScreen {
           color: #aaddff;
           text-shadow: 0 0 6px rgba(0,204,255,0.5);
         }
-        /* Prose (intro wrapper, group intros, the Rawhide quote). The
+        /* Prose (intro wrapper, group intros). The
            .adr-list li.adr-prose twin outranks .adr-list li (0,1,1) — a
            bare .adr-prose (0,1,0) would lose colour and size to it. */
         .adr-prose, .adr-list li.adr-prose {
@@ -749,14 +749,6 @@ export class MenuScreen {
               </ul>
             </details>
 
-            <details class="adr-group">
-              <summary>Rawhide<span class="adr-count">2</span></summary>
-              <ul class="adr-list">
-              <li class="adr-prose"><em>&ldquo;Rollin', rollin', rollin'&hellip; <strong>Rawhide!</strong>&rdquo;</em></li>
-              <li><a class="adr-name" href="https://www.youtube.com/watch?v=RdR6MN2jKYs" target="_blank" rel="noopener noreferrer" title="The Good Ole Boys / chicken-wire bar scene from The Blues Brothers (1980), Movieclips upload on YouTube. Opens in a new tab.">▶ The Blues Brothers &mdash; &ldquo;Rawhide&rdquo;</a></li>
-              </ul>
-            </details>
-
           </div><!-- /#menu-left -->
 
         </div><!-- /#menu-body -->
@@ -960,7 +952,7 @@ export class MenuScreen {
       hide();
     });
 
-    // Tap / click toggles a pinned tooltip. Real links (the Rawhide anchor) navigate; only spans pin.
+    // Tap / click toggles a pinned tooltip. Only `.adr-name[data-tip]` entries pin (the list has no real links now; a plain anchor would navigate).
     left.addEventListener('click', (e) => {
       const anchor = e.target.closest && e.target.closest('.adr-name[data-tip]');
       if (!anchor) return;
