@@ -154,13 +154,13 @@ export const UPGRADES = [
 
   // Sensors (7)
   { id: 'enhanced_eo', cat: 'Sensors', name: 'Enhanced EO', cost: 500,
-    desc: '+50% detection range', effect: 'sensorRange', value: 1.5, maxLevel: 1,
+    desc: '+50% detection range; close look 1 km', effect: 'sensorRange', value: 1.5, maxLevel: 1,
     trl: 9, trlRationale: 'Electro-optical telescopes flown on every imaging sat' },
   { id: 'ir_scanner', cat: 'Sensors', name: 'IR Scanner', cost: 600,
     desc: 'Detect untracked debris', effect: 'detectUntracked', value: true, maxLevel: 1,
     trl: 8, trlRationale: 'IR debris tracking (SBV, WISE) demonstrated; ADR-specific arrays still maturing' },
   { id: 'advanced_lidar', cat: 'Sensors', name: 'Advanced LIDAR', cost: 800,
-    desc: '+100% sensor range', effect: 'scanRange', value: 2.0, maxLevel: 1,
+    desc: '+100% sensor range; close look 1 km (10 km with both sensors and a battery upgrade)', effect: 'scanRange', value: 2.0, maxLevel: 1,
     trl: 9, trlRationale: 'Flash LIDAR flown on Dragon, Cygnus since 2012' },
   { id: 'salvage_scanner', cat: 'Sensors', name: 'Salvage Scanner', cost: 700,
     desc: 'Reveal salvage contents at range', effect: 'salvageScan', value: true, maxLevel: 1,

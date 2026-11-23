@@ -50,7 +50,7 @@ export function computeAimPart(rangeM) {
 /**
  * Hold part Hs of the model.
  * @param {number} roughness surface roughness (0.4 smooth .. 1.0 rough); missing counts as 1.0
- * @param {boolean} profiled the piece was scanned within PROFILE_RANGE_M (netProfiled)
+ * @param {boolean} profiled the piece got a close look from an S scan (netProfiled; reach: SensorSystem.closeLookReachM)
  * @returns {number} 0..1
  */
 export function computeHoldPart(roughness, profiled) {

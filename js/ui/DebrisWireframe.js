@@ -14,6 +14,7 @@ import { DebrisTextureAtlas, getUVOffsetForType, getBaseColorForType, getEmissiv
 import { FlagDecalSystem, getUVOffsetForCountry, hasFlag } from './FlagDecalSystem.js';
 import { salvageGasKg } from '../systems/ResourceSystem.js';
 import { dossierSystem, DossierSystem, DOSSIER_TIERS, appraiseSalvage, inspectStepLines } from '../systems/DossierSystem.js';
+import { massShown, formatMassBand } from '../systems/ScanMass.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { mono } from '../core/Typeface.js';
 import { currentHudScale } from './HudScale.js';
@@ -1381,6 +1382,24 @@ export class DebrisWireframe {
     });
   }
 
+  /**
+   * A piece's mass as the card shows it (DECISIONS §92 rows 1-2): whole bodies and caught pieces exact, junk a range from a
+   * scan, a narrower range after a close look (the net's close scan or the 50 m survey). ScanMass decides; the caller says
+   * how an exact mass looks on its own line.
+   * @param {object} t the target
+   * @param {string} tier DOSSIER_TIERS value
+   * @param {(kg: number) => string} exactText how this card writes an exact mass
+   * @returns {string}
+   * @private
+   */
+  _massText(t, tier, exactText) {
+    const shown = massShown(t, {
+      scanned: tier !== DOSSIER_TIERS.UNSCANNED,
+      closeLook: t.netProfiled === true || tier === DOSSIER_TIERS.PROFILED,
+    });
+    return shown.exact !== undefined ? exactText(shown.exact) : formatMassBand(shown.lo, shown.hi);
+  }
+
   _renderMinLine() {
     if (!this._minLine) return;
     const t = this._target;
@@ -1392,7 +1411,8 @@ export class DebrisWireframe {
     const sizeStr = t.sizeMeter != null ? `${t.sizeMeter.toFixed(1)}m` : '?';
     let massStr = '?';
     if (t.mass != null) {
-      massStr = t.mass >= 1000 ? `${(t.mass / 1000).toFixed(1)}t` : `${t.mass.toFixed(0)}kg`;
+      massStr = this._massText(t, dossierSystem.getTier(t),
+        (m) => (m >= 1000 ? `${(m / 1000).toFixed(1)}t` : `${m.toFixed(m >= 10 ? 0 : 1)}kg`));
     }
     const tumbleDeg = (t.tumbleRate || 0) * RAD2DEG;
     const warn = tumbleDeg > 60 ? ' WARN' : '';
@@ -1671,7 +1691,7 @@ export class DebrisWireframe {
       ctx.fillStyle = DIM_COLOR;
 
       const label = TYPE_LABELS[t.type] || t.type;
-      const massStr = t.mass != null ? `${t.mass.toFixed(1)}kg` : '?';
+      const massStr = t.mass != null ? this._massText(t, tier, (m) => `${m.toFixed(1)}kg`) : '?';
       const sizeStr = t.sizeMeter != null ? `${t.sizeMeter.toFixed(1)}m` : '?';
       // A piece she does not catch reads the spin as drawn: the same rate its spin step measures (one clock).
       const tumbleDeg = ((dossierSystem.inspectPay(t) ? DossierSystem.drawnSpinRadS(t) : (t.tumbleRate || 0)) * RAD2DEG).toFixed(1);
@@ -1740,12 +1760,13 @@ export class DebrisWireframe {
     const D = Constants.DOSSIER || {};
     const scanned = tier === DOSSIER_TIERS.SCANNED;
     const label = TYPE_LABELS[t.type] || t.type;
-    const massStr = t.mass != null ? (scanned ? `~${t.mass.toFixed(0)}` : t.mass.toFixed(1)) : '?';
+    const massStr = t.mass != null
+      ? this._massText(t, tier, (m) => `${scanned ? (m >= 10 ? m.toFixed(0) : m.toFixed(1)) : m.toFixed(1)} kg`) : '?';
     const sizeStr = t.sizeMeter != null ? t.sizeMeter.toFixed(1) : '?';
     ctx.font = mono(10);
     ctx.fillStyle = DIM_COLOR;
     ctx.textAlign = 'center';
-    ctx.fillText(`${label} \u00B7 ${massStr} kg \u00B7 ${sizeStr} m`, WIRE_CX, infoY);
+    ctx.fillText(`${label} \u00B7 ${massStr} \u00B7 ${sizeStr} m`, WIRE_CX, infoY);
 
     let line2;
     if (scanned) {
@@ -1847,7 +1868,8 @@ export class DebrisWireframe {
     ctx.textAlign = 'center';
 
     const label = TYPE_LABELS[t.type] || t.type;
-    const massStr = t.mass != null ? `~${t.mass.toFixed(0)}kg` : '?';
+    const massStr = t.mass != null
+      ? this._massText(t, DOSSIER_TIERS.SCANNED, (m) => `${m.toFixed(m >= 10 ? 0 : 1)}kg`) : '?';
     const sizeStr = t.sizeMeter != null ? `${t.sizeMeter.toFixed(1)}m` : '?';
     ctx.fillText(`${label}  ${massStr}  ${sizeStr}`, WIRE_CX, infoY);
     // A piece over her catch limit shows its four characterising steps from the second line on (she cannot catch it, so its salvage is no

@@ -46,7 +46,7 @@ const BACKGROUND_COUNT  = (Constants.DEBRIS && Constants.DEBRIS.BACKGROUND_COUNT
 // `aspect` = length:width ratio (1.0 = symmetric). lengthM/widthM are derived per piece in _createDebrisData and
 // re-derived on every resize by setDebrisSize. Keep in sync with Constants.ASPECT_CAPTURE.ASPECT_BY_TYPE
 // (drift-guarded in test-DebrisField-SizeSSOT.js).
-const DEBRIS_TYPES = {
+export const DEBRIS_TYPES = {
   fragment:     { weight: 0.60, sizeMin: 0.1, sizeMax: 1.0, massMin: 0.01, massMax: 5, tumbleMin: 10, tumbleMax: 180, shape: 'icosahedron', aspect: 1.0 },
   rocketBody:   { weight: 0.12, sizeMin: 5, sizeMax: 11, massMin: 500, massMax: 5000, tumbleMin: 1, tumbleMax: 20, shape: 'cylinder', aspect: 3.5 },
   defunctSat:   { weight: 0.16, sizeMin: 1, sizeMax: 8, massMin: 50, massMax: 2000, tumbleMin: 2, tumbleMax: 30, shape: 'box', aspect: 1.6 },
@@ -55,6 +55,12 @@ const DEBRIS_TYPES = {
   // the M1 graduation catch (welcome #7), sprinkled rarely into the field.
   cubesat:      { weight: 0.02, sizeMin: 0.1, sizeMax: 0.5, massMin: 1, massMax: 10, tumbleMin: 1, tumbleMax: 15, shape: 'box', aspect: 1.1 },
 };
+
+/**
+ * The spawn rule's size jitter: a rule-spawned piece's size is its mass-matched size times `MIN + random × SPAN`
+ * (0.85..1.15, ±15 %). One place so ScanMass (the scan's mass guess from size, DECISIONS §92) reads the same ends.
+ */
+export const SIZE_JITTER = { MIN: 0.85, SPAN: 0.30 };
 
 const METRE_SCENE = Constants.SCENE_SCALE / 1000;  // 1 m in scene units (1 km = SCENE_SCALE)
 
@@ -1300,7 +1306,7 @@ export class DebrisField {
       const _massFrac = _massSpan > 0 ? (mass - typeDef.massMin) / _massSpan : 0.5;
       const _sizeSpan = typeDef.sizeMax - typeDef.sizeMin;
       const _sizeMid  = typeDef.sizeMin + _massFrac * _sizeSpan;
-      const _sizeJitter = 0.85 + Math.random() * 0.30;   // ±15 %
+      const _sizeJitter = SIZE_JITTER.MIN + Math.random() * SIZE_JITTER.SPAN;   // ±15 %
       sizeMeter = clamp(_sizeMid * _sizeJitter, typeDef.sizeMin * 0.7, typeDef.sizeMax * 1.15);
     }
 

@@ -187,6 +187,7 @@ export class TrawlManager {
           debrisId: debris.id,
           type: debris.type,
           mass: debris.mass,
+          sizeMeter: debris.sizeMeter,
           distanceKm: distKm,
           estimatedWindowSec: estimatedWindowSec,
         });

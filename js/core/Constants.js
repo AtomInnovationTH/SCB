@@ -2670,6 +2670,19 @@ export const Constants = {
   // ACTIVE SCAN SYSTEM — Player-initiated scanning for treasure hunting
   SCAN: {
     REVEAL_BASE_RANGE: 5.0,   // 500 km in scene units — base radius for scan target reveal
+    // How near a piece must be for an S scan to take a CLOSE LOOK at it (DECISIONS §92 row 2, owner 2026-11-23): the mark
+    // that narrows a fragment's mass guess and gives the mother's large net its close-scan bonus (NET_LINEUP HOLD_MISS).
+    // Reach from the mother, m: BASE to start, FIRST once she owns any sensor in FIRST_ANY, FULL once she owns every sensor
+    // in FULL_ALL and any battery in FULL_BATTERY_ANY. The which-upgrade reading is the coordinator's, not the owner's.
+    // Read by SensorSystem.closeLookReachM (shop ownership arrives through setUpgradeCheck).
+    CLOSE_LOOK: {
+      BASE_M: 500,
+      FIRST_M: 1000,
+      FULL_M: 10000,
+      FIRST_ANY: ['enhanced_eo', 'advanced_lidar'],
+      FULL_ALL: ['enhanced_eo', 'advanced_lidar'],
+      FULL_BATTERY_ANY: ['extra_battery', 'solid_state_battery', 'graphene_supercap'],
+    },
     REVEAL_STAGGER_MS: 120,   // ms between each target reveal (smooth, snappy cadence)
     SESSION_SCAN_CAP: 5000,   // max total scan credits per session (anti-spam)
     // DECISIONS §15 row 2 — "scanning costs battery and heat, like mana … noticeable until upgraded". A scan costs
@@ -2843,7 +2856,6 @@ export const Constants = {
     WINCH_TUMBLE_LIMIT_DEG:  15,     // same, with the closing winch (wave 2)
     TUMBLE_SLOPE:            0.045,  // tumble part loses this per deg/s above the limit
     TUMBLE_FLOOR:            0.4,    // never below this: tumble stays probabilistic, never impossible (owner 2026-08-12)
-    PROFILE_RANGE_M:         100,    // a scan completing with the piece this close to the mother profiles it for the net
     LINEUP_S:                3.0,    // wave 2 (D9): the line-up meter climbs from 0 to 1 in this many game seconds, while the aim error stays inside AIM.NET_AIM_TOLERANCE_DEG
     QUICK_AIM_TOL_DEG:       2,      // wave 2 (D10): a second N throws now (at the meter's u) once the aim error is inside this
   },

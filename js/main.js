@@ -1753,6 +1753,9 @@ async function init() {
   menuScreen.setUpdateChecker(() => updateWatch.checkNow());   // the notes card's "Check for updates" (owner 2026-10-26)
   briefingScreen = new BriefingScreen();
   shopScreen = new ShopScreen();
+  // The scan's close-look reach follows the instruments she owns (DECISIONS §92 row 2). Read LIVE from the shop's
+  // ownership map, so a purchase or a loaded save counts with no event.
+  sensorSystem.setUpgradeCheck((id) => (shopScreen.purchasedUpgrades.get(id) || 0) > 0);
   gameOverScreen = new GameOverScreen();
 
   targetReticle = new TargetReticle(camera);

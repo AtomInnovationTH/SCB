@@ -55,6 +55,9 @@ export class SensorSystem {
 
     this.canScanSalvage = false;
 
+    /** @type {((id: string) => boolean)|null} shop ownership read (fn(id) → owned); null = owns nothing (500 m close look) */
+    this._upgradeCheck = null;
+
     this._weatherSensorMult = 1.0;
 
     /** @type {number} Seconds since last WEATHER_ACTIVE event */
@@ -300,7 +303,7 @@ export class SensorSystem {
     // Staleness: reset the weather multiplier if no WEATHER_ACTIVE for 2 s
     this._weatherLastUpdate += dt;
     if (this._weatherLastUpdate > 2.0) {
-      this._weatherSensorMult = 1.0;
+    this._weatherSensorMult = 1.0;
     }
 
     if (this._scanActive) {
@@ -564,16 +567,39 @@ export class SensorSystem {
   }
 
   /**
-   * Mark every piece within `NET_LINEUP.PROFILE_RANGE_M` of the mother `netProfiled = true` on the ORIGINAL debris object
-   * (the query hands back spread copies, and its radius is the ~500 km reveal range, so the distance is checked here, on
-   * each copy's own `distance`, which a frame-cached larger query also carries). The net's hold part reads it (NetLineupOdds).
+   * Set how this system learns which shop upgrades she owns (main.js hands it the LIVE shop ownership, so a purchase or a
+   * loaded save counts with no event).
+   * @param {((id: string) => boolean)|null} fn fn(upgradeId) → owned
+   */
+  setUpgradeCheck(fn) {
+    this._upgradeCheck = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * How far from the mother an S scan takes a close look at a piece, in metres (DECISIONS §92 row 2): 500 to start,
+   * 1,000 with the first sensor upgrade, 10,000 with full instruments and a battery upgrade (Constants.SCAN.CLOSE_LOOK).
+   * @returns {number}
+   */
+  closeLookReachM() {
+    const C = Constants.SCAN.CLOSE_LOOK;
+    const own = (id) => { try { return !!(this._upgradeCheck && this._upgradeCheck(id)); } catch (_) { return false; } };
+    if (C.FULL_ALL.every(own) && C.FULL_BATTERY_ANY.some(own)) return C.FULL_M;
+    if (C.FIRST_ANY.some(own)) return C.FIRST_M;
+    return C.BASE_M;
+  }
+
+  /**
+   * Mark every piece within the close-look reach (`closeLookReachM`) of the mother `netProfiled = true` on the ORIGINAL debris
+   * object (the query hands back spread copies, and its radius is the ~500 km reveal range, so the distance is checked here, on
+   * each copy's own `distance`, which a frame-cached larger query also carries). The net's hold part reads it (NetLineupOdds)
+   * and so does the card's mass guess (ScanMass).
    * @param {Array<object>|null} nearby getDebrisNear copies for this scan's reveal range
    * @private
    */
   _profileNearbyForNet(nearby) {
     const debrisField = this._lastDebrisField;
     if (!debrisField || !Array.isArray(nearby)) return;
-    const limit = Constants.NET_LINEUP.PROFILE_RANGE_M * Constants.SCENE_UNITS_PER_METER;
+    const limit = this.closeLookReachM() * Constants.SCENE_UNITS_PER_METER;
     for (const copy of nearby) {
       if (!copy || copy.hazard || !(copy.distance <= limit)) continue;
       const original = debrisField.getDebrisById(copy.id);

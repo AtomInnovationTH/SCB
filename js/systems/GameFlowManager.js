@@ -63,6 +63,7 @@ import {
   KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT, CARGO_SYSTEM,
 } from './upgradeEffectRoutes.js';
 import { clamp01 } from '../core/MathUtil.js';
+import { massShown, formatMassBand } from './ScanMass.js';
 
 /**
  * Shop cadence — the depot stop fires at every MISSION boundary, i.e. every
@@ -1588,10 +1589,14 @@ export class GameFlowManager {
 
     // --- Trawl comms: target entering/exiting/window closing ---
 
-    eventBus.on(Events.TRAWL_TARGET_ENTERING, ({ type, mass }) => {
-      const typeName = type || 'debris';
+    eventBus.on(Events.TRAWL_TARGET_ENTERING, ({ debrisId, type, mass, sizeMeter }) => {
+      const typeName = ({ fragment: 'fragment', missionDebris: 'small junk', rocketBody: 'rocket stage',
+        defunctSat: 'dead satellite', cubesat: 'cubesat' })[type] || 'debris';
+      // Small junk reads as a range from its size (DECISIONS §92 row 1); whole bodies keep their real mass.
+      const shown = mass ? massShown({ id: debrisId, type, mass, sizeMeter }) : null;
+      const massText = !shown ? '' : ', ' + (shown.exact !== undefined ? `${shown.exact.toFixed(0)} kg` : formatMassBand(shown.lo, shown.hi));
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Target entering range. ${typeName}${mass ? ', ' + mass.toFixed(0) + ' kg' : ''}`,
+        text: `Target entering range. ${typeName}${massText}`,
         priority: 'info',
       });
     });
