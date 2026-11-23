@@ -45,7 +45,6 @@ import {
 import { DEG2RAD, RAD2DEG, degToRad, radToDeg, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
 import { RECOIL_SCALE, pushN2Kg } from '../systems/PairRecoil.js'; import { isTrainingNow } from '../systems/TrainingHintGate.js';   // the linear recoil nudge's scale (one place) and what a leftover pair push costs in N2; training 1-3 keeps the old refund
 import { SunOvenBalls } from './SunOvenBall.js';
-
 // Engine-gas flow follows thrust and Isp. Module-level (not methods) so the borrowed-prototype / mock ships the tests use
 // (`PlayerSatellite.prototype.applyCartesianImpulse.call(mock, ...)`) bill the same way.
 
@@ -3688,18 +3687,19 @@ export class PlayerSatellite extends THREE.Group {
    * computes from r × J) goes into the pitch and yaw wheels WITH ITS SIGN, as far as their 4 N·m·s limit allows: the ship
    * gains L, the wheels hold it (`_wheelH += L`), so a kick against the stored spin lowers |h| (up to 2 × 4 N·m·s from a full
    * wheel the other way) and one with it raises |h|. What does not fit is returned for the gas (the caller bills it at the
-   * real price). Roll is not kicked (dropped). The wheels' torque is on the battery's bill: |taken| / TORQUE_NM seconds of
+   * real price). Roll is not kicked (dropped) unless a third argument `lz` is given (a caught piece's spin, `takeSpinHandOver`:
+   * then the roll wheel takes its part too; every other caller leaves `lz` 0 and is unchanged). The wheels' torque is on the battery's bill: |taken| / TORQUE_NM seconds of
    * full output on that axis (like any wheel turn), and only as much is taken as the battery can pay for (`wheelPeek`: on a
    * nearly flat battery a share, the rest is gas). Nothing is taken without the kit or without power (`wheelsUsable`: then
    * the whole turn is gas, as without the kit).
    * (A daughter launch's push comes through here too: `_applyLaunchKickTurn`.)
-   * @param {number} lx N·m·s about +X @param {number} ly N·m·s about +Y
-   * @returns {{x:number,y:number}|null} what is left for the gas; null: the wheels took nothing (no kit, no power)
+   * @param {number} lx N·m·s about +X @param {number} ly N·m·s about +Y @param {number} [lz=0] N·m·s about +Z (roll)
+   * @returns {{x:number,y:number,z:number}|null} what is left for the gas; null: the wheels took nothing (no kit, no power)
    */
-  _wheelAbsorbKick(lx, ly) {
+  _wheelAbsorbKick(lx, ly, lz = 0) {
     if (!this._wheelKit || !this._wheelH || !this.wheelsUsable()) return null;
     const W = Constants.WHEELS, h = this._wheelH, use = this._wheelUse;
-    const { fx, fy, share } = this._wheelKickFit(lx, ly);
+    const { fx, fy, fz, share } = this._wheelKickFit(lx, ly, lz);
     let taken = 0;
     const take = (axis, L, room) => {
       if (!(Math.abs(L) > 0) || !Number.isFinite(L)) return 0;
@@ -3712,9 +3712,9 @@ export class PlayerSatellite extends THREE.Group {
       const rest = L - got;
       return Math.abs(rest) < 1e-9 ? 0 : rest;
     };
-    const x = take('x', lx, fx), y = take('y', ly, fy);
+    const x = take('x', lx, fx), y = take('y', ly, fy), z = take('z', lz, fz);
     this._reelPushWheelNms += taken;
-    return { x, y };
+    return { x, y, z };
   }
 
   /**
@@ -3723,30 +3723,30 @@ export class PlayerSatellite extends THREE.Group {
    * only that share of what fits, the rest is gas at the real price. Reads, changes nothing: `_wheelAbsorbKick` takes it,
    * `wheelKickPeek` asks.
    */
-  _wheelKickFit(lx, ly) {
+  _wheelKickFit(lx, ly, lz = 0) {
     const W = Constants.WHEELS, H = W.MOMENTUM_NMS, h = this._wheelH;
     const fit = (axis, L) => (Math.abs(L) > 0 && Number.isFinite(L))
       ? clamp(h[axis] + L, -H, H) - h[axis]                   // what fits, signed (a push against the spin: it all fits)
       : 0;
-    const fx = fit('x', lx), fy = fit('y', ly);
-    const total = Math.abs(fx) + Math.abs(fy);
+    const fx = fit('x', lx), fy = fit('y', ly), fz = fit('z', lz);
+    const total = Math.abs(fx) + Math.abs(fy) + Math.abs(fz);
     const share = total > 0 ? this.wheelPeek(1, total / W.TORQUE_NM) : 1;
-    return { fx, fy, share };
+    return { fx, fy, fz, share };
   }
 
   /**
    * what `_wheelAbsorbKick(lx, ly)` WOULD do right now, without doing it (the shot chooser prices a launch's kick before it
    * is made). null = the wheels would take nothing (no kit, no power: the whole kick is gas), else the part left for the gas and the
    * part the wheels take, signed, N·m·s.
-   * @param {number} lx @param {number} ly
-   * @returns {{x:number,y:number,tx:number,ty:number}|null}
+   * @param {number} lx @param {number} ly @param {number} [lz=0] roll (a caught piece's spin only; 0 for every older caller)
+   * @returns {{x:number,y:number,z:number,tx:number,ty:number,tz:number}|null}
    */
-  wheelKickPeek(lx, ly) {
+  wheelKickPeek(lx, ly, lz = 0) {
     if (!this._wheelKit || !this._wheelH || !this.wheelsUsable()) return null;
-    const { fx, fy, share } = this._wheelKickFit(lx, ly);
-    const tx = fx * share, ty = fy * share;
+    const { fx, fy, fz, share } = this._wheelKickFit(lx, ly, lz);
+    const tx = fx * share, ty = fy * share, tz = fz * share;
     const rest = (L, t) => (Math.abs(L - t) < 1e-9 ? 0 : L - t);
-    return { x: rest(lx, tx), y: rest(ly, ty), tx, ty };
+    return { x: rest(lx, tx), y: rest(ly, ty), z: rest(lz, tz), tx, ty, tz };
   }
 
   /** @private The "wheels full" / "no power" comms line, once per event (the flag clears when the wheels serve a turn again). */
@@ -6566,6 +6566,20 @@ export class PlayerSatellite extends THREE.Group {
       this._rcsCoupleForce[key] = force;
     }
 
+    // The DRAWN roll pair (a caught piece's spin about her nose, `takeSpinHandOver`): the two nozzles with the biggest torque about
+    // +Z / -Z (the same top-2 rule as the pitch and yaw couples). Kept APART from `_rcsCoupleTorque` / `_rcsAttitudeIdx`: the attitude
+    // hold reads those and never rolls her. Only the clean roll torque is stored (SI, N·m), for the price of a roll in gas.
+    this._rcsRollCouple = {};
+    for (const [key, sign] of [['rollPos', +1], ['rollNeg', -1]]) {
+      const c = pickCouple('z', sign);
+      let tauZ = 0;
+      for (const i of c.idx) {
+        const rM = nozzles[i].clone().multiplyScalar(1 / M);
+        const F = dirs[i].clone().multiplyScalar(-thrustN);
+        tauZ += new THREE.Vector3().crossVectors(rM, F).z;
+      }
+      this._rcsRollCouple[key] = { idx: c.idx, tauZ };
+    }
     // Pooled sprites (round-robin reuse); a burst emits a small multi-sprite cloud, so keep enough to avoid thrash.
     for (let i = 0; i < 16; i++) {
       const sprite = new THREE.Sprite(puffMat.clone());
@@ -7831,6 +7845,139 @@ export class PlayerSatellite extends THREE.Group {
     };
     const lp = Math.abs(lPitchNms), ly = Math.abs(lYawNms);
     return (lp > 0 ? lp * perNms('x') : 0) + (ly > 0 ? ly * perNms('y') : 0);
+  }
+
+  /**
+   * kg of cold gas per N·m·s to null a spin about her NOSE (roll), at the price of the DRAWN roll pair (`_rcsRollCouple`: two
+   * nozzles, clean roll torque): 2F / (τz · Isp · g0), the same law as `turnNullKg`. `sign` +1: the ship holds +Z spin (the -Z pair
+   * stops it); -1: the other; 0: the dearer of the two. No drawn roll pair (a stub): 1.8 x the pitch price (the flower ship's measured ratio).
+   * @param {number} [sign=0] @returns {number} kg per N·m·s
+   */
+  rollNullKgPerNms(sign = 0) {
+    const twoF = 2 * (Constants.ATTITUDE?.NOZZLE_THRUST_N ?? 25.0);
+    const isp = Constants.REEL_PUSH?.HOLD_ISP_S ?? 60;
+    const rc = this._rcsRollCouple || {};
+    const price = (c) => { const tau = Math.abs((c && c.tauZ) || 0); return tau > 1e-3 ? twoF / (tau * isp * Constants.G0) : null; };
+    const fallback = 1.8 * this.turnNullKg(1, 0);
+    const stopPos = price(rc.rollNeg) ?? fallback;     // stopping +Z spin takes the -Z pair
+    const stopNeg = price(rc.rollPos) ?? fallback;
+    return sign > 0 ? stopPos : sign < 0 ? stopNeg : Math.max(stopPos, stopNeg);
+  }
+
+  /** kg of cold gas to null the roll momentum `lzNms` (N·m·s about +Z, signed). @param {number} lzNms @returns {number} */
+  rollNullKg(lzNms) {
+    const l = Math.abs(lzNms);
+    return l > 0 ? l * this.rollNullKgPerNms(Math.sign(lzNms)) : 0;
+  }
+
+  /** @private Cold-gas bill for nulling a roll, like `_billTurnNullN2`: emits RESOURCE_CONSUME coldGas. @returns {number} kg billed */
+  _billRollNullN2(lzNms) {
+    const kg = this.rollNullKg(lzNms);
+    if (!(kg > 0)) return 0;
+    eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'coldGas', amount: coldGasKgToPool(kg) });
+    return kg;
+  }
+
+  /**
+   * @private A caught piece's spin momentum, world frame, N·m·s: L = I·ω along its normalised tumble axis (I = 0.1·m·d², the same as ArmUnit's
+   * `captureMomentOfInertia`; the sign is the rate's). null when it has none (no axis, rate 0, no size).
+   * @param {object} d the debris @param {THREE.Vector3} out @returns {THREE.Vector3|null}
+   */
+  _pieceSpinWorld(d, out) {
+    if (!d || !d.tumbleAxis) return null;
+    const w = Number(d.tumbleRate);
+    if (!(Math.abs(w) > 1e-9)) return null;
+    const a = d.tumbleAxis, len = Math.hypot(a.x, a.y, a.z);
+    if (!(len > 1e-9)) return null;
+    // I = INERTIA_COEFF·m·d², copied from ArmUnit's `captureMomentOfInertia` (not imported: that pulls the net and debris modules into
+    // every test that loads this file); a test pins the two equal
+    const m = d.mass > 0 ? d.mass : 0, sz = d.sizeMeter > 0 ? d.sizeMeter : 0;
+    const I = Constants.CAPTURE_TORQUE_SETTLE.INERTIA_COEFF * m * sz * sz;
+    if (!(I > 0)) return null;
+    return out.set(a.x, a.y, a.z).multiplyScalar(I * w / len);
+  }
+
+  /**
+   * Reality 5 (DECISIONS §90 row 2): the mother's big net has caught a spinning piece, and its spin passes to her ship. Her wheels
+   * take it first (all three axes, with its sign, as far as they have room and the battery can pay: `_wheelAbsorbKick`), then the
+   * turning gas stops the rest, billed like any other turn (`_billTurnNullN2` for pitch and yaw, `_billRollNullN2` for the roll
+   * about her nose, with the couple's puffs). Billed ONCE per piece (the piece is marked with the rate it was billed at); the
+   * piece's own `tumbleRate` is NOT touched (scoring reads it for the de-spin bonus). If the tank holds less than the stop needs
+   * (the gas went between the throw and the catch), the tank pays what it holds and the rest is dropped (`Ldropped`). No visible
+   * spin-down: the stop is billed at once. No resource system: no limit.
+   * @param {object} d the caught debris
+   * @returns {{L:{x:number,y:number,z:number}, wheelNms:number, gasKg:number, Ldropped:number}|null} L is her body frame, N·m·s;
+   *   null: nothing to take (no spin, or this piece's spin was already taken)
+   */
+  takeSpinHandOver(d) {
+    if (!d || d._spinHandedOver === d.tumbleRate) return null;
+    const Lw = this._pieceSpinWorld(d, new THREE.Vector3());
+    if (!Lw) return null;
+    d._spinHandedOver = d.tumbleRate;
+    const Lb = Lw.applyQuaternion(new THREE.Quaternion().copy(this.quaternion).invert());
+    const o = this._wheelAbsorbKick(Lb.x, Lb.y, Lb.z);
+    const rx = o ? o.x : Lb.x, ry = o ? o.y : Lb.y, rz = o ? o.z : Lb.z;
+    const wheelNms = o ? (Math.abs(Lb.x - rx) + Math.abs(Lb.y - ry) + Math.abs(Lb.z - rz)) : 0;
+    const wantKg = this.turnNullKg(rx, ry) + this.rollNullKg(rz);
+    let f = 1;
+    if (wantKg > 0) {
+      const tank = Number(this.resources && this.resources.coldGas);
+      const wantPool = coldGasKgToPool(wantKg);
+      if (Number.isFinite(tank) && wantPool > tank) f = clamp(tank / wantPool, 0, 1);
+      if (f > 0) {
+        this._billTurnNullN2(rx * f, ry * f);
+        this._billRollNullN2(rz * f);
+        this._reelPushTurnPuff(rx, ry);
+      }
+    }
+    const Ldropped = (1 - f) * (Math.abs(rx) + Math.abs(ry) + Math.abs(rz));
+    return { L: { x: Lb.x, y: Lb.y, z: Lb.z }, wheelNms, gasKg: wantKg * f, Ldropped };
+  }
+
+  /**
+   * What `takeSpinHandOver(d)` WOULD cost if the net caught `d` after she has turned her nose to `dirWorld` (the line of sight to the
+   * piece), read-only: the throw refuses a catch her gas cannot stop (DECISIONS §90 row 2). The part of L along the nose goes to the roll
+   * wheel's room, then the dearer roll price; the part across it to the pitch / yaw wheels' room (the worst direction: the smaller of
+   * the two rooms, the aim has not turned yet), then the worst split between the pitch / yaw prices (hypot of the two). Refuse when 1.1 x the gas needed (the 10 %
+   * covers the aim turn and the flight) is more than the tank holds. No resource system: never refuses. Zero spin, or all of L inside
+   * the wheels' room: never refuses.
+   * @param {object} d the piece
+   * @param {{x:number,y:number,z:number}|null} [dirWorld] line of sight (any length); null: her nose as it is
+   * @returns {{refuse:boolean, gasKg:number, tankKg:number, L:number}} L is |L| in N·m·s
+   */
+  spinHandOverPeek(d, dirWorld = null) {
+    const out = { refuse: false, gasKg: 0, tankKg: Infinity, L: 0 };
+    if (!d || d._spinHandedOver === d.tumbleRate) return out;
+    const Lw = this._pieceSpinWorld(d, new THREE.Vector3());
+    if (!Lw) return out;
+    out.L = Lw.length();
+    const nose = new THREE.Vector3();
+    if (dirWorld && Math.hypot(dirWorld.x, dirWorld.y, dirWorld.z) > 1e-9) nose.set(dirWorld.x, dirWorld.y, dirWorld.z).normalize();
+    else nose.set(0, 0, 1).applyQuaternion(this.quaternion);
+    const lRoll = Lw.dot(nose);
+    const cross = Lw.clone().addScaledVector(nose, -lRoll).length();
+    // the wheels' room (the kit aboard and powered), as `_wheelKickFit` counts it
+    let tRoll = 0, tCross = 0;
+    if (this._wheelKit && this._wheelH && this.wheelsUsable()) {
+      const W = Constants.WHEELS, H = W.MOMENTUM_NMS, h = this._wheelH;
+      const roomRoll = Math.abs(clamp(h.z + lRoll, -H, H) - h.z);
+      const roomCross = Math.min(H - Math.abs(h.x), H - Math.abs(h.y));
+      tRoll = Math.min(Math.abs(lRoll), roomRoll);
+      tCross = Math.min(cross, Math.max(0, roomCross));
+      const share = (tRoll + tCross) > 0 ? this.wheelPeek(1, (tRoll + tCross) / W.TORQUE_NM) : 1;
+      tRoll *= share; tCross *= share;
+    }
+    const gasKg = Math.max(0, Math.abs(lRoll) - tRoll) * this.rollNullKgPerNms(0)
+      // her roll about the nose is unknown before the aim turn: the across part splits between pitch and yaw as |x|·pitchPrice +
+      // |y|·yawPrice, worst case (length × hypot of the two prices) over every roll angle
+      + Math.max(0, cross - tCross) * Math.hypot(this.turnNullKg(1, 0), this.turnNullKg(0, 1));
+    out.gasKg = gasKg;
+    const tank = Number(this.resources && this.resources.coldGas);
+    if (Number.isFinite(tank)) {
+      out.tankKg = coldGasPoolToKg(Math.max(0, tank));
+      out.refuse = gasKg > 0 && 1.1 * gasKg > out.tankKg;
+    }
+    return out;
   }
 
   /**

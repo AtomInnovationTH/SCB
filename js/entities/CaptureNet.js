@@ -790,6 +790,12 @@ export function overCatchLimit(mass, netClass) {
 }
 
 /**
+ * The one plain line for a catch whose spin her steering gas could not stop (Reality 5, DECISIONS §90 row 2): the throw is refused before a
+ * net or any gas is spent.
+ */
+export const SPIN_TOO_BIG_LINE = "Her gas can't stop that spin: slow its spin first.";
+
+/**
  * The one plain line for a piece over the mother's catch limit ("Too heavy for us: 2.7 t (we take up to 1.5 t). Inspect it instead.").
  * @param {number} mass kg
  * @param {{CATCH_LIMIT_KG?:number}} netClass
@@ -1940,6 +1946,23 @@ export class NetProjectile {
     const tumbleRate = Math.abs(d.tumbleRate || 0);
     this._tumbleCarryover = Math.min(tumbleRate, CN.TUMBLE_CARRYOVER_MAX_RAD_S ?? 0.6);
     this._tumbleCarryAngle = 0;   // accumulation starts fresh each catch
+
+    // Reality 5 (DECISIONS §90 row 2): the catch's spin passes to her ship. Her wheels take it first, then the turning gas stops the rest
+    // (billed like any turn); the throw already refused a catch her gas could not stop. Once per piece; `d.tumbleRate` stays (scoring reads it).
+    // Only a ship that can take it (a duck-typed test player cannot); no other catch path (daughters, lasso, magnet) comes here.
+    if (typeof player.takeSpinHandOver === 'function') {
+      const took = player.takeSpinHandOver(d);
+      if (took) {
+        let text = null;
+        if (took.Ldropped > 1e-9) text = 'Her gas ran out stopping its spin.';
+        else if (took.gasKg >= 0.05) {
+          text = `Its spin passed to her: ${took.gasKg >= 1 ? took.gasKg.toFixed(1) : took.gasKg.toFixed(2)} kg of steering gas to stop it.`;
+        }
+        if (text) {
+          eventBus.emit(Events.COMMS_MESSAGE, { text, source: 'SYSTEM', channel: 'CMD', priority: 'info' });
+        }
+      }
+    }
     return true;
   }
 
@@ -4925,6 +4948,21 @@ export class CaptureNetSystem {
         priority: 'warning',
       });
       return null;
+    }
+
+    // Reality 5 (DECISIONS §90 row 2): refuse a catch her gas could not stop, BEFORE a net or any gas is spent (the catch itself takes the
+    // spin into her ship). Her nose is the line of sight to the piece. Once per call: the callers fire once per press (the autopilot's
+    // aim ends on a refusal; a scripted caller gets null and asks again only when it chooses to).
+    if (target && this._player && typeof this._player.spinHandOverPeek === 'function') {
+      const ship = typeof this._player.getPosition === 'function' ? this._player.getPosition() : null;
+      const sp = target._scenePosition;
+      const los = (ship && sp) ? { x: sp.x - ship.x, y: sp.y - ship.y, z: sp.z - ship.z } : launchDir;
+      if (this._player.spinHandOverPeek(target, los).refuse) {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: SPIN_TOO_BIG_LINE, source: 'SYSTEM', channel: 'CMD', priority: 'warning',
+        });
+        return null;
+      }
     }
 
     // A launched net is used up, hit or miss (DECISIONS §33 row 1)

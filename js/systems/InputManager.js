@@ -20,7 +20,7 @@ import {
   classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, collarBusyLine, collarBusyState, targetRangeM, netRangeLine, dInviteLine,
   netReachForMassM, driftOutOfReachLine, netFlightClockScale,
 } from './netRouting.js';
-import { computeLeadAim, netMaxReachM, overCatchLimit, catchLimitLine } from '../entities/CaptureNet.js';
+import { computeLeadAim, netMaxReachM, overCatchLimit, catchLimitLine, SPIN_TOO_BIG_LINE } from '../entities/CaptureNet.js';
 import { buildLineupSnapshot } from './NetLineupOdds.js';
 
 /** Scratch for the line-up's nose reading (one per module: the line-up ticks once a frame). */
@@ -3228,6 +3228,14 @@ export class InputManager {
     provider();
     if (checkRefusals(lead.relVel)) return;
 
+    // Reality 5 (DECISIONS §90 row 2): a catch her steering gas could not stop is refused NOW, before the aim turn spends gas (the net
+    // itself would refuse it again at fire time, CaptureNet.fireMotherNet). Her nose will be the line of sight to the piece. Once per press.
+    if (typeof d.player.spinHandOverPeek === 'function') {
+      const ts = getTargetPos() || (target && target._scenePosition) || null;
+      const here = d.player.getPosition();
+      const los = (ts && here) ? { x: ts.x - here.x, y: ts.y - here.y, z: ts.z - here.z } : null;
+      if (d.player.spinHandOverPeek(target, los).refuse) { refuse(SPIN_TOO_BIG_LINE); return; }
+    }
     // Launches along the ACTUAL ship +Z at fire time from the current muzzle; direct bearing with no attitude
     // (headless mocks). Returns the net when it left, null when refused (the caller then tells her to stay put).
     // `fireOpts.lineup` = the line-up meter u the shot leaves with (net-odds-1107 D9; the odds snapshot at release reads it);
