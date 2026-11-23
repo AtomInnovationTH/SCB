@@ -53,12 +53,16 @@ export function daughterLaunchMassKg(arm) {
   return massKg;
 }
 
-/** Autopilot comms lines in plain words (Ruling 0); the "Autopilot ..." openers stay clear of the copilot phrases (test-CopilotVoice.js). */
+/** Autopilot comms lines in plain words (Ruling 0); the "Autopilot ..." openers stay clear of the copilot phrases (test-CopilotVoice.js).
+ *  The four approach modes end with FAST_APPROACH_SENTENCE (DECISIONS §62 row 11, owner 2026-11-03: the fast approach "will be marked
+ *  not physically possible"; it pushes about 15,000 times her engine). PROGRADE only follows the orbit and the fallback names no
+ *  approach, so neither carries it. The AP chip on screen says the same (`AP_FAST_APPROACH_TEXT`, TargetReticle.js). */
+export const FAST_APPROACH_SENTENCE = ' Fast approach, not physically possible: her real engine is thousands of times weaker.';
 export const AUTOPILOT_ON_TEXT = Object.freeze({
-  TARGET:   'Autopilot on: flying to your selected target.',
-  DEBRIS:   'Autopilot on: flying to the nearest large piece of debris.',
-  TRAWL:    'Autopilot on: flying to the debris sweep.',
-  CLUSTER:  'Autopilot on: flying to the debris cluster.',
+  TARGET:   'Autopilot on: flying to your selected target.' + FAST_APPROACH_SENTENCE,
+  DEBRIS:   'Autopilot on: flying to the nearest large piece of debris.' + FAST_APPROACH_SENTENCE,
+  TRAWL:    'Autopilot on: flying to the debris sweep.' + FAST_APPROACH_SENTENCE,
+  CLUSTER:  'Autopilot on: flying to the debris cluster.' + FAST_APPROACH_SENTENCE,
   PROGRADE: 'Autopilot on: no target, so it is following your orbit.',
 });
 export const AUTOPILOT_ON_FALLBACK = 'Autopilot on.';
@@ -1829,7 +1833,7 @@ export class AutopilotSystem {
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
       // the map's own cluster name when it has one (never the raw id)
-      text: cluster.name ? `Autopilot on: flying to ${cluster.name}.` : autopilotOnText('CLUSTER'),
+      text: cluster.name ? `Autopilot on: flying to ${cluster.name}.${FAST_APPROACH_SENTENCE}` : autopilotOnText('CLUSTER'),
       priority: 'info',
       _keep: true,
     });

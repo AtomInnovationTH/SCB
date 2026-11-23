@@ -42,10 +42,16 @@ export const SELECTED_LABEL_BASELINE_PX = 22;
 /** owner 2026-09-07: an unselected bracket whose BOX (arms + dist label) touches the score strip's exclusion band
  *  grown by this pad (px, every side) is skipped whole, never half-drawn. */
 const SCORE_STRIP_PAD_PX = 8;
-/** Fixed y of the autopilot-engaged chip, and its height (px). `Constants.TEACHING.OVERLAY_AP_BADGE_BOTTOM_PX` must equal
- *  their sum (test-TeachingOverlay.js); `_drawApBadge` draws with both, so the drawing and the constant cannot drift. */
+/** Fixed y of the autopilot-engaged chip, its height, and the fast-approach line's height under it (px).
+ *  `Constants.TEACHING.OVERLAY_AP_BADGE_BOTTOM_PX` must equal their sum (test-TeachingOverlay.js), so a teaching card never
+ *  covers that line; `_drawApBadge` draws with all three, so the drawing and the constant cannot drift. */
 export const AP_BADGE_TOP_PX = 92;
 export const AP_BADGE_H_PX = 19;
+export const AP_FAST_LINE_H_PX = 14;
+/** The line under the AP chip while the autopilot flies toward a piece (DECISIONS §62 row 11), and the heading modes it shows for
+ *  (the approach modes of `AUTOPILOT_ON_TEXT`; not PROGRADE, which only follows the orbit). */
+export const AP_FAST_APPROACH_TEXT = 'fast approach: not physically possible';
+const AP_FAST_APPROACH_MODES = new Set(['TARGET', 'DEBRIS', 'TRAWL', 'CLUSTER']);
 
 /** Color scheme */
 const COLORS = {
@@ -1278,6 +1284,13 @@ export class TargetReticle {
    *
    * Salience comes from WEIGHT, not motion: a bordered amber chip with a static glow at a stable position; the only
    * motion is one finite dip when AP engages.
+   *
+   * Fast approach (DECISIONS §62 row 11, owner 2026-11-03: "A stays fast and will be marked not physically possible"):
+   * while the autopilot flies TOWARD a piece (heading mode TARGET / DEBRIS / TRAWL / CLUSTER, from the AUTOPILOT_ENGAGE
+   * event's `mode`), a second, smaller, dimmer amber line `AP_FAST_APPROACH_TEXT` sits just under the chip, inside
+   * `_apBadgeRect` (edge arrows keep clear) and above the teaching card's keep-clear line. It is hidden on the prograde
+   * fallback (it only follows the orbit). The
+   * badge is not told the rendezvous phase (ENGAGE is not re-emitted on a phase change), so the HOLD phase keeps the line.
    * @private
    */
   _drawApBadge() {
@@ -1301,6 +1314,11 @@ export class TargetReticle {
     const chipX = cx - chipW / 2;
     const apr = this._apRectObj || (this._apRectObj = { left: 0, top: 0, right: 0, bottom: 0 });
     apr.left = chipX; apr.top = chipY; apr.right = chipX + chipW; apr.bottom = chipY + AP_BADGE_H_PX;
+    const fastLine = AP_FAST_APPROACH_MODES.has(this._apMode);
+    if (fastLine) {   // edge arrows keep clear of the line too (10 px mono, about 6 px a character without measureText)
+      const halfW = Math.max(chipW, AP_FAST_APPROACH_TEXT.length * 6.1) / 2;
+      apr.left = cx - halfW; apr.right = cx + halfW; apr.bottom += AP_FAST_LINE_H_PX;
+    }
     this._apBadgeRect = apr;
 
     ctx.globalAlpha = finitePulse(this._time - this._apEngagedSince, { cycles: 1 });
@@ -1313,6 +1331,11 @@ export class TargetReticle {
     ctx.shadowColor = COLORS.yellow;
     ctx.shadowBlur = 6;
     ctx.fillText(label, cx, chipY + AP_BADGE_H_PX / 2);
+    if (fastLine) {
+      ctx.font = mono(10, 'normal');
+      ctx.fillStyle = 'rgba(255, 170, 0, 0.8)';
+      ctx.fillText(AP_FAST_APPROACH_TEXT, cx, chipY + AP_BADGE_H_PX + AP_FAST_LINE_H_PX / 2 + 2);
+    }
     ctx.shadowBlur = 0;
     ctx.restore();
   }
