@@ -408,7 +408,7 @@ export class EnvironmentSystem {
         this._safeMode = true;
         if (this._player) this._player.safeMode = true;
 
-        this._houston('WARNING. Multiple subsystem failures. Entering safe mode. Repair critical systems.', 'critical');
+        this._houston('WARNING. Two or more subsystems below 25%. Safe mode: daughter launches and strut self-aim are locked.', 'critical');
         this._emit(Events.SAFE_MODE_ENTERED, { subsystemsBelowThreshold: belowCritical });
         this._emit(Events.ENVIRONMENT_EFFECT, { type: 'safe_mode', entering: true, subsystems: belowCritical });
       }

@@ -235,7 +235,7 @@ export class ResourceSystem {
 
     this._depletionEmitted = false;
 
-    /** Weather-based solar power multiplier (0 = eclipse, 1.3 = flare boost) */
+    /** Weather-based solar power multiplier (0 = eclipse, 1.0 = nominal; a flare no longer changes it) */
     this._weatherSolarMult = 1.0;
 
     /** Seconds since last WEATHER_ACTIVE event */
@@ -486,7 +486,7 @@ export class ResourceSystem {
     return true;
   }
 
-  /** Weather solar power multiplier: 0 in eclipse, 1.0 nominal, 1.3 flare (the digestion sun gate reads this). */
+  /** Weather solar power multiplier: 0 in eclipse, 1.0 nominal (a flare no longer boosts it; the digestion sun gate reads this). */
   getSolarPowerMultiplier() {
     return this._weatherSolarMult;
   }

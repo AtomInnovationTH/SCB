@@ -85,7 +85,8 @@ export const CODEX_TRIGGERS = {
 
   // ===== POWER =====
   solar_power:            [{ event: E.PLAYER_TELEMETRY, match: (p) => p.batteryPct < 0.5 }],
-  eclipse_cycle:          [{ event: E.COMMS_MESSAGE, match: txt('shadow', 'eclipse') }],
+  // Reality 3 (O-12): her real shadow each orbit (PlayerSatellite `_inShadow`, sent with the telemetry), not a scripted eclipse.
+  eclipse_cycle:          [{ event: E.PLAYER_TELEMETRY, match: (p) => p.inShadow === true }],
   // The furnace entry unlocks on the first processed catch (mother park or daughter digestion; both fire
   // CATCH_PROCESSED). Event-based: the comms lines live in GameFlowManager, outside the reachability corpus.
   // DECISIONS §28 row 1: with no furnace a parked catch is not a furnace event; only a digested one unlocks it.
@@ -94,7 +95,8 @@ export const CODEX_TRIGGERS = {
                            { event: E.SUBSYSTEM_EVENT, match: src('POWER') }],
   supercapacitors:        [{ event: E.COMMS_MESSAGE, match: txt('supercapacitor') }],
   thermal_management:     [{ event: E.COMMS_MESSAGE, match: txt('thermal gradient') },
-                           { event: E.SUBSYSTEM_EVENT, match: src('THERMAL') }],
+                           { event: E.SUBSYSTEM_EVENT, match: src('THERMAL') },
+                           { event: E.PLAYER_TELEMETRY, match: (p) => p.inShadow === true }],  // Reality 3: real shadow
   mli_insulation:         [{ event: E.COMMS_MESSAGE, match: txt('mli') }],
   multijunction_pv:       [{ event: E.UPGRADE_PURCHASED, match: (p) => p.id === 'multi_junction_solar' }],
   solid_state_battery:    [{ event: E.UPGRADE_PURCHASED, match: (p) => p.id === 'solid_state_battery' }],

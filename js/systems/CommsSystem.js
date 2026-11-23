@@ -159,7 +159,7 @@ const LAUNCH_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'LAUNCH ALERT',
-    template: 'Rocket Lab Electron launching in {time} min. It\'ll pass through {alt}km at {inc}°. Keep your distance from that lane.',
+    template: 'Rocket Lab Electron launching in {time} min. It\'ll pass through {alt}km at {inc}°.',
   },
   {
     priority: CommsPriority.INFO,
@@ -169,12 +169,12 @@ const LAUNCH_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'LAUNCH ALERT',
-    template: 'Soyuz lifting off from Baikonur. Its climb passes through {alt}km at {inc}° over the next {time} min. Give it room.',
+    template: 'Soyuz lifting off from Baikonur. Its climb passes through {alt}km at {inc}° over the next {time} min.',
   },
   {
     priority: CommsPriority.WARNING,
     source: 'LAUNCH ALERT',
-    template: 'URGENT: A spent Falcon 9 rocket stage is about to be dumped at {alt}km. Clear that lane now.',
+    template: 'URGENT: A spent Falcon 9 rocket stage is about to be dumped at {alt}km.',
   },
 ];
 
@@ -200,11 +200,6 @@ const MISSION_TEMPLATES = [
     quiet: true,   // random timer line, no scan behind it
   },
   {
-    priority: CommsPriority.WARNING,
-    source: 'ClearSpace',
-    template: 'New contract: priority pickup at {alt}km. Capture there and your points are doubled (×2).',
-  },
-  {
     priority: CommsPriority.INFO,
     source: 'GROUND STN',
     template: 'Telemetry looks good. All systems green. Carry on, Cowboy.',
@@ -214,7 +209,7 @@ const MISSION_TEMPLATES = [
     priority: CommsPriority.INFO,
     source: 'ESOC',
     needsTarget: true,
-    template: '{target} is slowly falling out of orbit. It\'ll burn up on re-entry in {days} days if you don\'t grab it first.',
+    template: '{target} is still in orbit and not yet caught.',
   },
 ];
 
@@ -250,7 +245,7 @@ const PLAYER_STATUS_TEMPLATES = {
   evasionPerformed: {
     priority: CommsPriority.WARNING,
     source: 'SPACECRAFT',
-    template: 'Dodge complete. {name} slipped by at {dist}m. Nicely flown.',
+    template: 'Close pass: {name} went by at {dist}m.',
   },
 };
 
@@ -797,13 +792,6 @@ export class CommsSystem {
       const dateStr = data.date || '????-??-??';
       const headline = data.headline || data.name || 'Unknown event';
       this.addMessage('WARNING', 'NEWS', `[${dateStr} NEWS] ${headline}`);
-
-      // the bounty announcement follows 2 s later
-      const bountyStr = (data.bounty || 0).toLocaleString();
-      const debrisName = data.debrisName || 'unknown';
-      timerManager.setTimeout(() => {
-        this.addMessage('INFO', 'NEWS', `Bounty posted: ${bountyStr} cr. Target ${debrisName}`);
-      }, 2000, { owner: this });
     });
 
     // ISRO handoff dialogue (Houston→Bangalore), triggered by the first BANGALORE-sourced COMMS_MESSAGE.
@@ -1004,8 +992,7 @@ export class CommsSystem {
     const text = template
       .replace('{target}', piece ? missionTargetName(piece) : '')
       .replace('{alt}', (400 + Math.floor(Math.random() * 800)).toString())
-      .replace('{tumble}', spinDegS === null ? '' : spinDegS.toFixed(1))
-      .replace('{days}', (30 + Math.floor(Math.random() * 365)).toString());
+      .replace('{tumble}', spinDegS === null ? '' : spinDegS.toFixed(1));
 
     this.addMessage(tmpl.priority, tmpl.source, text, tmpl.quiet ? { _quiet: true, _kind: 'colour' } : { _kind: 'colour' });
   }

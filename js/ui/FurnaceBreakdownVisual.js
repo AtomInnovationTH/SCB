@@ -48,8 +48,8 @@ const _v3a = new THREE.Vector3();
 const _v3b = new THREE.Vector3();
 const _qa = new THREE.Quaternion();
 
-/** A radiator-tip chunk's radius as a fraction of the catch's radius. */
-export const TIP_CHUNK_FRAC = 0.45;
+/** A radiator-tip chunk's radius as a fraction of the catch's radius: the one chunk is the whole catch (Reality 3, F-10). */
+export const TIP_CHUNK_FRAC = 1.0;
 /** Scale left at the end of its sink into the tip. */
 const TIP_CHUNK_END_SCALE = 0.1;
 
@@ -281,8 +281,8 @@ export class FurnaceBreakdownVisual {
   }
 
   /**
-   * @private A radiator-tip breakdown: park `count` chunks at random points on the catch's surface, each a fraction
-   * of its radius, remembered as offsets from the tip in the SHIP's frame so they ride with the ship (and the
+   * @private A radiator-tip breakdown: park `count` chunks (one: the whole catch) at the catch's centre, remembered as
+   * offsets from the tip in the SHIP's frame so they ride with the ship (and the
    * radiator) until their CHUNK event sinks them into the tip.
    * @param {{key:string}} anchor
    * @param {number} index — the tip
@@ -302,10 +302,7 @@ export class FurnaceBreakdownVisual {
     pool.tipIndex = index;
     for (let i = 0; i < count; i++) {
       const mesh = this._makeChunkMesh(TIP_CHUNK_FRAC * radiusM * M);
-      const u = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
-      if (u.lengthSq() < 1e-6) u.set(0, 1, 0);
-      u.normalize().multiplyScalar(radiusM * M);                           // a point on the catch's surface
-      mesh.position.copy(centre).add(u);
+      mesh.position.copy(centre);                                          // at the catch's centre, full size
       mesh.userData.tipOff = mesh.position.clone().sub(tip).applyQuaternion(inv);   // from the tip, in the ship's frame
       mesh.userData.spin = new THREE.Vector3(
         (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4);

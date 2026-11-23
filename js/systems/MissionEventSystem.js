@@ -126,7 +126,7 @@ export class MissionEventSystem {
 
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'HOUSTON',
-          text: `CAUTION: Hydrazine detected in target! Maintain 500 m approach distance. Hazard bonus +${bonusPts}.`,
+          text: `CAUTION: Hydrazine detected in target! Hazard bonus +${bonusPts}.`,
           priority: 'warning',
         });
 
@@ -173,7 +173,7 @@ export class MissionEventSystem {
 
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'HOUSTON',
-          text: `Synergy opportunity: "${syn.name}". Collect ${missing.join(', ')} within 5 min for +${syn.points} bonus.`,
+          text: `Synergy opportunity: "${syn.name}". Collect ${missing.join(', ')} for +${syn.points} bonus.`,
           priority: 'info',
         });
         break; // Only one synergy alert per scan

@@ -168,7 +168,8 @@ const FITTING_SPECS = {
   },
   hardened_cathode: {
     subsystem: 'ENGINEERING', reads: 'player',
-    display: (row) => ({ param: 'mpdCathodeLife', base: Constants.MPD_CATHODE_LIFE, unit: 's', op: `=${row.value}` }),
+    // Reality 3 (W-19): `_mpdCathodeTime` never advances, so the cathode never wears and this row changes nothing in play.
+    display: (row) => ({ param: 'mpdCathodeLife', base: Constants.MPD_CATHODE_LIFE, unit: 's (wear not simulated, no effect in play)', op: `=${row.value}` }),
     current: (deps) => deps.player?._mpdCathodeLife,
   },
   whipple_shield: {
@@ -251,8 +252,8 @@ const FITTING_SPECS = {
   },
   advanced_lidar: {
     subsystem: 'SENSORS', reads: 'sensorSystem',
-    display: (row) => ({ param: 'scanRate', base: SENSOR_TIERS.basic.scanRate, unit: '×', op: `×${row.value}` }),
-    current: (deps) => deps.sensorSystem?.scanRate,
+    display: (row) => ({ param: 'sensorRange', base: SENSOR_TIERS.basic.rangeKm, unit: 'km', op: `×${row.value}` }),
+    current: (deps) => deps.sensorSystem?.range * KM_PER_SCENE_UNIT,
   },
   salvage_scanner: {
     subsystem: 'SENSORS', reads: 'sensorSystem',

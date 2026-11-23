@@ -613,7 +613,7 @@
     {
       "id": "feep_tungsten",
       "category": "PROPULSION",
-      "trl": 4,
+      "trl": 2,
       "icon": "🔬",
       "related": [
         "feep_bismuth",
@@ -622,10 +622,10 @@
       "i18n": {
         "title": "FEEP Propellant: Tungsten",
         "shortText": "Maximum thrust, minimum range: so heavy it needs MPD-class power just to ionise, and a speculative idea for now.",
-        "fullText": "Tungsten sits at the extreme end of FEEP research. At 183.8 atomic mass units and a 3,422°C melting point, it demands enormous power to ionise and accelerate, on the order of an MPD-class system drawing kilowatts.\n\nIn return it pushes hard for its power: the game runs it at 3,500 seconds, about 35 millinewtons per kilowatt at 60% efficiency, more than three times indium's cruise figure; the massive ions leave slowly, so specific impulse is limited to 1,500-3,500 seconds. It stays a lab-stage idea at TRL 4, with no flight hardware and no real thruster to point to. It is a near-perfect match for your mission's needs, if you can ever spare the power budget to run it.",
+        "fullText": "Tungsten sits at the extreme end of FEEP research. At 183.8 atomic mass units and a 3,422°C melting point, it demands enormous power to ionise and accelerate, on the order of an MPD-class system drawing kilowatts.\n\nIn return it pushes hard for its power: the game runs it at 3,500 seconds, about 35 millinewtons per kilowatt at 60% efficiency, more than three times indium's cruise figure; the massive ions leave slowly, so specific impulse is limited to 1,500-3,500 seconds. It stays a speculative idea at TRL 2, with no flight hardware and no real thruster to point to. It is a near-perfect match for your mission's needs, if you can ever spare the power budget to run it.",
         "realWorld": "Speculative: no real tungsten-fed thruster found; 3,422 °C melt far beyond capillary feed.",
         "formula": "Isp ≈ 1,500-3,500 s · ~35-82 mN/kW at 60% efficiency",
-        "trlRationale": "No flown FEEP thruster on tungsten; the number is the game's rating for a speculative concept (TRL 4).",
+        "trlRationale": "No flown FEEP thruster on tungsten; the number is the game's rating for a speculative concept (TRL 2).",
         "unlockHint": "Switch the FEEP propellant to tungsten."
       },
       "track": "propellant_story",
@@ -1182,7 +1182,7 @@
         "fullText": "With no air to carry heat away, temperature in space is set entirely by radiation. A surface in direct sunlight can climb past 120°C while a shadowed one falls below -150°C on the very same spacecraft. Left alone, that gradient would crack structures and kill electronics.\n\nThe fixes work together, passive and active: multi-layer insulation blankets, heat pipes moving warmth to where it is needed, radiator panels dumping it to space, and heaters for the cold soak. Your bus holds around 20°C inside by balancing all of them, heaters on the shadow side and radiators on the sunlit side. Thermal control is invisible when it works and mission-ending when it does not.",
         "realWorld": "Radiative-only environment (+120°C sun / -150°C shade); MLI, heat pipes, radiators, heaters on every spacecraft.",
         "trlRationale": "MLI + heaters + radiators on every spacecraft.",
-        "unlockHint": "Fly until the mothership flags a thermal gradient."
+        "unlockHint": "Fly into Earth's shadow."
       },
       "track": "power_through_the_dark",
       "trackOrder": 8
@@ -4918,7 +4918,7 @@
     {
       "id": "etpack_tape",
       "category": "NEWS",
-      "trl": 8,
+      "trl": 4,
       "icon": "🎗️",
       "related": [
         "edt_deorbit",
@@ -4926,10 +4926,10 @@
       ],
       "i18n": {
         "title": "E.T.PACK Tape Tethers",
-        "shortText": "E.T.PACK's tape tether is a European deorbit kit: a wide conductive ribbon that drags a dead satellite down. Flight model built.",
-        "fullText": "The European E.T.PACK program builds deorbit kits around a tape instead of a wire: a conductive aluminium ribbon centimetres wide and hundreds of metres long. The geometry is the insight — a tape collects electrons along its whole width in the bare-tether regime, survives micrometeoroid nicks that would sever a round wire, and rolls up like film for stowage.\n\nThe program took its 500 m kit from laboratory tests to a finished flight model, with an in-orbit demonstration on track for 2026-27. When your services bay stocks deorbit hardware, this is the middle shelf: heavier than a toy, far cheaper than a tug.",
-        "realWorld": "E.T.PACK (EU Horizon 2020, with SENER): 500 m tape-tether deorbit kit; flight model complete, in-orbit demo on track for 2026/27.",
-        "trlRationale": "Flight-model hardware built; orbital demonstration pending.",
+        "shortText": "E.T.PACK's tape tether is a European deorbit kit: a wide conductive ribbon that drags a dead satellite down. Tested in the laboratory.",
+        "fullText": "The European E.T.PACK program builds deorbit kits around a tape instead of a wire: a conductive aluminium ribbon centimetres wide and hundreds of metres long. The geometry is the insight — a tape collects electrons along its whole width in the bare-tether regime, survives micrometeoroid nicks that would sever a round wire, and rolls up like film for stowage.\n\nThe program took its 500 m kit through laboratory tests, with an in-orbit demonstration on track for 2026-27. When your services bay stocks deorbit hardware, this is the middle shelf: heavier than a toy, far cheaper than a tug.",
+        "realWorld": "E.T.PACK (EU Horizon 2020, with SENER): 500 m tape-tether deorbit kit; in-orbit demo on track for 2026/27.",
+        "trlRationale": "TRL 4 at system level (CORDIS); TRL 8 is only the goal of the follow-on E.T.PACK-F. Orbital demonstration pending.",
         "unlockHint": "Price a deorbit against a haul — sometimes the ribbon wins."
       },
       "lastVerified": "2026-08"

@@ -6058,20 +6058,20 @@ export const Constants = {
         },
       ],
 
-      // ── Chapter 10 — Belt Transit: radiation-belt timing (MEO 19,000, GPS band) ──
-      //    Narrative consolidation; the "new concept" is SAA/Van-Allen timing, taught as briefing comms — no new skill.
+      // ── Chapter 10 — Belt Transit (name kept): reach — the wide sweep ──
+      //    Reality 3 (W-13): the briefing lines say only what the game has (no field lies above 900 km, no belt timing is modelled).
       10: [
         {
           id: 'ch10_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'You\'re climbing toward MEO. 19,000 km, GPS country. Which means crossing the Van Allen belts. Charged-particle flux up here browns out sensors and trips safe-mode. Time your transits through the gaps.',
+          text: 'Next lesson is reach. Pieces lie spread out, and the daughters can go well past where the Mother can.',
         },
         {
           id: 'ch10_saa',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'Watch the South Atlantic Anomaly. The belt dips low there and dose spikes. Run both daughters through the clean windows together; don\'t get caught reeling mid-belt.',
+          text: 'A longer tether lets a daughter reach farther; a hotter spring gets her there sooner. Run both daughters and keep an eye on their reels.',
         },
         // The first mission beat that NEEDS the wide sweep — a capture past 1 km from Mother is impossible under the 500 m
         // deploy gate. Reachable at Zylon T2 tether (gate 3.2 km) with any spring; the escalation names the paired purchase +
@@ -6080,7 +6080,7 @@ export const Constants = {
           id: 'ch10_widesweep',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Belt crossings scatter fragments wide. Don\'t chase every shard with the Mother — reach out. Long tether, hot spring, dial the fleet launch speed up with [\'] (down with [;]) and take a catch past a kilometre.',
+          text: 'Don\'t chase every shard with the Mother — reach out. Long tether, hot spring, dial the fleet launch speed up with [\'] (down with [;]) and take a catch past a kilometre.',
           skillId: 'speed_dial',
           triggerEvent: 'ARM_CAPTURED',
           triggerFilter: (d) => !!d && typeof d.rangeM === 'number' && d.rangeM >= 1000,
@@ -6098,7 +6098,7 @@ export const Constants = {
           id: 'ch11_intro',
           type: 'narrative',
           source: 'HASSAN',
-          text: 'Cowboy, this is Hassan at ISTRAC, Bangalore. I\'ll be your conn for the GEO leg. There\'s a graveyard contract on Thaicom 4: a dead three-tonne comms bird at 35,786 km. Getting there is a patience game.',
+          text: 'Cowboy, this is Hassan at ISTRAC, Bangalore. I\'ll be your conn for the GEO leg. Thaicom 4 launched at 6,486 kg to geostationary orbit, 35,786 km up. Getting there is a patience game.',
         },
         {
           id: 'ch11_hohmann',

@@ -60,7 +60,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_weather',
     title: 'Space Weather',
-    body: 'Solar activity detected. Watch your power levels. Panels may degrade during storms.',
+    body: 'Solar activity detected. A flare shortens your sensor range while it lasts; a storm day thickens the air at your height.',
     duration: 8000,
     icon: 'SUN',
   },
@@ -81,7 +81,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_burn',
     title: 'Manual Burn',
-    body: 'Thrusting changes your orbit. Watch the MFD (Multi-Function Display). Your orbit\'s high point (apoapsis) and low point (periapsis) shift in real time.',
+    body: 'Thrusting changes your orbit.',
     duration: 7000,
     icon: 'BURN',
   },
@@ -116,14 +116,14 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_safe_mode',
     title: 'Safe Mode',
-    body: 'Too many systems are critical, so the ship locked your daughters to protect itself. Repair until they\'re above 40% to get them back.',
+    body: 'Two or more systems fell below 25%, so the ship locked daughter launches and the struts\' self-aim. The approach, autopilot and the mother\'s net still work.',
     duration: 8000,
     icon: 'LOCK',
   },
   {
     id: 'first_radiation',
     title: 'Radiation Belt',
-    body: 'You\'re crossing the Van Allen belt. A band of trapped radiation around Earth. Expect sensor static and laggy comms; don\'t linger.',
+    body: 'You\'re crossing the Van Allen belt. A band of trapped radiation around Earth. Don\'t linger.',
     duration: 8000,
     icon: 'RAD',
   },

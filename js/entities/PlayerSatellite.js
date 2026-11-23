@@ -6834,6 +6834,7 @@ export class PlayerSatellite extends THREE.Group {
         engineGasPct: START_GAS_KG > 0 ? engineGasKg(this.resources) / START_GAS_KG : 1,
         coldGasPct: frac(this.resources.coldGas, Constants.COLD_GAS_MAX * (Constants.COLD_GAS_START_FRACTION ?? 1)),
         batteryPct: frac(this.resources.battery, this._resourceSystem?.batteryMax ?? Constants.BATTERY_MAX),
+        inShadow: this._inShadow === true,   // her real Earth shadow now (the `eclipse_cycle` card unlocks on it)
         orbit: { ...this.orbit },
         deltaVSpent: this._deltaVSpent,
         thrustDirection: this._thrustDirection,
@@ -8344,7 +8345,7 @@ export class PlayerSatellite extends THREE.Group {
         this._recomputeIonDeltaV();
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'PROPULSION',
-          text: 'MPD thruster installed. Passive drive boosts primary thrust; lithium reserves feed heavy burns.',
+          text: 'MPD thruster installed. Passive drive boosts primary thrust.',
           priority: 'info',
         });
         break;
@@ -8352,7 +8353,7 @@ export class PlayerSatellite extends THREE.Group {
         this._mpdCathodeLife = data.value;
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'PROPULSION',
-          text: 'Hardened tungsten-rhenium cathode installed. Cathode lifetime extended to 1,200s.',
+          text: 'Hardened tungsten-rhenium cathode installed. Cathode wear is not simulated, so it changes nothing in play.',
           priority: 'info',
         });
         break;
@@ -8360,7 +8361,7 @@ export class PlayerSatellite extends THREE.Group {
         this._hasSupercap = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'POWER',
-          text: 'Graphene supercapacitor bank installed. MPD thermal dissipation improved.',
+          text: 'Graphene supercapacitor bank installed.',
           priority: 'info',
         });
         break;

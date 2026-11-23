@@ -875,7 +875,7 @@ export class ArmManager {
 
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Daughters locked. Safe mode active. Repair subsystems first.',
+        text: 'Daughters locked. Safe mode: two or more subsystems are below 25%.',
         priority: 'warning',
       });
       this._armOnlyRefusedFlag = true;
@@ -1089,7 +1089,7 @@ export class ArmManager {
     if (target && target._disposed === true) return false;       // a piece that was disposed of is no catch
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Daughters locked. Safe mode active. Repair subsystems first.',
+        text: 'Daughters locked. Safe mode: two or more subsystems are below 25%.',
         priority: 'warning',
       });
       return false;
@@ -2291,7 +2291,7 @@ export class ArmManager {
     const say = (text, priority = 'warning') => { eventBus.emit(Events.COMMS_MESSAGE, { text, priority }); return false; };
     if (!offer) return say(pairNoneLine(), 'info');
     const player = this.playerSatellite;
-    if (player && player.safeMode) return say('Daughters locked. Safe mode active. Repair subsystems first.');
+    if (player && player.safeMode) return say('Daughters locked. Safe mode: two or more subsystems are below 25%.');
     if (powerDistribution.armMultiplier <= 0) return say('CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy');
     if (tripRefuses('daughter')) return false;
     const pairs = [[offer.armA, offer.tA], [offer.armB, offer.tB]];
@@ -2364,7 +2364,7 @@ export class ArmManager {
     const stop = (text) => { arm1._claimTarget = null; arm2._claimTarget = null; this._sayWarn(text); return false; };
     const pairs = [[arm1, t1], [arm2, t2]];
     const player = this.playerSatellite;
-    if (player && player.safeMode) return stop('Daughters locked. Safe mode active. Repair subsystems first.');
+    if (player && player.safeMode) return stop('Daughters locked. Safe mode: two or more subsystems are below 25%.');
     if (powerDistribution.armMultiplier <= 0) return stop('CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy');
     if (tripRefuses('daughter')) return stop(pairNotReadyLine(arm1.displayName));
     if (this._flatPairRefusal([arm1, arm2])) { arm1._claimTarget = null; arm2._claimTarget = null; return false; }
@@ -2935,7 +2935,7 @@ export class ArmManager {
     const armMult = powerDistribution.armMultiplier;
     const speedScale = armMult > 0 ? armMult : 0.1;
 
-    // digestion sun scale: 1.0 in sunlight, ECLIPSE_RATE in eclipse (weather solar multiplier 0 = eclipse; a 1.3 flare does not overcook);
+    // digestion sun scale: 1.0 in sunlight, ECLIPSE_RATE in eclipse (weather solar multiplier 0 = the scripted eclipse type, which nothing schedules since Reality 3; her real shadow is not read here);
     // mocks without the getter cook at full rate
     const FTD = Constants.FURNACE_TRANSFER;
     const solarMult = (this._resourceSystem && typeof this._resourceSystem.getSolarPowerMultiplier === 'function')

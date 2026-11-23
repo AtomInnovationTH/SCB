@@ -23,7 +23,7 @@ const WEATHER_TYPES = {
     color: '#ff8800',
     effects: {
       sensorRange: 0.7,
-      solarPower: 1.3,
+      // Reality 3 (M-07, O-11, W-11): no power boost. A flare moves sunlight by parts per million; solarPower stays x1.0.
       radiationRisk: true,
     },
     minDuration: SW.SOLAR_FLARE_MIN_DURATION,
@@ -70,6 +70,9 @@ const WEATHER_TYPES = {
   },
 
   ECLIPSE_ENTRY: {
+    // Reality 3 (O-12): defined but never scheduled (not in the replay file, not in the random fallback). Her real shadow each
+    // orbit (PlayerSatellite `_inShadow`) already cuts the power; the `eclipse_cycle` card unlocks on that shadow.
+    unscheduled: true,
     name: 'Eclipse',
     icon: 'ECL',
     color: '#334455',
@@ -118,7 +121,7 @@ export class SpaceWeatherSystem {
 
     // Timers stay initialized in BOTH modes so a mid-session fallback still works (randomized first occurrence).
     for (const [type, def] of Object.entries(WEATHER_TYPES)) {
-      if (!def.calendar) this.timers[type] = randRange(def.minInterval * 0.5, def.maxInterval);
+      if (!def.calendar && !def.unscheduled) this.timers[type] = randRange(def.minInterval * 0.5, def.maxInterval);
     }
 
     // The real storm calendar (SunStorms) and her height for the radio line; both optional (a test builds none).
@@ -193,7 +196,7 @@ export class SpaceWeatherSystem {
       case 'cme':
       case 'proton_event': return null;
       case 'saa_passage':  return 'SAA_PASSAGE';
-      case 'eclipse':      return 'ECLIPSE_ENTRY';
+      case 'eclipse':      return null;   // the scripted eclipse is gone (Reality 3, O-12): her real shadow each orbit stays
       case 'quiet':        return null;
       default:             return null;
     }
@@ -232,7 +235,7 @@ export class SpaceWeatherSystem {
       }
     } else {
       for (const [type, def] of Object.entries(WEATHER_TYPES)) {
-        if (def.calendar) continue;                 // storm days come from the calendar, never a random timer (plan sky-1116)
+        if (def.calendar || def.unscheduled) continue;   // storm days come from the calendar, never a random timer (plan sky-1116); the scripted eclipse is gone (O-12)
         if (this.activeEvents.has(type)) continue;
 
         this.timers[type] -= dt;

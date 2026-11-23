@@ -63,6 +63,13 @@ export const SWING_RATE_DEG_S = 20;
 /** Tip order for the next free tip: azimuth 40 → 220 → 140 → 320 (AZIMUTHS_DEG indices). */
 const PICK_ORDER = TIP_PICK_ORDER;
 const SLOT_COUNT = 4;
+/**
+ * Reality 3 (F-10): a radiator tip feeds the catch in whole (no cutting tool exists), so its breakdown events carry ONE chunk.
+ * `FURNACE_TRANSFER.CHUNK_COUNT` still sets the strut and collar stations (cutting there is a separate item).
+ */
+const TIP_CHUNK_COUNT = 1;
+/** The real body's scale once the one whole-size chunk is on screen (the chop ramp's own floor: a zero instance scale corrupts the matrix). */
+const TIP_BODY_HIDDEN_SCALE = 0.001;
 
 const _q1 = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
@@ -1154,10 +1161,11 @@ export class TipCargo {
       d._breakdownActive = true;           // the furnace visual owns scale/disposal
       d._capturedByArm = null;
       bus.emit(Events.CATCH_BREAKDOWN_START, {
-        armId: 'mother', debrisId: d.id, chunkCount: FT.CHUNK_COUNT, anchor,
+        armId: 'mother', debrisId: d.id, chunkCount: TIP_CHUNK_COUNT, anchor,
       });
     }
-    if (d._breakdownActive) scaleMul = FT.chopScaleMul(t);
+    // The whole catch is drawn as the one chunk from this moment, so the real body is hidden (no shrink in place).
+    if (d._breakdownActive) scaleMul = TIP_BODY_HIDDEN_SCALE;
     // The attitude turns with the strut tip (and the ship; `_qLocalTip` was seeded at the stow). Written BEFORE the pin so the
     // drawn instance gets this frame's attitude with this frame's position (the pin draws it at once).
     const rec = this._tipRec(slot.i);
@@ -1173,14 +1181,15 @@ export class TipCargo {
 
     if (t >= FT.CHOP_S && t < FT.FEED_S) {
       const feedFrac = (t - FT.CHOP_S) / Math.max(1e-6, FT.FEED_S - FT.CHOP_S);
-      const due = Math.min(FT.CHUNK_COUNT, Math.floor(feedFrac * FT.CHUNK_COUNT) + 1);
+      // The whole catch sinks in when a strut's last chunk would, so it stays on screen while its mass still cooks.
+      const due = feedFrac >= (FT.CHUNK_COUNT - 1) / FT.CHUNK_COUNT ? TIP_CHUNK_COUNT : 0;
       this._fireChunks(slot, due, anchor);
       return;
     }
     if (t < FT.FEED_S) return;
 
     // ── Digestion complete: flush chunks, free the tip, then the one CATCH_PROCESSED ──
-    this._fireChunks(slot, FT.CHUNK_COUNT, anchor);
+    this._fireChunks(slot, TIP_CHUNK_COUNT, anchor);
     const debrisId = d.id;
     const type = d.type;
     this._slots[slot.i] = null;
@@ -1197,10 +1206,9 @@ export class TipCargo {
   }
 
   _fireChunks(slot, due, anchor) {
-    const FT = Constants.FURNACE_TRANSFER;
     while (slot.chunksFired < due) {
       this.eventBus.emit(Events.CATCH_BREAKDOWN_CHUNK, {
-        armId: 'mother', debrisId: slot.debris.id, index: slot.chunksFired, total: FT.CHUNK_COUNT, anchor,
+        armId: 'mother', debrisId: slot.debris.id, index: slot.chunksFired, total: TIP_CHUNK_COUNT, anchor,
       });
       slot.chunksFired++;
     }

@@ -147,7 +147,9 @@ export class SensorSystem {
         this.canDetectUntracked = true;
         break;
       case 'scanRange':
-        this.scanRate *= data.value;
+        // Reality 3 (W-21): lidar hardware extends range. This is the sensor range (the radar disc's outer zone and the
+        // detection reach), not the S scan's reveal range (REVEAL_BASE_RANGE). `scanRate` has no reader.
+        this.range *= data.value;
         break;
       case 'salvageScan':
         this.canScanSalvage = true;

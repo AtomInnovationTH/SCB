@@ -248,12 +248,12 @@ export class ScoringSystem {
     const taper = taperMultiplier(this.captureCreditsEarned, catalogCr, taperCfg);
     creditPoints = Math.round(creditPoints * taper);
     creditPoints = clamp(Math.round(ceilingCr - this.captureCreditsEarned), 0, creditPoints);
-    // One-shot comms when the taper first bites, so shrinking payouts read as fiction, not a bug.
+    // One-shot comms when the taper first bites, so shrinking payouts read as game balance, not a bug (no market behind it).
     if (!this._taperCommsFired && this.captureCreditsEarned >= startCr) {
       this._taperCommsFired = true;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
-        text: "Salvage market's saturating, Cowboy. Rates are dropping.",
+        text: "Pay per catch tapers from here, Cowboy.",
         priority: 1,
       });
     }
