@@ -33,6 +33,10 @@ import { cardFields, CLASS_COLORS, CLASS_NAMES, CLS_STARLINK, isStarlinkRow } fr
 import { StorageKeys } from '../core/StorageKeys.js';
 import { LOOK_IDS, buildLook, ringTextureBytes, dotTextureBytes, lookFromSearch, installSkyLookHooks, measureClutter } from './SkyLook.js';
 import { devGlareB } from '../core/DevHost.js';
+import {
+  FADE_DEFAULT, NAMES_MAX, NAMES_MAX_GLASS, RING_CAP, HL_RING_PX, HL_RING_PX_GLASS, NAME_BOX_H, nameWidthPx, linearRgb, greyLinear, fadedHex,
+  maskOf, litIndexes, groupIndexOf, fillHighlightColours, rowColourInto, placeNames,
+} from './SkyHighlight.js';
 
 export { CLASS_COLORS };
 
@@ -127,6 +131,9 @@ export class RealSkyLayer {
     this._getCamera = deps.getCamera || (() => null);
     this._getViewport = deps.getViewport || (() => ({ w: 1728, h: 1117 }));
     this._fetchJson = deps.fetchJson || defaultFetchJson;
+    // data/highlights.json (the Famous list, countries): fetched beside sky.json with the game's own loader. A test that injects `fetchJson`
+    // (it answers every url with the sky) gets no highlights unless it also injects `fetchHighlights`; a failed or missing file is null.
+    this._fetchHighlights = deps.fetchHighlights || (deps.fetchJson ? null : defaultFetchJson);
     this._dateMs = deps.dateMs || (() => NaN);
     this._isGlass = deps.isGlass || (() => false);
     this._pixelRatio = deps.pixelRatio || (() => (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
@@ -233,6 +240,37 @@ export class RealSkyLayer {
     this._inv = new THREE.Matrix4();
     this._gate = '';
     this._creditShown = '';
+
+    // the shared highlight (Sky 23 lane H2; docs/research/2026-11-floor4-hook.md): see setHighlight
+    this._baseColAttr = null;           // the colour attribute `_buildScene` made (today's palette, never written)
+    this._lookColAttr = null;           // the colour attribute the current look's Points use (the base one, or the look's own)
+    this._highlights = null;            // data/highlights.json, parsed, or null
+    this._byNorad = null;               // Map norad -> row index (built at load)
+    this._catalogue = null;
+    this._hl = null;                    // the highlight now on (a normalised copy of what setHighlight got), or null
+    this._hlListeners = [];
+    this._hlMask = null;                // Uint8Array(N): 1 = lit
+    this._hlLit = null;                 // Int32Array: the lit rows' indexes
+    this._hlCol = null;                 // Float32Array(3N): the layer's OWN colour copy while a fade is drawn (the look's buffer is never written)
+    this._hlAttr = null;                // its BufferAttribute (set on every dot Points while the fade shows)
+    this._hlHide = null;                // Uint8Array(N) of the rows hidden from the dot buffer (hideBase), or null
+    this._hlGroupIdx = null; this._hlGroupRgb = null; this._hlGroupHex = null;
+    this._hlGrey = greyLinear();
+    this._hlFaded = null;               // page 1: each kind's faded canvas colour
+    this._hlOverlay = null;
+    this._hlClock = null;               // { hold, skyMs } while a highlight owns the clock
+    this._hlClockSumS = 0;              // sky seconds counted from `skyMs` since the override began
+    this._hlClearPending = false;       // hide() left no floor: the highlight clears at the next frame unless a show() comes first
+    this._hlNameRows = new Int32Array(0); this._hlNameText = [];
+    this._hlSx = new Float32Array(0); this._hlSy = new Float32Array(0); this._hlWid = new Float32Array(0);
+    this._hlBoxX = new Float32Array(0); this._hlBoxY = new Float32Array(0); this._hlBoxOk = new Uint8Array(0);
+    this._hlRingSx = new Float32Array(RING_CAP); this._hlRingSy = new Float32Array(RING_CAP);
+    this._hlRingEls = []; this._hlRingShown = [];     // pooled DOM rings and what each last showed {on, x, y, row}
+    this._hlNameEls = []; this._hlNameShown = [];
+    this._hlScr = { x: 0, y: 0 };
+    this._keepOut = null;               // the side panel's box {x0, y0, x1, y1}, CSS px, or null
+    this._hlColOn = false;              // true while the fade copy is the colour attribute of the dot Points
+    this._hlOpts = null; this._hlPlace = null; this._hlDomOn = false;
   }
 
   /* ---------------------------------------------------------------- gates and loading */
@@ -249,6 +287,7 @@ export class RealSkyLayer {
       if (this._selected >= 0) this.select(-1);
     }
     this._floor = floor;
+    this._hlClearPending = false;       // a floor took the layer in the same frame as the old floor's hide(): the highlight stays
     if (floor === FLOOR_NAVCOM && this._globePick !== null) {
       const back = this._globePick;
       this._globePick = null;
@@ -265,6 +304,11 @@ export class RealSkyLayer {
     // Leaving page 1: the card is empty again (Sky 20).
     if (this._floor === FLOOR_SDA && this._selected >= 0) this.select(-1);
     this._floor = null;
+    // E7: leaving with no floor taking the layer (floor 4 -> 3, page 1 -> page 2, a trip) ends the highlight. Globe <-> page 1 keeps it.
+    // The game's order is not the same both ways: globe -> page 1 runs hide(4) BEFORE show(5) (LadderController._applyFloorContent), page 1 ->
+    // globe runs show(4) before hide(5). So a hide that leaves no floor only marks the clear as pending; a show() of either floor cancels it,
+    // and the next update() / tickClock() (both run every frame) clears it if no floor has taken the layer by then.
+    if (this._hl) this._hlClearPending = true;
     this._apply();
   }
 
@@ -287,6 +331,12 @@ export class RealSkyLayer {
   kindCounts() { const out = new Array(CLASS_NAMES.length).fill(0); if (this._cls) for (let i = 0; i < this._cls.length; i++) out[this._cls[i]]++; return out; }
   rows() { return this._rows; }
   snapshotUtc() { return this._sky ? this._sky.snapshotUtc : null; }
+  /** The catalogue for menus: `{ rows, fields, states, snapshotUtc, credit }` (`states` = the header's State codes, [] if the data has none), or null before the data has loaded. */
+  catalogue() { return this._loadState === 'ready' ? this._catalogue : null; }
+  /** Row index of a NORAD number, or -1 (also before the data has loaded). */
+  rowOf(norad) { if (!this._byNorad) return -1; const i = this._byNorad.get(norad); return i === undefined ? -1 : i; }
+  /** The parsed data/highlights.json, or null (not loaded, missing, or failed). */
+  highlights() { return this._highlights; }
   selected() { return this._selected; }
   lastBatch() { return this._lastBatch; }
   propagator() { return this._prop; }
@@ -303,11 +353,17 @@ export class RealSkyLayer {
     this._loadState = 'loading';
     this._fetchCount++;
     try {
+      // data/highlights.json is fetched beside sky.json (in parallel); missing or failed = null, never an error
+      const hlP = this._fetchHighlights
+        ? Promise.resolve().then(() => this._fetchHighlights('data/highlights.json')).then((j) => (j && typeof j === 'object' && !Array.isArray(j) ? j : null), () => null)
+        : Promise.resolve(null);
       const sky = await this._fetchJson('data/sky.json');
       if (!sky || !Array.isArray(sky.rows)) throw new Error('data/sky.json: no rows');
+      this._highlights = await hlP;
       this._ingest(sky);
       this._loadState = 'ready';
       if (this._lookWant !== '0') { this._lookId = this._lookWant; this._lookBuild(); }   // 'b' by default, or a dev host `?look=<id>`; its _apply follows
+      if (this._hl) this._hlBuild();     // a highlight set before the data arrived
       this._apply();
     } catch (err) {
       this._loadState = 'failed';
@@ -344,6 +400,9 @@ export class RealSkyLayer {
       col[3 * i] = p[0]; col[3 * i + 1] = p[1]; col[3 * i + 2] = p[2];
     }
     if (this._card && this._card.setStatusJoined) this._card.setStatusJoined(sky.statusJoined === true);
+    this._byNorad = new Map();
+    for (let i = 0; i < N; i++) this._byNorad.set(sky.rows[i][0], i);
+    this._catalogue = { rows: sky.rows, fields: sky.fields, states: Array.isArray(sky.states) ? sky.states : [], snapshotUtc: sky.snapshotUtc, credit: sky.credit };
     this._buildScene(col);
     this._applyHiddenDraw();
     this.refreshAll();
@@ -356,6 +415,8 @@ export class RealSkyLayer {
     this._posAttr.setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('position', this._posAttr);
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    this._baseColAttr = geo.getAttribute('color');
+    this._lookColAttr = this._baseColAttr;
     // The dots go through the composer's OutputPass (ACES) like the rest of the frame, so the colours in CLASS_COLORS are chosen for ACES
     // (see there); a material flag could not change that. Lane sky-look-1119.
     const mat = new THREE.PointsMaterial({ size: DOT_PX, sizeAttenuation: false, vertexColors: true, depthWrite: false, transparent: this._glareB });
@@ -426,6 +487,7 @@ export class RealSkyLayer {
     }
     if (this._canvas) this._canvas.style.opacity = f5 ? '1' : '0';
     if (!f4 && !f5 && (this._hover >= 0 || this._cursorOn)) this.hoverClear();   // another floor, a menu, the opening dive: no hover
+    if (!f4) this._hlDomHide();                    // rings and names belong to the globe
     if (this._card) {
       if (this._card.setLayout) this._card.setLayout(this._isGlass(), this._floor);
       if (this._card.setLoadFailed) this._card.setLoadFailed(on && failed);
@@ -457,7 +519,24 @@ export class RealSkyLayer {
    */
   tickClock(dtWorldS) {
     this._syncDate();
+    this._hlRunPendingClear();
     if (dtWorldS > 0 && Number.isFinite(dtWorldS)) this._sumS += dtWorldS;
+    // a highlight's own clock runs from its date, unless `clock.hold` froze it (the live sum above never stops)
+    const ov = this._hlClock;
+    if (ov && !ov.hold && ov.skyMs !== undefined && dtWorldS > 0 && Number.isFinite(dtWorldS)) this._hlClockSumS += dtWorldS;
+  }
+
+  /** The clear that hide() left pending runs now when no floor has taken the layer since. */
+  _hlRunPendingClear() {
+    if (!this._hlClearPending) return;
+    this._hlClearPending = false;
+    if (this._floor === null) this.clearHighlight();
+  }
+
+  /** The sky clock without any highlight override: the game date (else the snapshot) + the game seconds since it moved, ms. */
+  _liveSkyMs() {
+    const d = this._dateMs();
+    return (Number.isFinite(d) ? d : this._snapshotMs) + this._sumS * 1000;
   }
 
   /** Game seconds since `dateMs()` last changed. */
@@ -466,6 +545,7 @@ export class RealSkyLayer {
   /** Sky time as seconds after the snapshot: the game date (else the snapshot itself) + the seconds since it last changed. */
   skySeconds() {
     this._syncDate();
+    if (this._hlClock && this._hlClock.skyMs !== undefined) return (this._hlClock.skyMs + this._hlClockSumS * 1000 - this._snapshotMs) / 1000;
     const d = this._dateMs();
     const base = Number.isFinite(d) ? d : this._snapshotMs;
     return (base + this._sumS * 1000 - this._snapshotMs) / 1000;
@@ -477,6 +557,7 @@ export class RealSkyLayer {
    */
   skyDateMs() {
     this._syncDate();
+    if (this._hlClock && this._hlClock.skyMs !== undefined) return this._hlClock.skyMs + this._hlClockSumS * 1000;
     const d = this._dateMs();
     const base = Number.isFinite(d) ? d : this._snapshotMs;
     return base + this._sumS * 1000;
@@ -495,6 +576,7 @@ export class RealSkyLayer {
 
   /** One frame: propagate the row budget, move the highlight, repaint floor 5 when due. No-op while the layer is off. */
   update() {
+    this._hlRunPendingClear();
     const on = this.isActive();
     // the load never depends on the moment the floor was entered: a floor with the layer and nothing loaded starts it here
     if (on && this._loadState === 'idle') this._loadPromise = this._load();
@@ -510,6 +592,7 @@ export class RealSkyLayer {
     if (credit !== this._creditShown) { this._creditShown = credit; if (this._card && this._card.setCredit) this._card.setCredit(credit); }
     if (this._selected >= 0) this._moveSelection(t);
     if (this._floor === FLOOR_SDA) this._paint5(t);
+    if (this._hl) this._hlFrame(t);
     this._hoverTick();
   }
 
@@ -677,6 +760,8 @@ export class RealSkyLayer {
     const px = this._isGlass() ? DOT_PX_GLASS : DOT_PX;
     const half = px / 2;
     const pos = this._pos, N = this._rows.length, sx = this._sx, sy = this._sy, cls = this._cls, hide = this._hideCls, sel = this._selected;
+    const hh = this._hlHide;
+    const hlc = this._hl && this._hlMask && this._hlFaded && (this._hl.stage === 'chart' || this._hl.stage === 'both') ? this._hl : null;
     sx.fill(NaN); sy.fill(NaN);
     const w0 = m15;                                    // Earth's centre is the origin: clip w = m15
     if (!(w0 > 1e-9)) { this._painted5 = 0; return; }
@@ -684,6 +769,7 @@ export class RealSkyLayer {
     const rEarthU = Constants.EARTH_RADIUS, geoPx = map.geoPx;
     for (let i = 0; i < N; i++) {
       if (hide[cls[i]] === 1 && i !== sel) continue;   // a switched-off kind is neither painted nor pickable (only a search's pick keeps its ring)
+      if (hh !== null && hh[i] === 1) continue;        // a highlight's own overlay draws this row (hideBase)
       const x = pos[3 * i], y = pos[3 * i + 1], z = pos[3 * i + 2];
       const w = m3 * x + m7 * y + m11 * z + m15;
       if (!(w > 1e-9)) continue;                       // behind the camera
@@ -697,14 +783,40 @@ export class RealSkyLayer {
     }
     let n = 0;
     // Starlink first, so its dim dots lie under every other kind's (draw order = painting order here).
-    for (let o = 0; o < CLASS_COLORS.length; o++) {
-      const c = (o + CLS_STARLINK) % CLASS_COLORS.length;
-      if (hide[c] === 1) continue;
-      g.fillStyle = CLASS_COLORS[c];
-      for (let i = 0; i < N; i++) {
-        if (cls[i] !== c || sx[i] !== sx[i]) continue;   // sx[i] !== sx[i]: NaN, not painted
-        g.fillRect(sx[i] - half, sy[i] - half, px, px);
-        n++;
+    if (hlc === null) {
+      for (let o = 0; o < CLASS_COLORS.length; o++) {
+        const c = (o + CLS_STARLINK) % CLASS_COLORS.length;
+        if (hide[c] === 1) continue;
+        g.fillStyle = CLASS_COLORS[c];
+        for (let i = 0; i < N; i++) {
+          if (cls[i] !== c || sx[i] !== sx[i]) continue;   // sx[i] !== sx[i]: NaN, not painted
+          g.fillRect(sx[i] - half, sy[i] - half, px, px);
+          n++;
+        }
+      }
+    } else {
+      // A highlight (E4): every row is still drawn once, Starlink first inside each pass; the faded rows go first in their faded colour, the
+      // lit rows (and the selected one) last in the kind's own colour, so a lit dot is never under a faded one.
+      const mask = this._hlMask, gi = this._hlGroupIdx, gh = this._hlGroupHex;
+      for (let pass = 0; pass < 2; pass++) {
+        for (let o = 0; o < CLASS_COLORS.length; o++) {
+          const c = (o + CLS_STARLINK) % CLASS_COLORS.length;
+          if (hide[c] === 1) continue;
+          const own = pass === 0 ? this._hlFaded[c] : CLASS_COLORS[c];
+          g.fillStyle = own;
+          let cur = own;
+          for (let i = 0; i < N; i++) {
+            if (cls[i] !== c || sx[i] !== sx[i]) continue;
+            const lit = mask[i] === 1 || i === sel;
+            if (lit !== (pass === 1)) continue;
+            if (pass === 1 && c === CLS_STARLINK && gi !== null) {   // a group's colour on its lit Starlink rows
+              const want = gi[i] >= 0 && gh[gi[i]] ? gh[gi[i]] : own;
+              if (want !== cur) { g.fillStyle = want; cur = want; }
+            }
+            g.fillRect(sx[i] - half, sy[i] - half, px, px);
+            n++;
+          }
+        }
       }
     }
     this._painted5 = n;
@@ -764,12 +876,14 @@ export class RealSkyLayer {
     const cp = cam.position;
     const pos = this._pos, N = this._rows.length, RE = Constants.EARTH_RADIUS, hide = this._hideCls, cls = this._cls;
     let best = -1, bd = R * R;
+    const hh = this._hlHide;
     // look: a dot bigger than today's is hit anywhere on its extra size (the pick radius grows by its radius beyond today's dot; inside that, the
     // nearer centre wins); a dot of today's size picks exactly as before (centre distance). null = no look
     const lp = this._lookData && this._lookData.id !== '0' ? this._lookData.px : null;
     const lb = this._lookGlass ? DOT_PX_GLASS : DOT_PX;
     for (let i = 0; i < N; i++) {
       if (hide[cls[i]] === 1) continue;                // a switched-off kind is not drawn, so it is not pickable
+      if (hh !== null && hh[i] === 1) continue;        // nor is a row a highlight's overlay draws instead (hideBase)
       const px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
       const w = m[3] * px + m[7] * py + m[11] * pz + m[15];
       if (!(w > 1e-9)) continue;
@@ -805,7 +919,9 @@ export class RealSkyLayer {
 
   /** Open the card on row i (or close with -1), highlight its dot, draw its orbit (floor 4). */
   select(i) {
+    const was = this._selected;
     this._selected = i >= 0 && i < this._rows.length ? i : -1;
+    if (this._hlCol && was !== this._selected) { this._hlRow(was); this._hlRow(this._selected); }   // the selected row is drawn in its own colour
     if (this._card) this._card.setObject(this._selected >= 0 ? this.describe(this._selected) : null);
     if (this._selected >= 0) {
       this._lastOrbitMs = -Infinity;
@@ -1040,15 +1156,25 @@ export class RealSkyLayer {
   _applyHiddenDraw() {
     const geo = this._geo;
     if (!geo || !this._cls) return;
-    const N = this._rows.length, cls = this._cls, hide = this._hideCls;
-    let any = false;
+    const N = this._rows.length, cls = this._cls, hide = this._hideCls, hh = this._hlHide;
+    const lm = this._hlGlobeMask();
+    let any = hh !== null || lm !== null;
     for (let k = 0; k < hide.length; k++) if (hide[k] === 1) any = true;
     if (!any && this._starlink === 0) { geo.setIndex(null); geo.setDrawRange(0, Infinity); return; }
     if (!this._idxAttr) this._idxAttr = new THREE.BufferAttribute(new Uint32Array(N), 1);
     const arr = this._idxAttr.array;
     let n = 0;
-    if (hide[CLS_STARLINK] !== 1) for (let i = 0; i < N; i++) if (cls[i] === CLS_STARLINK) arr[n++] = i;
-    for (let i = 0; i < N; i++) if (cls[i] !== CLS_STARLINK && hide[cls[i]] !== 1) arr[n++] = i;
+    // Starlink first; while a highlight fades the rest, inside each group the faded rows come before the lit ones (drawn later = on top)
+    for (let pass = 0; pass < 4; pass++) {
+      const sl = pass < 2, litPass = (pass & 1) === 1;
+      if (lm === null && litPass) continue;
+      if (sl && hide[CLS_STARLINK] === 1) continue;
+      for (let i = 0; i < N; i++) {
+        if ((cls[i] === CLS_STARLINK) !== sl || hide[cls[i]] === 1 || (hh !== null && hh[i] === 1)) continue;
+        if (lm !== null && (lm[i] === 1) !== litPass) continue;
+        arr[n++] = i;
+      }
+    }
     this._idxAttr.needsUpdate = true;
     geo.setIndex(this._idxAttr);
     geo.setDrawRange(0, n);
@@ -1077,14 +1203,16 @@ export class RealSkyLayer {
   /** (Re)build the current variant's per-row sizes and its Points. */
   _lookBuild() {
     this._lookDrop();
+    this._lookColAttr = this._baseColAttr;
     if (this._loadState !== 'ready' || !this._lookBaseCol) return;
     const glass = this._isGlass();
     const data = buildLook(this._lookId, this._rows, glass, this._lookBaseCol);
     this._lookData = data;
     this._lookGlass = glass;
-    if (this._lookId === '0') { this._lookReindex(); return; }
+    if (this._lookId === '0') { this._lookReindex(); this._hlAfterLook(); return; }
     const N = this._rows.length;
-    const colAttr = data.col === this._lookBaseCol ? this._geo.getAttribute('color') : new THREE.BufferAttribute(data.col, 3);
+    const colAttr = data.col === this._lookBaseCol ? this._baseColAttr : new THREE.BufferAttribute(data.col, 3);
+    this._lookColAttr = colAttr;
     const sizes = [...new Set(data.px)].sort((a, b) => a - b);
     sizes.forEach((size, k) => {
       const geo = new THREE.BufferGeometry();
@@ -1131,21 +1259,24 @@ export class RealSkyLayer {
     }
     for (const g of this._lookGroups) if (this._scene && this._scene.add) this._scene.add(g.pts);
     this._lookReindex();
+    this._hlAfterLook();
   }
 
   /** Which rows each look Points draws, kept in step with the hidden kinds; Starlink first inside a size (drawn under the rest), as `_applyHiddenDraw`. */
   _lookReindex() {
     const data = this._lookData;
     if (!data || !this._cls || this._lookGroups.length === 0) return;
-    const N = this._rows.length, cls = this._cls, hide = this._hideCls;
+    const N = this._rows.length, cls = this._cls, hide = this._hideCls, hh = this._hlHide, lm = this._hlGlobeMask();
     const bySize = new Map(this._lookGroups.filter((g) => !g.ring).map((g) => [g.size, g]));
     const counts = new Map();
     for (const g of this._lookGroups) counts.set(g, 0);
     const put = (g, i) => { const n = counts.get(g); g.idx.array[n] = i; counts.set(g, n + 1); };
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = 0; pass < 4; pass++) {
+      const sl = pass < 2, litPass = (pass & 1) === 1;
+      if (lm === null && litPass) continue;              // with no highlight: Starlink pass, then the rest, as before
       for (let i = 0; i < N; i++) {
-        const isSl = cls[i] === CLS_STARLINK;
-        if ((pass === 0) !== isSl || hide[cls[i]] === 1) continue;
+        if ((cls[i] === CLS_STARLINK) !== sl || hide[cls[i]] === 1 || (hh !== null && hh[i] === 1)) continue;
+        if (lm !== null && (lm[i] === 1) !== litPass) continue;   // a highlight: the faded rows first, the lit ones over them
         put(bySize.get(data.px[i]), i);
         if (this._lookRing && data.ring[i]) put(this._lookGroups[this._lookGroups.length - 1], i);
       }
@@ -1156,11 +1287,12 @@ export class RealSkyLayer {
   /** Remove the look's Points from the scene and free them. The position and colour buffers shared with today's Points are taken off the look's
    *  geometries first: `geometry.dispose()` frees every attribute it still holds, and a freed shared buffer would freeze today's dots. */
   _lookDrop() {
-    const sharedCol = this._geo ? this._geo.getAttribute('color') : null;
+    const sharedCol = this._baseColAttr, sharedHl = this._hlAttr;
     for (const g of this._lookGroups) {
       if (this._scene && this._scene.remove) this._scene.remove(g.pts);
       g.geo.deleteAttribute('position');
-      if (sharedCol && g.geo.getAttribute('color') === sharedCol) g.geo.deleteAttribute('color');
+      const ca = g.geo.getAttribute('color');
+      if (ca && (ca === sharedCol || ca === sharedHl)) g.geo.deleteAttribute('color');
       g.geo.dispose(); g.pts.material.dispose();
     }
     if (this._lookTex) { this._lookTex.dispose(); this._lookTex = null; }
@@ -1209,6 +1341,332 @@ export class RealSkyLayer {
     return { look: this._lookId, glass: this._isGlass(), ...measureClutter(pts, W, H) };
   }
 
+  /* ---------------------------------------------------------------- the shared highlight (Sky 23 lane H2; DECISIONS §95)
+   * One engine for the Highlight menu and the items that follow it (Starlink layers, crash replay, Close calls): they call `setHighlight`
+   * and never touch the drawing code. A set of NORAD numbers is lit, every other dot fades toward Starlink's grey (ui/SkyHighlight.js).
+   * The look's colour buffer is never written: the fade is drawn from the layer's own copy, and Off puts the look's attribute back. */
+
+  /** The highlight now on (the layer's normalised copy of what `setHighlight` got: `norads` a Set that includes a `pair`'s a and b, `fade`, `stage`), or null. */
+  highlight() { return this._hl; }
+
+  /** The honesty word now (a function `honesty` gets the sky's seconds), '' with no highlight. */
+  highlightHonesty() { const h = this._hl; return !h ? '' : (typeof h.honesty === 'function' ? h.honesty(this.skySeconds()) : (h.honesty == null ? '' : String(h.honesty))); }
+
+  /** Call `fn(highlight|null)` whenever a highlight is set, swapped, or cleared (also by leaving the floors). @returns {function} unsubscribe */
+  onHighlightChange(fn) {
+    if (typeof fn !== 'function') return () => {};
+    this._hlListeners.push(fn);
+    return () => { const k = this._hlListeners.indexOf(fn); if (k >= 0) this._hlListeners.splice(k, 1); };
+  }
+
+  /** The side panel's box on screen {x0, y0, x1, y1} (CSS px; {x, y, w, h} also accepted) that name boxes keep clear of, or null. */
+  setKeepOut(rect) {
+    if (!rect) { this._keepOut = null; return; }
+    if (rect.x0 !== undefined) this._keepOut = { x0: rect.x0, y0: rect.y0, x1: rect.x1, y1: rect.y1 };
+    else this._keepOut = { x0: rect.x, y0: rect.y, x1: rect.x + rect.w, y1: rect.y + rect.h };
+  }
+
+  _hlEmit() { for (const fn of this._hlListeners.slice()) { try { fn(this._hl); } catch (err) { if (typeof console !== 'undefined') console.warn('[RealSkyLayer] highlight listener:', err && err.message); } } }
+
+  /**
+   * Light a set of objects and fade the rest. `h = { id, label, norads: Set, groups?, names?, line?, honesty, fade? = 0.7, stage? = 'both',
+   * overlay?, hideBase?, clock?, pair?, story? }` (see docs/research/2026-11-floor4-hook.md). A second call with the same `id` swaps the sets
+   * and leaves the overlay and the clock where they were; another `id` replaces the first. May be called before the data has loaded (it
+   * draws when the data arrives). @returns {boolean} false when `h` has no id
+   */
+  setHighlight(h) {
+    if (!h || h.id === undefined || h.id === null) return false;
+    const prev = this._hl;
+    const same = !!prev && prev.id === h.id;
+    const norads = new Set(h.norads || []);
+    if (h.pair) { if (Number.isFinite(h.pair.a)) norads.add(h.pair.a); if (Number.isFinite(h.pair.b)) norads.add(h.pair.b); }
+    const next = { ...h, norads, fade: Number.isFinite(h.fade) ? Math.min(1, Math.max(0, h.fade)) : FADE_DEFAULT, stage: h.stage === 'globe' || h.stage === 'chart' ? h.stage : 'both' };
+    if (same) {                                       // a swap of the sets: the overlay and the clock stay as they are
+      if (!next.overlay) next.overlay = prev.overlay;
+      next.clock = prev.clock;
+    }
+    const oldOv = prev ? prev.overlay || null : null, newOv = next.overlay || null;
+    if (oldOv !== newOv) {
+      if (oldOv && oldOv.dispose) oldOv.dispose();
+      if (newOv && newOv.attach) newOv.attach(this._scene);
+    }
+    if (!same) {
+      const c = next.clock;
+      let skyMs = c && Number.isFinite(c.skyMs) ? c.skyMs : undefined;
+      const hold = !!(c && c.hold);
+      // hold freezes a sky value at set time (the live sum `_sumS` keeps running, so Off is "now"); an explicit skyMs held stays put too
+      if (hold && skyMs === undefined) { const live = this._liveSkyMs(); if (Number.isFinite(live)) skyMs = live; }
+      this._hlClock = skyMs !== undefined || hold ? { hold, skyMs } : null;
+      this._hlClockSumS = 0;
+    }
+    this._hl = next;
+    this._hlBuild();
+    this._hlEmit();
+    return true;
+  }
+
+  /** Off: the look's own buffer is back byte for byte, the clocks are restored, the overlay is disposed. @returns {boolean} false when nothing was on */
+  clearHighlight() {
+    const h = this._hl;
+    if (!h) return false;
+    this._hl = null;
+    this._hlClearPending = false;
+    if (h.overlay && h.overlay.dispose) h.overlay.dispose();
+    this._hlClock = null;
+    this._hlClockSumS = 0;
+    this._hlMask = null; this._hlLit = null; this._hlHide = null; this._hlGroupIdx = null; this._hlGroupRgb = null; this._hlGroupHex = null; this._hlFaded = null;
+    this._hlNameRows = new Int32Array(0); this._hlNameText = [];
+    this._hlRestore();
+    this._hlDomHide();
+    this._applyHiddenDraw();
+    this._lookReindex();
+    this._lastPaintMs = -Infinity;
+    this._hlEmit();
+    return true;
+  }
+
+  /** The mask the globe's dot order and colours use (null when no highlight draws on the globe). */
+  _hlGlobeMask() { return this._hl && this._hlMask && this._hl.stage !== 'chart' ? this._hlMask : null; }
+
+  /** The colours the current look draws (linear, 3 per row): the look's own array, else today's palette. */
+  _hlSource() { return this._lookData && this._lookData.col ? this._lookData.col : this._lookBaseCol; }
+
+  /** Everything the highlight derives from its sets: the mask, groups, names, hidden rows, the fade copy, page 1's faded colours. Runs on a set, never per frame. */
+  _hlBuild() {
+    const h = this._hl;
+    if (!h || this._loadState !== 'ready' || !this._rows.length) { this._hlMask = null; return; }
+    const rows = this._rows;
+    const mask = maskOf(rows, h.norads);
+    this._hlMask = mask;
+    this._hlLit = litIndexes(mask);
+    this._hlHide = h.hideBase ? mask : null;
+    this._hlGroupIdx = groupIndexOf(rows, h.groups);
+    this._hlGroupRgb = this._hlGroupIdx ? h.groups.map((g) => (g && g.color ? linearRgb(g.color) : null)) : null;
+    this._hlGroupHex = this._hlGroupIdx ? h.groups.map((g) => (g && g.color ? g.color : null)) : null;
+    // the names: the rows of `names` (its order is the priority) that are lit
+    const rowsOf = [], text = [];
+    if (h.names) for (const [norad, label] of h.names) { const r = this.rowOf(norad); if (r >= 0 && mask[r] === 1) { rowsOf.push(r); text.push(String(label)); } }
+    this._hlNameRows = Int32Array.from(rowsOf);
+    this._hlNameText = text;
+    const nn = rowsOf.length;
+    this._hlSx = new Float32Array(nn); this._hlSy = new Float32Array(nn); this._hlWid = new Float32Array(nn);
+    this._hlBoxX = new Float32Array(nn); this._hlBoxY = new Float32Array(nn); this._hlBoxOk = new Uint8Array(nn);
+    for (let k = 0; k < nn; k++) this._hlWid[k] = nameWidthPx(text[k]);
+    // (the slot arrays fill by index as slots first show, so they have holes: `for...of` yields undefined there; Sky 23 H3 found this on the second highlight)
+    this._hlNameShown.forEach((s) => { s.row = -1; });
+    this._hlRingShown.forEach((s) => { s.row = -1; });
+    this._hlFaded = CLASS_COLORS.map((hex) => fadedHex(hex, h.fade));
+    if (h.stage === 'chart') this._hlRestore(); else this._hlPaintCopy();
+    this._applyHiddenDraw();
+    this._lookReindex();
+    this._lastPaintMs = -Infinity;
+  }
+
+  /** Fill the layer's own colour copy from the look's colours and put it on every dot Points. */
+  _hlPaintCopy() {
+    if (!this._geo || !this._cls) return;
+    const N = this._rows.length;
+    if (!this._hlCol || this._hlCol.length !== 3 * N) {
+      this._hlCol = new Float32Array(3 * N);
+      this._hlAttr = new THREE.BufferAttribute(this._hlCol, 3);
+      this._hlAttr.setUsage(THREE.DynamicDrawUsage);
+    }
+    this._hlOpts = { fade: this._hl.fade, grey: this._hlGrey, selected: this._selected, cls: this._cls, starlinkCls: CLS_STARLINK, groupIdx: this._hlGroupIdx, groupRgb: this._hlGroupRgb };
+    fillHighlightColours(this._hlCol, this._hlSource(), this._hlMask, this._hlOpts);
+    this._hlAttr.needsUpdate = true;
+    this._hlColOn = true;
+    this._geo.setAttribute('color', this._hlAttr);
+    for (const g of this._lookGroups) if (!g.ring) g.geo.setAttribute('color', this._hlAttr);
+  }
+
+  /** Put the look's own colour attribute back on every dot Points (the fade copy stays allocated for the next set). */
+  _hlRestore() {
+    this._hlColOn = false;
+    if (!this._geo || !this._baseColAttr) return;
+    this._geo.setAttribute('color', this._baseColAttr);
+    for (const g of this._lookGroups) if (!g.ring) g.geo.setAttribute('color', this._lookColAttr);
+  }
+
+  /** A look was (re)built while a highlight is on: the fade is drawn again over the new look's colours. */
+  _hlAfterLook() {
+    this._hlColOn = false;
+    if (this._hl && this._hlMask && this._hl.stage !== 'chart') this._hlPaintCopy();
+  }
+
+  /** One row's colour in the fade copy after its lit state changed (the selected row is always drawn in its own colour). */
+  _hlRow(i) {
+    if (i < 0 || !this._hlColOn || !this._hlMask) return;
+    this._hlOpts.selected = this._selected;
+    rowColourInto(this._hlCol, this._hlSource(), i, this._hlMask[i] === 1 || i === this._selected, this._hlOpts);
+    this._hlAttr.needsUpdate = true;
+  }
+
+  /**
+   * Project row i into `_hlScr`: true when it is drawn on floor 4 now (its kind shown, not hidden by `hideBase`), in front of the camera, on
+   * screen and not behind Earth. `m` = the view-projection elements, `cp` the camera position.
+   */
+  _hlProject(i, m, cp, W, H) {
+    if (this._hideCls[this._cls[i]] === 1) return false;                 // a hidden kind stays hidden, lit or not
+    if (this._hlHide !== null && this._hlHide[i] === 1) return false;
+    const pos = this._pos, px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
+    const w = m[3] * px + m[7] * py + m[11] * pz + m[15];
+    if (!(w > 1e-9)) return false;
+    const x = ((m[0] * px + m[4] * py + m[8] * pz + m[12]) / w * 0.5 + 0.5) * W;
+    const y = (-(m[1] * px + m[5] * py + m[9] * pz + m[13]) / w * 0.5 + 0.5) * H;
+    if (!(x >= 0 && x < W && y >= 0 && y < H)) return false;
+    const RE = Constants.EARTH_RADIUS;
+    const ex = px - cp.x, ey = py - cp.y, ez = pz - cp.z;
+    const a = ex * ex + ey * ey + ez * ez, b = cp.x * ex + cp.y * ey + cp.z * ez, c = cp.x * cp.x + cp.y * cp.y + cp.z * cp.z - RE * RE;
+    const disc = b * b - a * c;
+    if (disc > 0) { const t1 = (-b - Math.sqrt(disc)) / a; if (t1 > 0 && t1 < 1) return false; }   // behind Earth
+    this._hlScr.x = x; this._hlScr.y = y;
+    return true;
+  }
+
+  /** Once per frame on floor 4: the overlay, then rings and names. */
+  _hlFrame(t) {
+    const h = this._hl;
+    if (h.overlay && h.overlay.update) h.overlay.update(t, this._getCamera());
+    if (this._floor !== FLOOR_NAVCOM || h.stage === 'chart' || !this._hlMask) { this._hlDomHide(); return; }
+    const cam = this._viewProj();
+    if (!cam || !this._doc || !this._doc.body || !this._doc.createElement) { this._hlDomHide(); return; }
+    const v = this._getViewport(), W = v.w, H = v.h, m = this._vp.elements, cp = cam.position;
+    const glass = this._isGlass(), ringPx = glass ? HL_RING_PX_GLASS : HL_RING_PX;
+    // names first (the order of `names` is the priority); they are the rings too when the set is over RING_CAP
+    const nn = this._hlNameRows.length, nsx = this._hlSx, nsy = this._hlSy;
+    for (let k = 0; k < nn; k++) {
+      if (this._hlProject(this._hlNameRows[k], m, cp, W, H)) { nsx[k] = this._hlScr.x; nsy[k] = this._hlScr.y; } else { nsx[k] = NaN; nsy[k] = NaN; }
+    }
+    let po = this._hlPlace;
+    if (!po) po = this._hlPlace = { max: 0, boxH: NAME_BOX_H, ringPx: 0, vw: 0, vh: 0, keepOut: null };
+    po.max = glass ? NAMES_MAX_GLASS : NAMES_MAX; po.ringPx = ringPx; po.vw = W; po.vh = H; po.keepOut = this._keepOut;
+    placeNames(nn, nsx, nsy, this._hlWid, po, this._hlBoxX, this._hlBoxY, this._hlBoxOk);
+    // rings
+    const lit = this._hlLit, all = lit.length <= RING_CAP;
+    const rn = all ? lit.length : nn, rsx = all ? this._hlRingSx : nsx, rsy = all ? this._hlRingSy : nsy;
+    if (all) {
+      for (let k = 0; k < rn; k++) {
+        if (this._hlProject(lit[k], m, cp, W, H)) { rsx[k] = this._hlScr.x; rsy[k] = this._hlScr.y; } else { rsx[k] = NaN; rsy[k] = NaN; }
+      }
+    }
+    for (let k = 0; k < rn; k++) {
+      const row = all ? lit[k] : this._hlNameRows[k];
+      const on = rsx[k] === rsx[k] && (all || this._hlBoxOk[k] === 1);
+      this._hlRingAt(k, on, row, rsx[k], rsy[k], ringPx);
+    }
+    for (let k = rn; k < this._hlRingShown.length; k++) this._hlRingAt(k, false, -1, NaN, NaN, ringPx);
+    for (let k = 0; k < nn; k++) this._hlNameAt(k, this._hlBoxOk[k] === 1, this._hlBoxX[k], this._hlBoxY[k]);
+    for (let k = nn; k < this._hlNameEls.length; k++) this._hlNameAt(k, false, 0, 0);   // boxes left over from a longer list
+  }
+
+  /** The kind's colour for a lit row's ring (a Starlink group's own colour when it has one). */
+  _hlRingColour(row) {
+    const gi = this._hlGroupIdx;
+    if (gi !== null && this._cls[row] === CLS_STARLINK && gi[row] >= 0 && this._hlGroupHex[gi[row]]) return this._hlGroupHex[gi[row]];
+    return CLASS_COLORS[this._cls[row]] || '#ffffff';
+  }
+
+  /** Slot k's ring: shown at (x, y) with the row's colour, or hidden. A style is written only when its value changed. */
+  _hlRingAt(k, on, row, x, y, ringPx) {
+    let el = this._hlRingEls[k];
+    if (!el) {
+      if (!on) return;
+      el = this._doc.createElement('div');
+      el.style.cssText = ['position:fixed', 'display:none', 'pointer-events:none', 'z-index:35', 'box-sizing:border-box', 'border-radius:50%',
+        'box-shadow:0 0 0 1px rgba(0,0,0,0.75), inset 0 0 0 1px rgba(0,0,0,0.75)'].join(';');
+      el.id = `real-sky-hl-ring-${k}`;
+      this._doc.body.appendChild(el);
+      this._hlRingEls[k] = el;
+      this._hlRingShown[k] = { on: false, x: NaN, y: NaN, row: -1, px: 0 };
+    }
+    const s = this._hlRingShown[k];
+    if (!on) { if (s.on) { el.style.display = 'none'; s.on = false; this._hlDomOn = this._hlAnyOn(); } return; }
+    if (s.px !== ringPx) { el.style.width = `${ringPx}px`; el.style.height = `${ringPx}px`; s.px = ringPx; }
+    if (s.row !== row) { el.style.border = `2px solid ${this._hlRingColour(row)}`; s.row = row; }
+    const rx = Math.round(x - ringPx / 2), ry = Math.round(y - ringPx / 2);
+    if (!s.on) { el.style.display = 'block'; s.on = true; this._hlDomOn = true; }
+    if (rx !== s.x) { el.style.left = `${rx}px`; s.x = rx; }
+    if (ry !== s.y) { el.style.top = `${ry}px`; s.y = ry; }
+  }
+
+  /** Slot k's name box: shown with its top-left at (x, y), or hidden. Tapping it selects the object and turns the globe to it. */
+  _hlNameAt(k, on, x, y) {
+    let el = this._hlNameEls[k];
+    if (!el) {
+      if (!on) return;
+      el = this._doc.createElement('div');
+      el.style.cssText = ['position:fixed', 'display:none', 'pointer-events:auto', 'cursor:pointer', 'z-index:35', 'max-width:260px', 'box-sizing:border-box', 'padding:3px 7px',
+        'border-radius:4px', 'border-left:3px solid #ffffff', 'background:rgba(8,12,22,0.88)', 'color:#e8eefc', 'font-family:var(--font-mono)', 'font-size:12px',
+        'line-height:1.3', 'white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis', 'user-select:none', '-webkit-user-select:none'].join(';');
+      el.id = `real-sky-hl-name-${k}`;
+      if (el.addEventListener) {
+        el.addEventListener('pointerdown', (e) => { if (e && e.stopPropagation) e.stopPropagation(); });
+        el.addEventListener('click', (e) => {
+          if (e && e.stopPropagation) e.stopPropagation();
+          const r = k < this._hlNameRows.length ? this._hlNameRows[k] : -1;
+          if (r >= 0) { this.select(r); this.flyTo(r); }
+        });
+      }
+      this._doc.body.appendChild(el);
+      this._hlNameEls[k] = el;
+      this._hlNameShown[k] = { on: false, x: NaN, y: NaN, row: -1 };
+    }
+    const s = this._hlNameShown[k];
+    if (!on) { if (s.on) { el.style.display = 'none'; s.on = false; this._hlDomOn = this._hlAnyOn(); } return; }
+    const row = this._hlNameRows[k];
+    if (s.row !== row) { el.textContent = this._hlNameText[k]; el.style.borderLeftColor = this._hlRingColour(row); s.row = row; }
+    if (!s.on) { el.style.display = 'block'; s.on = true; this._hlDomOn = true; }
+    if (x !== s.x) { el.style.left = `${x}px`; s.x = x; }
+    if (y !== s.y) { el.style.top = `${y}px`; s.y = y; }
+  }
+
+  _hlAnyOn() {
+    for (const s of this._hlRingShown) if (s && s.on) return true;
+    for (const s of this._hlNameShown) if (s && s.on) return true;
+    return false;
+  }
+
+  /** Hide every ring and name box (another floor, page 1, Off). */
+  _hlDomHide() {
+    if (!this._hlDomOn) return;
+    for (let k = 0; k < this._hlRingEls.length; k++) { const s = this._hlRingShown[k]; if (s && s.on) { this._hlRingEls[k].style.display = 'none'; s.on = false; } }
+    for (let k = 0; k < this._hlNameEls.length; k++) { const s = this._hlNameShown[k]; if (s && s.on) { this._hlNameEls[k].style.display = 'none'; s.on = false; } }
+    this._hlDomOn = false;
+  }
+
+  /** The rings and name boxes now on screen: [{kind, row, x, y, w, h}] (probes and tests; allocates, not for the frame loop). */
+  highlightMarks() {
+    const out = [];
+    this._hlRingEls.forEach((el, k) => { const s = this._hlRingShown[k]; if (s.on) out.push({ kind: 'ring', row: s.row, x: s.x, y: s.y, w: s.px, h: s.px, el }); });
+    this._hlNameEls.forEach((el, k) => { const s = this._hlNameShown[k]; if (s.on) out.push({ kind: 'name', row: s.row, x: s.x, y: s.y, w: this._hlWid[k], h: NAME_BOX_H, text: this._hlNameText[k], el }); });
+    return out;
+  }
+
+  /**
+   * Where row i is on floor 4 right now, for the Highlight menu's list ("behind Earth, tap to turn"; Sky 23 H3): 'front' (drawn on screen),
+   * 'behind' (Earth is in the way), 'off' (off screen or behind the camera), 'hidden' (its kind is switched off in the key), or '' when it
+   * cannot be told (another floor, no data). Reads the camera; called a few times a second by the card, never per frame.
+   * @param {number} i row index @returns {''|'front'|'behind'|'off'|'hidden'}
+   */
+  rowView(i) {
+    if (this._floor !== FLOOR_NAVCOM || !this._pos || !this._cls || !(i >= 0 && i < this._rows.length)) return '';
+    if (this._hideCls[this._cls[i]] === 1) return 'hidden';
+    const cam = this._viewProj();
+    if (!cam) return '';
+    const v = this._getViewport(), W = v.w, H = v.h, m = this._vp.elements, cp = cam.position;
+    const pos = this._pos, px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
+    const w = m[3] * px + m[7] * py + m[11] * pz + m[15];
+    if (!(w > 1e-9)) return 'off';
+    const x = ((m[0] * px + m[4] * py + m[8] * pz + m[12]) / w * 0.5 + 0.5) * W;
+    const y = (-(m[1] * px + m[5] * py + m[9] * pz + m[13]) / w * 0.5 + 0.5) * H;
+    const RE = Constants.EARTH_RADIUS;
+    const ex = px - cp.x, ey = py - cp.y, ez = pz - cp.z;
+    const a = ex * ex + ey * ey + ez * ez, b = cp.x * ex + cp.y * ey + cp.z * ez, c = cp.x * cp.x + cp.y * cp.y + cp.z * cp.z - RE * RE;
+    const disc = b * b - a * c;
+    if (disc > 0) { const t1 = (-b - Math.sqrt(disc)) / a; if (t1 > 0 && t1 < 1) return 'behind'; }
+    return x >= 0 && x < W && y >= 0 && y < H ? 'front' : 'off';
+  }
+
   /** Search by name or NORAD number: opens the best match's card, highlights its dot (also for a hidden kind: an explicit ask); on floor 4 the globe turns to it. @returns {number} row index or -1 */
   search(query) {
     if (this._loadState !== 'ready') return -1;
@@ -1219,6 +1677,10 @@ export class RealSkyLayer {
   }
 
   dispose() {
+    this.clearHighlight();
+    for (const o of this._hlRingEls.concat(this._hlNameEls)) if (o && o.parentNode) o.parentNode.removeChild(o);
+    this._hlRingEls = []; this._hlRingShown = []; this._hlNameEls = []; this._hlNameShown = []; this._hlDomOn = false;
+    this._hlListeners = [];
     this._lookDrop();
     if (this._scene && this._scene.remove) {
       for (const o of [this._points, this._hiPoints, this._orbitLine]) if (o) this._scene.remove(o);

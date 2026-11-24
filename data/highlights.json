@@ -1,0 +1,134 @@
+{
+  "famous": [
+    {
+      "id": "iss",
+      "label": "International Space Station",
+      "norads": [25544, 25575, 26400, 26700, 36086, 49044],
+      "line": "The first piece, Zarya, was launched on 20 November 1998.",
+      "source": "https://www.nasa.gov/international-space-station/zarya-module"
+    },
+    {
+      "id": "tiangong",
+      "label": "Tiangong, China's station",
+      "norads": [48274, 53239, 54216],
+      "line": "Its core module Tianhe was launched on 29 April 2021.",
+      "source": "https://en.cmse.gov.cn/news/202105/t20210528_48002.html"
+    },
+    {
+      "id": "hubble",
+      "label": "Hubble Space Telescope",
+      "norads": [20580],
+      "line": "Launched 24 April 1990.",
+      "source": "https://science.nasa.gov/mission/hubble/"
+    },
+    {
+      "id": "vanguard-1",
+      "label": "Vanguard 1",
+      "norads": [5],
+      "line": "Launched 17 March 1958: the oldest human-made object still in orbit.",
+      "source": "https://www.navy.mil/Press-Office/Press-Releases/display-pressreleases/Article/2247504/"
+    },
+    {
+      "id": "tiros-1",
+      "label": "TIROS 1",
+      "norads": [29],
+      "line": "April 1960: the first weather satellite.",
+      "source": "https://science.nasa.gov/mission/tiros",
+      "source2": "https://www.nesdis.noaa.gov/news/celebrating-65-years-of-the-worlds-first-weather-satellite"
+    },
+    {
+      "id": "telstar-1",
+      "label": "Telstar 1",
+      "norads": [340],
+      "line": "July 1962: carried the first live television across the Atlantic.",
+      "source": "https://www.nasa.gov/history/telstar-opened-era-of-global-satellite-television"
+    },
+    {
+      "id": "syncom-2",
+      "label": "Syncom 2",
+      "norads": [634],
+      "line": "July 1963: the first satellite to circle Earth once a day, in step with its turn.",
+      "source": "https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1963-031A"
+    },
+    {
+      "id": "lageos-1",
+      "label": "LAGEOS 1",
+      "norads": [8820],
+      "line": "A mirror ball launched 4 May 1976; lasers from the ground measure how the Earth moves.",
+      "source": "https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1976-039A"
+    },
+    {
+      "id": "terra",
+      "label": "Terra",
+      "norads": [25994],
+      "line": "Launched 18 December 1999; its MODIS camera sees every point on Earth every 1-2 days.",
+      "source": "https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1999-068A",
+      "source2": "https://terra.nasa.gov/about/terra-instruments/modis"
+    },
+    {
+      "id": "fermi",
+      "label": "Fermi (listed as GLAST)",
+      "norads": [33053],
+      "line": "NASA's gamma-ray telescope, launched 11 June 2008.",
+      "source": "https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=2008-029A"
+    },
+    {
+      "id": "landsat-9",
+      "label": "Landsat 9",
+      "norads": [49260],
+      "line": "Launched 27 September 2021.",
+      "source": "https://www.nasa.gov/news-release/nasa-launches-new-mission-to-monitor-earths-landscapes/"
+    },
+    {
+      "id": "envisat",
+      "label": "Envisat",
+      "norads": [27386],
+      "line": "Europe's Earth-watching satellite, silent since 8 April 2012, about 8 tonnes.",
+      "source": "https://www.esa.int/Applications/Observing_the_Earth/Envisat/ESA_declares_end_of_mission_for_Envisat",
+      "source2": "https://www.esa.int/Applications/Observing_the_Earth/Envisat_FAQs"
+    },
+    {
+      "id": "fengyun-1c",
+      "label": "Fengyun-1C",
+      "norads": [25730],
+      "line": "Destroyed by a Chinese missile test on 11 January 2007.",
+      "source": "https://ntrs.nasa.gov/api/citations/20080022435/downloads/20080022435.pdf"
+    },
+    {
+      "id": "iridium-33",
+      "label": "Iridium 33",
+      "norads": [24946],
+      "line": "Hit Cosmos 2251 on 10 February 2009.",
+      "source": "https://www.orbitaldebris.jsc.nasa.gov/newsletter/pdfs/ODQNv13i2.pdf"
+    },
+    {
+      "id": "cosmos-2251",
+      "label": "Cosmos 2251",
+      "norads": [22675],
+      "line": "The other satellite in that crash.",
+      "source": "https://www.orbitaldebris.jsc.nasa.gov/newsletter/pdfs/ODQNv13i2.pdf"
+    },
+    {
+      "id": "zenit-stages",
+      "label": "Zenit stages (22)",
+      "norads": [16182, 17590, 17974, 19120, 19650, 20625, 22220, 22285, 22566, 22803, 23088, 23343, 23405, 23705, 24298, 25400, 25407, 25861, 26070, 27006, 28353, 31793],
+      "line": "22 Zenit second stages, 9,000 kg each (one 8,300).",
+      "source": "http://www.astronautix.com/z/zenit-2.html"
+    },
+    {
+      "id": "starlink-pioneer",
+      "label": "Oldest Starlinks",
+      "norads": [44714, 44718, 44723, 44725, 44744, 44747, 44748, 44751, 44752, 44753, 44768],
+      "line": "Launched 11 Nov 2019: the oldest Starlinks still up, 11 from that launch.",
+      "source": "https://www.space-track.org"
+    }
+  ],
+  "countries": {
+    "USA": { "code": "US", "name": "United States" },
+    "THA": { "code": "T", "name": "Thailand" },
+    "JPN": { "code": "J", "name": "Japan" },
+    "ESP": { "code": "E", "name": "Spain" },
+    "BRA": { "code": "BR", "name": "Brazil" },
+    "IND": { "code": "IN", "name": "India" }
+  }
+}

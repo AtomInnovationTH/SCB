@@ -395,13 +395,24 @@ function _setChartTextBoxes(list) { _chartTextBoxes = list; _chartTextVersion++;
 export const LABEL_TOP_PX = CHART_TOP_CLEAR_PX + 28;
 /** Label x offset from the centre for a label that has no leader (the far ring's label at the top). */
 const LABEL_X_NEAR = 8;
-/** The five height labels stand in a column at the upper right, outside the outermost band (owner 2026-11-22, sky 18). */
-const COLUMN_X_FRAC = 0.72;   // column left edge = this x the outermost band's outer radius + COLUMN_X_PAD_PX, from the centre
-const COLUMN_X_PAD_PX = 16;
-/** Clear space between the outermost ring and the nearest corner of any column label box, px. */
-const COLUMN_CLEAR_PX = 10;
-/** Where each leader leaves its ring: this many degrees clockwise from 12 o'clock (about half past one). */
-const LEADER_ANGLE_DEG = 50;
+/**
+ * The five height labels stand in a column on the LEFT of the ring (owner 2026-11-23, Sky 23: "improve the tonnage callouts. Maybe moving
+ * to left side with clearer and better organized layout for callout lines"; they stood at the upper right, sky 18). The labels end (their
+ * text is right-aligned) this far left of the outermost ring's left edge; each leader leaves its own ring on the ring's left side,
+ * runs slanting to a common upright line (the elbow) and ends in a short horizontal run into its label.
+ */
+export const COLUMN_CLEAR_PX = 44;
+/** The horizontal run of every leader, from its elbow into the label's end (the last 4 px are the gap before the glyphs), px. */
+export const COLUMN_RUN_PX = 14;
+/** Rows of the column stand this far apart (baseline to baseline), px: twice a text line, so each label reads as its own row. */
+export const COLUMN_ROW_GAP_PX = 26;
+/**
+ * A leader leaves its ring at this fraction of its label row's distance from the chart's middle height (0 = every leader leaves at 9 o'clock,
+ * 1 = horizontal leaders): the leaders fan out gently instead of bunching, and none can cross (the rows and the departure points keep one order).
+ */
+const LEADER_FAN = 0.5;
+/** A guess of the widest column row (the key line, about 44 glyphs), px: only where an avoid box is tested (the layout is pure and measures no text). */
+const COLUMN_W_GUESS_PX = 300;
 /**
  * The colour key above the label column (Sky 19: the search / tick-box panel and its key are not on page 1 any more): one short line,
  * each half drawn in its own colour. Ring dots are warm (orange) for debris, rocket stages and dead satellites and grey-blue for working,
@@ -415,12 +426,12 @@ export const KEY_COOL = { text: '\u25cf working, sat, unknown', color: CLASS_COL
 const GLYPH_PX = 6.6;
 
 /**
- * Lay the ring labels out so no two text boxes overlap. The band labels (ids `band-…`) stand in ONE column at the upper right,
- * outermost band first at fixed `minGap` spacing, entirely outside the outermost ring (`outerPx`, the outer radius of the last
- * band): the column's left edge sits at 0.72 of that radius + 16 px, and its lowest box ends where the circle (radius + 10 px)
- * passes it. Each label has a leader from its OWN ring (its `rPx`, about half past one o'clock) to the column. When the column
- * would meet a box that sits over it (`avoid`: {x0, x1, y0, y1} as offsets from the centre/top; the Mac radio box) the column, with its colour key,
- * goes under that box instead. Any
+ * Lay the ring labels out so no two text boxes overlap. The band labels (ids `band-…`) stand in ONE column on the LEFT of the ring (Sky 23),
+ * outermost band first at `minGap` spacing, their right ends COLUMN_CLEAR_PX left of the outermost ring (`outerPx`, the outer radius of the
+ * last band) and the whole block (colour key + rows) centred on the chart's middle height. Each label has an elbow leader: from its OWN ring
+ * (its `rPx`, on the ring's left side), slanting to the common elbow line, then a COLUMN_RUN_PX horizontal run into the label. The departure
+ * points keep the rows' order, so no two leaders cross. When the block would meet a box over it (`avoid`: {x0, x1, y0, y1} as offsets from
+ * the centre/top) it goes above that box, or under it when there is no room above. Any
  * other label (the GEO ring's) sits at the top beside the centre line. The input is not mutated; the strip title (rPx 0, painted
  * with the strip) passes through untouched.
  * @param {Array<{id:*, rPx:number, text?:string}>} labels
@@ -429,8 +440,8 @@ const GLYPH_PX = 6.6;
  * @param {number} [minY]     - first baseline the column may use
  * @param {number} [outerPx]  - outer radius of the outermost band, px (default: the outermost label's radius + 4)
  * @param {{x0:number,x1:number,y0:number,y1:number}|null} [avoid] - a rectangle the column must not touch (x from the centre, y from the top)
- * @returns {Array<object>} each label plus `x` (offset from the centre), `y` (baseline), `ringX` / `ringY` (leader start: x from
- *   the centre, y from the top), `leader`
+ * @returns {Array<object>} each label plus `x` (the text's RIGHT end, offset from the centre; `align` is 'right'), `y` (baseline),
+ *   `ringX` / `ringY` (leader start: x from the centre, y from the top), `elbowX` / `leaderY` (the turn: x from the centre, y from the top), `leader`
  */
 export function layoutLabels(labels, cy, minGap = LABEL_MIN_GAP_PX, minY = 12, outerPx = 0, avoid = null) {
   const out = labels.map((l) => {
@@ -440,31 +451,34 @@ export function layoutLabels(labels, cy, minGap = LABEL_MIN_GAP_PX, minY = 12, o
   const bands = out.filter((l) => String(l.id).startsWith('band-')).sort((a, b) => b.rPx - a.rPx);
   if (!bands.length) return out;
   const edge = outerPx > 0 ? outerPx : bands[0].rPx + 4;
-  const x0 = edge * COLUMN_X_FRAC + COLUMN_X_PAD_PX;
-  let x = x0;
-  const reach = edge + COLUMN_CLEAR_PX;
-  const dy = Math.sqrt(Math.max(0, reach * reach - x * x));
-  let bottom = cy - dy - 3;                       // baseline of the lowest label; its box ends 3 px lower
+  const textRight = -(edge + COLUMN_CLEAR_PX);                 // the labels' right ends, x from the centre (left of the ring)
+  const elbowX = textRight + 4 + COLUMN_RUN_PX;                // where every leader turns horizontal
   const span = (bands.length - 1) * minGap;
+  // The block is the colour key (KEY_ABOVE_PX over the first row, glyph top 9 px over its baseline), the rows and the last row's 3 px of descender:
+  // centred on the chart's middle height, the middle of the free band between the lens buttons (top) and the strip (bottom).
+  const blockH = 9 + KEY_ABOVE_PX + span + 3;
+  let top = cy - blockH / 2 + 9 + KEY_ABOVE_PX;               // first row's baseline
   if (avoid) {
-    // The colour key stands KEY_ABOVE_PX over the first label (glyph top 9 px over its baseline), so it counts as part of the column.
-    const colTop = bottom - span - KEY_ABOVE_PX - 9, colBottom = bottom + 3;
-    if (x + 400 > avoid.x0 && x < avoid.x1 && colBottom > avoid.y0 && colTop < avoid.y1) {
-      // Under the rectangle (the radio box): key 6 px below it, the column under the key. Lower down the ring is wider at the column's
-      // height, so the column also moves right until its nearest corner is outside the circle again (the leaders get longer).
-      bottom = avoid.y1 + 6 + KEY_ABOVE_PX + 9 + span;
-      const below = cy - (bottom + 3);
-      if (below > 0 && below < reach) x = Math.max(x0, Math.sqrt(reach * reach - below * below));
+    // A box over the column (an open card stands left of the ring only on a narrow screen): the block goes above it when it fits, else under it.
+    const right = textRight, left = textRight - COLUMN_W_GUESS_PX;
+    const blockTop = top - 9 - KEY_ABOVE_PX, blockBottom = top + span + 3;
+    if (left < avoid.x1 && right > avoid.x0 && blockBottom > avoid.y0 && blockTop < avoid.y1) {
+      const above = avoid.y0 - 6 - 3 - span;
+      top = above - 9 - KEY_ABOVE_PX >= minY + 14 ? above : avoid.y1 + 6 + 9 + KEY_ABOVE_PX;
     }
   }
-  const top = Math.max(minY + 14, bottom - span);   // one row under the first top line, whose box ends 3 px under its baseline (the GEO label)
-  const a = LEADER_ANGLE_DEG * Math.PI / 180;
+  top = Math.max(top, minY + 14 + 9 + KEY_ABOVE_PX);          // never up into the top lines (the GEO label's row)
   bands.forEach((l, k) => {
-    l.x = x;
+    l.x = textRight;
+    l.align = 'right';
     l.y = top + k * minGap;
     l.leader = true;
-    l.ringX = l.rPx * Math.sin(a);
-    l.ringY = cy - l.rPx * Math.cos(a);
+    l.elbowX = elbowX;
+    l.leaderY = l.y - 4;                                       // the leader meets the glyphs' middle
+    // The leader leaves its own ring on the ring's left side, at LEADER_FAN of its row's distance from the middle height.
+    const dy = LEADER_FAN * (l.leaderY - cy);
+    l.ringY = cy + dy;
+    l.ringX = -Math.sqrt(Math.max(0, l.rPx * l.rPx - dy * dy));
   });
   return out;
 }
@@ -476,7 +490,7 @@ export const LENS_BUTTONS = Object.freeze([
 ]);
 /** Like the air page's Sun buttons: a fingertip tall (AirChart BUTTON_MIN_H 46). */
 export const LENS_BTN_H = 46;
-const LENS_BTN_W = 96;
+export const LENS_BTN_W = 96;
 const LENS_BTN_TEXT = '#eef2f7';
 /** The buttons stand in a column: Danger under Tonnes, this far apart, this far from the screen's top and left (CSS px). */
 export const LENS_STACK_GAP_PX = 8;
@@ -536,6 +550,28 @@ export const STRIP_LOG_MIN = 1000;
  */
 export const SPEED_CONTROL_W_PX = 300;
 export const STRIP_KEEPOUT_GAP_PX = 16;
+/**
+ * The strip stands at the bottom LEFT (Sky 23, owner 2026-11-23: "consider moving the 'objects in orbit' pane to bottom left, and adjusting
+ * slightly so it fits well with the time slider on bottom right"): its left edge STRIP_LEFT_PX from the screen's left, its right end
+ * STRIP_SPEED_GAP_PX before the speed control, which is SPEED_CONTROL_W_PX wide and SPEED_CONTROL_RIGHT_PX from the right edge (MapClockSlider
+ * EDGE_PX 12, both screens). The same 24 px at both ends is what makes the pair read as one bottom band. Its vertical place stays above the page
+ * dots (STRIP_*_FROM_BOTTOM_PX): the dots stand at the bottom centre, inside the strip's width.
+ */
+export const STRIP_LEFT_PX = 24;
+export const STRIP_SPEED_GAP_PX = 24;
+export const SPEED_CONTROL_RIGHT_PX = 12;
+
+/**
+ * The strip's rectangle (CSS px; pure): x0, x1 left and right ends of the plot, y0, y1 its top and bottom.
+ * @param {number} w @param {number} h - viewport
+ * @param {{x0:number,y0:number,x1:number,y1:number}|null} [cardBox] - an open card (the iPad's stands bottom right): the strip also stops before it
+ * @returns {{x0:number, x1:number, y0:number, y1:number}}
+ */
+export function stripRect(w, h, cardBox = null) {
+  let x1 = w - SPEED_CONTROL_RIGHT_PX - SPEED_CONTROL_W_PX - STRIP_SPEED_GAP_PX;
+  if (cardBox && cardBox.y1 > h - STRIP_TOP_FROM_BOTTOM_PX + 15) x1 = Math.min(x1, Math.min(cardBox.x0, cardBox.x1 - SPEED_CONTROL_W_PX) - STRIP_KEEPOUT_GAP_PX);
+  return { x0: STRIP_LEFT_PX, x1, y0: h - STRIP_TOP_FROM_BOTTOM_PX, y1: h - STRIP_BOTTOM_FROM_BOTTOM_PX };
+}
 /** The "today" label keeps at least this far from the strip's title; closer than that it moves to the right of its line. */
 const TODAY_TITLE_GAP_PX = 12;
 
@@ -823,10 +859,11 @@ export class SdaChart {
       rPx: 0,
     });
     // An open object card (page 1, Sky 20) is a box the label column and its colour key must stay clear of: `avoid` is in the layout's own terms
-    // (x from the centre, y from the top). With no card open nothing is avoided and the column stands where the rings put it.
+    // (x from the centre, y from the top). With the column on the left (Sky 23) the card (top right on the Mac, bottom right on the iPad) never meets it
+    // on the two screens; a narrow window still moves the column. With no card open nothing is avoided.
     const cardBox = m.cardBox && Number.isFinite(m.cardBox.x0) ? m.cardBox : null;
     const avoid = cardBox ? { x0: cardBox.x0 - wPx / 2, x1: cardBox.x1 - wPx / 2, y0: cardBox.y0, y1: cardBox.y1 } : null;
-    const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2, LABEL_MIN_GAP_PX, LABEL_TOP_PX,
+    const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2, COLUMN_ROW_GAP_PX, LABEL_TOP_PX,
       map.leoTopPx, avoid);
     this._syncPageChrome(wPx, hPx);
 
@@ -902,14 +939,15 @@ export class SdaChart {
     g.setLineDash([]);
 
     g.font = mono(10);
-    g.textAlign = 'left';
     for (const l of labels) {
       if (l.id === 'kessler-strip') continue; // painted with the strip below
       g.fillStyle = this._rgba(ramp, 0.95);
-      if (l.leader) { // column label: a thin leader from its own ring (same colour as the label), a dot where it leaves the ring
+      g.textAlign = l.align === 'right' ? 'right' : 'left';
+      if (l.leader) { // column label: an elbow leader from its own ring (same colour as the label), a dot where it leaves the ring
         g.beginPath();
         g.moveTo(cx + l.ringX, l.ringY);
-        g.lineTo(cx + l.x - 3, l.y - 4);
+        g.lineTo(cx + l.elbowX, l.leaderY);
+        g.lineTo(cx + l.x + 4, l.leaderY);
         g.strokeStyle = this._rgba(ramp, 0.95);
         g.lineWidth = 1;
         g.stroke();
@@ -920,18 +958,16 @@ export class SdaChart {
       this._text(g, l.text, cx + l.x, l.y);
     }
 
-    // The colour key: one line above the label column, each half in its dot's colour (what the ring dots mean now that the panel's key is gone).
+    // The colour key: one line above the label column, right-aligned with it, each half in its dot's colour (what the ring dots mean now that the panel's key is gone).
     const column = labels.filter((l) => l.leader);
     if (column.length) {
       const kx = cx + column[0].x, ky = Math.min(...column.map((l) => l.y)) - KEY_ABOVE_PX;
-      g.textAlign = 'left';
+      g.textAlign = 'right';
       g.globalAlpha = 0.95;
-      g.fillStyle = KEY_WARM.color;
-      this._text(g, KEY_WARM.text, kx, ky);
-      const m1 = typeof g.measureText === 'function' ? g.measureText(KEY_WARM.text) : null;
-      const w1 = m1 && Number.isFinite(m1.width) ? m1.width : KEY_WARM.text.length * 6.1;
       g.fillStyle = KEY_COOL.color;
-      this._text(g, KEY_COOL.text, kx + w1 + 14, ky);
+      this._text(g, KEY_COOL.text, kx, ky);
+      g.fillStyle = KEY_WARM.color;
+      this._text(g, KEY_WARM.text, kx - this._textW(g, KEY_COOL.text) - 14, ky);
       g.globalAlpha = 1;
     }
 
@@ -984,10 +1020,7 @@ export class SdaChart {
    * solid line; the forecast after "today" (the last keyframe year) is dashed and fainter than the history.
    */
   _paintStrip(g, w, h, lens, timeline, labels, pulse, cardBox = null) {
-    const x0 = w * 0.08;
-    // With a card open in the bottom-right corner (the iPad's place) its column - the card and the speed control above it - stands over the strip's right end: stop before it.
-    let x1 = w * 0.92;
-    if (cardBox && cardBox.y1 > h - STRIP_TOP_FROM_BOTTOM_PX + 15) x1 = Math.min(x1, Math.min(cardBox.x0, cardBox.x1 - SPEED_CONTROL_W_PX) - STRIP_KEEPOUT_GAP_PX);
+    const { x0, x1 } = stripRect(w, h, cardBox);
     const y0 = h - STRIP_TOP_FROM_BOTTOM_PX, y1 = h - STRIP_BOTTOM_FROM_BOTTOM_PX;
     const hist = timeline.history || [];
     const proj = timeline.projection || [];
@@ -1047,7 +1080,7 @@ export class SdaChart {
     g.textAlign = 'right';
     this._text(g, STRIP_SCALE_NOTE, x1, y0 - 6);
     g.textAlign = 'right'; // left of its line: centred, it touched the page title on the iPad (visual check 2026-11-22)
-    // When the strip is short (iPad with a card open) that spot lies under the title's end: then it stands right of the line instead.
+    // When the strip is short (a narrow window) that spot lies under the title's end: then it stands right of the line instead.
     const todayStr = `today ${today}`;
     const titleEnd = title ? x0 + this._textW(g, title.text) : x0;
     const todayW = this._textW(g, todayStr);

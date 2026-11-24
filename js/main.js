@@ -2049,13 +2049,18 @@ async function init() {
   // LADDER.ENABLED is false.
   // The real catalogue (data/sky.json, fetched on the first entry to floor 4 or 5) as dots; both floors show/hide it from their
   // activate()/deactivate(). ActiveSatellites' hand-placed template orbits are hidden while it shows (nothing invented on 4-5).
+  // The Highlight menu's "Your country" follows the menu language (its flag), and rebuilds when the language changes (Sky 23 H3).
+  const realSkyCard = new RealSkyCard({
+    getFlag: () => settingsManager.getLanguageEntry().flag,
+    onLanguage: (fn) => eventBus.on(Events.LANGUAGE_CHANGED, fn),
+  });
   realSkyLayer = new RealSkyLayer({
     scene,
     getCamera: () => (cameraSystem ? cameraSystem.camera : null),
     getViewport: () => ({ w: window.innerWidth, h: window.innerHeight }),
     dateMs: () => sunStorms.dateMs(),
     isGlass: () => GestureHints.isGlass(),
-    card: new RealSkyCard(),
+    card: realSkyCard,
     // Mouse hover on floors 4-5 (lane sky-look-1119): a pointer cursor over a dot that a click would open.
     setCursor: (c) => { const cv = document.getElementById('game-canvas'); if (cv) cv.style.cursor = c; },
     // Floor 4 "fly to a dot" (double-click / double-tap a dot, a search hit, double-click the card's name): the globe turns to it, and
@@ -2063,6 +2068,7 @@ async function init() {
     onFlyTo: (dir) => (cameraSystem ? cameraSystem.ladderTurnEarthDir(dir, { owesReturn: true }) : false),
     hideWhileActive: activeSatellites ? [activeSatellites.group] : [],
   });
+  realSkyCard.attachLayer(realSkyLayer);   // the Highlight menu calls the layer (setHighlight, flyTo, select, setKeepOut)
   // The real Moon on floors 4-5 (owner 2026-11-21): SunLight places it from the ephemeris at the dots' own sky time.
   if (sunLight && typeof sunLight.setSkyClock === 'function') sunLight.setSkyClock(() => realSkyLayer.skyDateMs());
   navcomFloor = new NavcomFloor({
@@ -3137,6 +3143,8 @@ async function init() {
     // F5 (SDA) also suppresses the Earth city/landmark pills under the chart: transient (never persisted), so the
     // 5-key preference owns the resting state on leave/disengage.
     cityLabels,
+    // The Highlight menu's layer: while a highlight is on (floor 4) the city names hide (Sky 23 H3), through the same one switch.
+    realSky: realSkyLayer,
     // Reticle gating (F4/F5 ship-is-icon floors): the controller hides the aiming reticles on floors >= 4 and
     // restores them on <= 3 / disengage. Optional deps, inert while LADDER.ENABLED is false.
     targetReticle,

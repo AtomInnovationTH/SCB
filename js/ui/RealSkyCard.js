@@ -11,6 +11,8 @@
  * @module ui/RealSkyCard
  */
 
+import { buildItems, toHighlight, isMenuId, ID_COUNTRY } from './HighlightItems.js';
+
 export const CLASS_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown', 'starlink'];
 /** The seventh kind (lane sky-skylook-1119, owner 2026-11-19): a working satellite whose name starts with STARLINK. It is not a data class: RealSkyLayer assigns it at load. */
 export const CLS_STARLINK = 6;
@@ -104,6 +106,14 @@ const FLOOR_GLOBE = 4;
 const FLOOR_CHART = 5;
 /** Two clicks or taps on the open object's name within this many ms = "fly to it" (floor 4). */
 const NAME_DOUBLE_MS = 350;
+/** The touch panel's tallest allowed height, px (Sky 23): see `panelPlacement`. */
+export const PANEL_MAX_PX_GLASS = 342;
+/** The Highlight menu's sizes (research doc 2026-11-floor4-highlight.md 2.1): row heights and the list's visible rows, mouse / touch. */
+export const HL_ROW_PX = 24, HL_ROW_PX_GLASS = 44;
+export const HL_LIST_ROW_PX = 18, HL_LIST_ROW_PX_GLASS = 44;
+export const HL_LIST_ROWS = 8, HL_LIST_ROWS_GLASS = 4;
+/** How often the list re-reads where its objects are (behind Earth or not), ms. */
+const HL_TICK_MS = 400;
 
 /**
  * Where the panel sits (plan sky-1116-lsky-card, owner 2026-11-17: "move it clear of Earth"). Measured (tmp/sky-card-probe.mjs):
@@ -121,7 +131,9 @@ const NAME_DOUBLE_MS = 350;
  * @returns {{top:string, bottom:string, maxHeight:string}} CSS values
  */
 export function panelPlacement(glass, floor) {
-  if (glass && (floor === FLOOR_GLOBE || floor === FLOOR_CHART)) return { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: 'calc(100vh - 260px)' };
+  // Sky 23 (Highlight menu, plan sky-1124-highlight): the iPad panel is at most 342 px high (the ISS card's size, the tallest state before the menu), so its top
+  // edge stays at y 670 or lower on a 1024 px screen and clears Earth's rim (13 px at that height); anything taller scrolls inside the panel.
+  if (glass && (floor === FLOOR_GLOBE || floor === FLOOR_CHART)) return { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: `min(${PANEL_MAX_PX_GLASS}px, calc(100vh - 260px))` };
   // Mac floor 4 (lane sky-skylook-1119, owner 2026-11-19: "move the right panel to top right to improve visibility of the object cloud"):
   // the panel's top edge is 12 px from the top. The radio box and the right column (Targets, Target info, NEXT when `+` brings it back; NEXT is gone on floor 4 by default since DECISIONS §78 row 11) that sat there move out of its way (see `SKY_PANEL_TOP_ATTR`).
   // Floor 5 = page 1 of the page row (Sky 19, owner 2026-11-22: "a cleaner layout, remove irrelevant panes"; Sky 20: the card only, see `_place`):
@@ -166,6 +178,9 @@ export function skyPanelDodgePx(doc = typeof document !== 'undefined' ? document
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
+/** The look of the Highlight menu's buttons (the row, the three items, "Off"). */
+const HL_BTN_CSS = 'border:1px solid rgba(160,180,220,0.35);border-radius:4px;cursor:pointer;color:#e8eefc;background:rgba(40,60,100,0.35);touch-action:manipulation;font-size:11px;user-select:none;-webkit-user-select:none';
+
 const PANEL_CSS = [
   'position:fixed', 'right:12px', 'overflow:auto', 'width:272px', 'z-index:36', 'display:none', 'pointer-events:auto',
   'box-sizing:border-box', 'padding:8px 10px', 'border-radius:6px', 'background:rgba(8,12,22,0.82)',
@@ -178,10 +193,26 @@ export class RealSkyCard {
    * @param {object} [deps]
    * @param {Document} [deps.document]
    * @param {function} [deps.isGlass] () => touch device (bigger controls)
+   * @param {function} [deps.getFlag] () => the menu language's flag code ('USA', 'THA' ...): "Your country" in the Highlight menu (main.js passes the settings' language)
+   * @param {function} [deps.onLanguage] (fn) => unsubscribe: fn runs when the menu language changes
+   * @param {function} [deps.now] () => monotonic ms
    */
   constructor(deps = {}) {
     this._doc = deps.document !== undefined ? deps.document : (typeof document !== 'undefined' ? document : null);
     this._isGlass = deps.isGlass || null;           // optional; the layer also calls setLayout() every frame
+    this._getFlag = typeof deps.getFlag === 'function' ? deps.getFlag : null;
+    this._now = typeof deps.now === 'function' ? deps.now : () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    this._layer = null;                             // the RealSkyLayer, through attachLayer (the Highlight menu calls it)
+    this._hlView = 'closed';                        // the Highlight menu: 'closed' (one row) | 'menu' (the three items) | 'list' (an item is on)
+    this._hlExtras = { stages: false, debris: false };   // Your country: "+ stages" / "+ debris" lit too
+    this._hlItems = null;                           // the built items (cache) and what they were built from
+    this._hlItemsKey = null;
+    this._hlStrip = '';                             // the line under the header: the last tapped row's note
+    this._hlHover = '';                             // the note of the row under the pointer (Mac): shown on that line while it is there
+    this._hlTickMs = -Infinity;
+    this._offLanguage = null;
+    this._offHl = null;
+    if (typeof deps.onLanguage === 'function') this._offLanguage = deps.onLanguage(() => this._hlLanguageChanged());
     this._glass = false;
     this._floor = null;
     this._onSearch = null;
@@ -308,12 +339,13 @@ export class RealSkyCard {
     credit.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); this.toggleCredit(); } });
     const fail = el('div', 'display:none;margin-top:7px;color:#ffb06b', 'The sky data could not be loaded.');
     fail.id = 'real-sky-load-failed';
+    const hl = this._hlBuildDom(el);
 
-    root.append(input, msg, fail, card, legend, credit);
+    root.append(input, msg, fail, hl.wrap, card, legend, credit);
     d.body.appendChild(root);
     // A size change the render calls do not see (the full credit wording opened, a late font) moves the panel's bottom too.
     if (typeof ResizeObserver !== 'undefined') { try { this._ro = new ResizeObserver(() => this._syncDodge()); this._ro.observe(root); } catch (_) { this._ro = null; } }
-    Object.assign(this._els, { root, input, msg, card, nameEl, dot, body, credit, legend, legendItems, fail });
+    Object.assign(this._els, { root, input, msg, card, nameEl, dot, body, credit, legend, legendItems, fail, hl });
     // A double-click or double-tap on the object's name turns floor 4's globe to it (two clicks within 350 ms; a click fires for mouse and finger).
     let lastNameClick = -Infinity;
     title.style.cursor = 'pointer';
@@ -331,6 +363,7 @@ export class RealSkyCard {
    * @param {number|null} floor
    */
   setLayout(glass, floor) {
+    this._hlTick();                                 // the list's "behind Earth" tags follow the camera (a few times a second)
     const g = glass === true, f = floor === FLOOR_GLOBE ? FLOOR_GLOBE : (floor === FLOOR_CHART ? FLOOR_CHART : null);
     if (g === this._glass && f === this._floor && this._placed) return;
     this._glass = g;
@@ -354,26 +387,33 @@ export class RealSkyCard {
     const e = this._els;
     if (e.input) e.input.style.display = page1 ? 'none' : '';
     if (e.msg) e.msg.style.display = page1 ? 'none' : '';
-    if (e.card) {   // the card's own top rule and gap separated it from the search box: not needed when it is alone
-      e.card.style.marginTop = page1 ? '0' : '7px';
-      e.card.style.paddingTop = page1 ? '0' : '6px';
-      e.card.style.borderTop = page1 ? 'none' : '1px solid rgba(160,180,220,0.2)';
-    }
+    this._syncCardGap();
     if (page1 && e.input && this._doc && this._doc.activeElement === e.input) e.input.blur();
     this._placed = true;
     this._syncDisplay();
+    this._hlRender(true);
     this._renderLegend();
     this._syncDodge();
+  }
+
+  /** The card's own top rule and gap separate it from what is above it; page 1 shows the card alone, or under the Highlight header when one is on. */
+  _syncCardGap() {
+    const e = this._els;
+    if (!e.card) return;
+    const alone = this._page1() && !this._hlHeadOn;
+    e.card.style.marginTop = alone ? '0' : '7px';
+    e.card.style.paddingTop = alone ? '0' : '6px';
+    e.card.style.borderTop = alone ? 'none' : '1px solid rgba(160,180,220,0.2)';
   }
 
   /** @returns {boolean} the card shows the debris page's card-only form (floor 5) */
   _page1() { return this._floor === FLOOR_CHART; }
 
-  /** The panel's own display: on the globe it shows whenever the card is on; on page 1 only while a dot is picked. */
+  /** The panel's own display: on the globe it shows whenever the card is on; on page 1 only while a dot is picked or a highlight is on (its header and "Off"). */
   _syncDisplay() {
     const root = this._els.root;
     if (!root) return;
-    const want = this._shown && (!this._page1() || !!this._info);
+    const want = this._shown && (!this._page1() || !!this._info || !!this._hlHeadOn);
     const v = want ? 'block' : 'none';
     if (root.style.display !== v) root.style.display = v;
   }
@@ -396,6 +436,7 @@ export class RealSkyCard {
     const o = this._box;
     if ((!o && !b) || (o && b && o.x0 === b.x0 && o.y0 === b.y0 && o.x1 === b.x1 && o.y1 === b.y1)) return;
     this._box = b;
+    if (this._layer && typeof this._layer.setKeepOut === 'function') this._layer.setKeepOut(b);   // the highlight's name boxes keep clear of the panel
   }
 
   /**
@@ -413,7 +454,7 @@ export class RealSkyCard {
       return;
     }
     let lift = SKY_PANEL_GLOBE_LIFT_PX;   // page 1 with no card: the globe's spot
-    if (this._floor === FLOOR_GLOBE || this._info) {
+    if (this._floor === FLOOR_GLOBE || this._info || this._hlHeadOn) {
       const r = typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null;
       lift = Math.round((r && r.height) || 0) + SKY_PANEL_GAP_PX;
     }
@@ -435,7 +476,7 @@ export class RealSkyCard {
     this._measure();
     this._syncLift(de, root);
     // Page 1 shows the panel only with a card open: with none there is nothing to dodge.
-    const on = !!root && this._shown && !this._glass && (this._floor === FLOOR_GLOBE || (this._floor === FLOOR_CHART && !!this._info));
+    const on = !!root && this._shown && !this._glass && (this._floor === FLOOR_GLOBE || (this._floor === FLOOR_CHART && (!!this._info || !!this._hlHeadOn)));
     if (!on) {
       if (this._dodgeOn) { de.removeAttribute(SKY_PANEL_TOP_ATTR); de.style.removeProperty(SKY_PANEL_DY_VAR); this._dodgeOn = false; this._dodgeDy = NaN; }
       return;
@@ -470,7 +511,8 @@ export class RealSkyCard {
     if (!e.root) return;
     const p1 = this._page1();                       // page 1 (Sky 20): the card only: no failure line, key or credit row
     e.fail.style.display = this._loadFailed && !p1 ? 'block' : 'none';
-    e.legend.style.display = this._loadFailed || p1 ? 'none' : 'grid';
+    // Touch: the six-kind key folds while the Highlight menu or a list is open, so the panel stays within its 342 px (research 2.1)
+    e.legend.style.display = this._loadFailed || p1 || (this._glass && this._hlView !== 'closed') ? 'none' : 'grid';
     e.credit.style.display = this._loadFailed || p1 ? 'none' : 'block';
     CLASS_NAMES.forEach((n, i) => {
       const hide = (i === CLS_DEAD || i === CLS_WORKING || i === CLS_STARLINK) && !this._statusJoined;   // Starlink is a working satellite: no status, no Starlink
@@ -544,9 +586,314 @@ export class RealSkyCard {
     c.title = this._creditOpen ? 'Tap to shorten' : 'Tap for the full credit';
   }
 
+  /* ---------------------------------------------------------------- the Highlight menu (Sky 23, lane H3; DECISIONS §95)
+   * One row "Highlight" under the search box; it opens the three items (Famous, Your country, Heaviest leftovers); an item that is on shows its
+   * header (name, count, "Off") and its list; a list row turns the globe to the object and opens its card. The lists come from HighlightItems,
+   * the drawing (fade, rings, names) from the layer's setHighlight. With a card open the list folds to its header; on page 1 only the header and
+   * "Off" show; on touch the six-kind key folds while the menu or a list is open. The panel is 342 px at most on the iPad (`panelPlacement`). */
+
+  /** The layer gives the card its highlight calls (`setHighlight`, `clearHighlight`, `setKeepOut`, `flyTo`, `select`, `rowOf`, `catalogue`, `highlights`). main.js calls this right after building the layer. */
+  attachLayer(layer) {
+    if (this._offHl) { this._offHl(); this._offHl = null; }
+    this._layer = layer || null;
+    if (layer && typeof layer.onHighlightChange === 'function') this._offHl = layer.onHighlightChange((h) => this._hlOnLayer(h));
+    this._hlItems = null;
+    this._hlRender();
+  }
+
+  _hlBuildDom(el) {
+    const mk = (id, css) => { const e = el('div', css); e.id = id; return e; };
+    // a button: a click (mouse or finger) or Enter; never Space (the game's own key), and no focus is left on it
+    const press = (node, fn) => {
+      node.setAttribute('role', 'button');
+      node.setAttribute('tabindex', '0');
+      node.addEventListener('click', (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); fn(); if (typeof node.blur === 'function') node.blur(); });
+      node.addEventListener('keydown', (ev) => { if (ev && ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); fn(); } });
+    };
+    const wrap = mk('real-sky-highlight', 'display:none;margin-top:7px');
+    const btn = mk('real-sky-hl-btn', `display:none;align-items:center;justify-content:space-between;box-sizing:border-box;padding:0 8px;${HL_BTN_CSS}`);
+    press(btn, () => this._hlToggleMenu());
+    const items = mk('real-sky-hl-items', 'display:none;margin-top:3px');
+    const head = mk('real-sky-hl-head', 'display:none;align-items:center;gap:6px');
+    const nameBtn = mk('real-sky-hl-name', 'flex:1;min-width:0;display:flex;align-items:center;box-sizing:border-box;font-size:12px;line-height:15px;font-weight:bold;color:#e8eefc;cursor:pointer;touch-action:manipulation;overflow:hidden;white-space:normal;overflow-wrap:anywhere');
+    press(nameBtn, () => this._hlToggleMenu());
+    const off = mk('real-sky-hl-off', `flex:none;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:0 10px;${HL_BTN_CSS}`);
+    off.textContent = 'Off';
+    off.setAttribute('aria-label', 'Turn the highlight off');
+    press(off, () => this._hlOff());
+    head.append(nameBtn, off);
+    const tag = mk('real-sky-hl-tag', 'display:none;margin-top:2px;font-size:10px;line-height:1.3;color:#8392b3');
+    const strip = mk('real-sky-hl-strip', 'display:none;margin-top:3px;font-size:10px;line-height:1.3;color:#c9d6ef;min-height:13px');
+    const list = mk('real-sky-hl-list', 'display:none;margin-top:3px;overflow-y:auto;overflow-x:hidden;touch-action:pan-y;-webkit-overflow-scrolling:touch');
+    const more = mk('real-sky-hl-more', 'display:none;margin-top:2px;font-size:10px;color:#8392b3');
+    wrap.append(btn, items, head, tag, strip, list, more);
+    return { wrap, btn, items, head, nameBtn, off, tag, strip, list, more, itemEls: [], rowEls: [], listKey: '', itemsKey: '', press };
+  }
+
+  /** The built items for the layer's data and the menu language (cached; rebuilt when the data, the language or the country extras change). */
+  _hlItemList(cat) {
+    const L = this._layer, hl = L && typeof L.highlights === 'function' ? L.highlights() : null;
+    const flag = this._getFlag ? this._getFlag() : null;
+    const key = `${flag}|${this._hlExtras.stages ? 1 : 0}${this._hlExtras.debris ? 1 : 0}`;
+    if (!this._hlItems || this._hlItemsKey !== key || this._hlItemsCat !== cat || this._hlItemsHl !== hl) {
+      this._hlItems = buildItems(cat, hl, flag, this._hlExtras);
+      this._hlItemsKey = key; this._hlItemsCat = cat; this._hlItemsHl = hl;
+    }
+    return this._hlItems;
+  }
+
+  /** The menu's items as built now (tests and the browser probe). */
+  hlItems() {
+    const cat = this._layer && this._layer.catalogue ? this._layer.catalogue() : null;
+    return cat ? this._hlItemList(cat) : [];
+  }
+
+  /** The highlight changed in the layer (set, swapped, cleared, or cleared by leaving the floors). */
+  _hlOnLayer(h) {
+    if (!h) { this._hlView = 'closed'; this._hlStrip = ''; this._hlExtras = { stages: false, debris: false }; }
+    else if (this._hlView === 'closed') this._hlView = 'list';
+    this._hlRender();
+    this._hlTick(true);
+  }
+
+  /** The Highlight row (closed, or an item is on and the menu is asked for) opens or closes the three items. */
+  _hlToggleMenu() {
+    const cur = this._layer && this._layer.highlight ? this._layer.highlight() : null;
+    this._hlView = this._hlView === 'menu' ? (cur ? 'list' : 'closed') : 'menu';
+    this._hlRender();
+  }
+
+  /** Turn an item on (replacing the one that is on). @param {string} id @returns {boolean} */
+  hlPick(id) {
+    const L = this._layer;
+    const cat = L && L.catalogue ? L.catalogue() : null;
+    if (!cat) return false;
+    const cur = L.highlight ? L.highlight() : null;
+    if (cur && cur.id === id) { this._hlView = 'list'; this._hlRender(); return true; }
+    if (id !== ID_COUNTRY || !cur || cur.id !== ID_COUNTRY) this._hlExtras = { stages: false, debris: false };
+    const it = this._hlItemList(cat).find((i) => i.id === id);
+    if (!it) return false;
+    this._hlView = 'list';
+    this._hlStrip = '';
+    L.setHighlight(toHighlight(it));
+    this._hlRender();
+    return true;
+  }
+
+  /** The "Off" button: the normal sky is back. */
+  _hlOff() { if (this._layer && this._layer.clearHighlight) this._layer.clearHighlight(); }
+
+  /** A list row: Your country's "+ stages" / "+ debris" rows add that kind; any other turns the globe to the object (the first of a group) and opens its card. */
+  hlTapRow(row) {
+    const L = this._layer;
+    if (!L || !row) return false;
+    if (row.toggle) {
+      this._hlExtras = { ...this._hlExtras, [row.toggle]: !this._hlExtras[row.toggle] };
+      const cat = L.catalogue ? L.catalogue() : null;
+      const it = cat ? this._hlItemList(cat).find((i) => i.id === ID_COUNTRY) : null;
+      if (it) L.setHighlight(toHighlight(it));        // same id: the sets swap, nothing else moves
+      return true;
+    }
+    if (this._floor !== FLOOR_GLOBE) return false;
+    const i = L.rowOf(row.first);
+    if (i < 0) return false;
+    this._hlStrip = row.sub || '';
+    this.clearSearch();
+    L.select(i);
+    if (L.flyTo) L.flyTo(i);
+    return true;
+  }
+
+  /** The menu language changed: Your country follows it while it is on (and goes off when the new language has no list). */
+  _hlLanguageChanged() {
+    this._hlItems = null;
+    const L = this._layer, cur = L && L.highlight ? L.highlight() : null;
+    if (cur && cur.id === ID_COUNTRY) {
+      const cat = L.catalogue ? L.catalogue() : null;
+      const it = cat ? this._hlItemList(cat).find((i) => i.id === ID_COUNTRY) : null;
+      if (it) L.setHighlight(toHighlight(it)); else L.clearHighlight();
+    }
+    this._hlRender();
+  }
+
+  /** What the highlight menu shows now (tests and the browser probe). */
+  hlState() {
+    const e = this._els.hl;
+    const vis = (n) => !!n && n.style.display !== 'none';
+    if (!e) return { view: this._hlView, wrap: false };
+    return {
+      view: this._hlView, wrap: vis(e.wrap), button: vis(e.btn), buttonText: e.btn.textContent, menu: vis(e.items), head: vis(e.head), headText: e.nameBtn.textContent,
+      tag: vis(e.tag) ? e.tag.textContent : '', strip: vis(e.strip) ? e.strip.textContent : '', list: vis(e.list), more: vis(e.more) ? e.more.textContent : '',
+      offShown: vis(e.off), keyFolded: this._els.legend.style.display === 'none',
+      items: e.itemEls.map((n) => n.textContent),
+      rows: e.rowEls.map((r) => ({ label: r.label, sub: r.sub, state: r.state, tag: r.tagEl.textContent })),
+    };
+  }
+
+  /** The list's rows know where their objects are: "behind Earth, tap to turn" (a few times a second; never per frame). */
+  _hlTick(force) {
+    const e = this._els.hl, L = this._layer;
+    if (!e || !L || typeof L.rowView !== 'function' || e.rowEls.length === 0 || e.list.style.display === 'none') return;
+    const now = this._now();
+    if (!force && now - this._hlTickMs < HL_TICK_MS) return;
+    this._hlTickMs = now;
+    for (const r of e.rowEls) {
+      if (r.toggle) continue;
+      const i = L.rowOf(r.first);
+      const v = i >= 0 ? L.rowView(i) : '';
+      let state = v === 'behind' || v === 'off' || v === 'hidden' ? v : '';
+      // A row of several objects is tagged only when every one of them is in that state ("1,527 working satellites · behind Earth"
+      // read as the whole group; review 11-24). The loop stops at the first object that differs, so a spread group costs a few calls.
+      if (state && r.norads && r.norads.length > 1) {
+        for (const n of r.norads) {
+          const j = L.rowOf(n);
+          if (j >= 0 && L.rowView(j) !== state) { state = ''; break; }
+        }
+      }
+      if (state === r.state) continue;
+      r.state = state;
+      const text = state === 'behind' ? (this._glass ? 'behind Earth, tap to turn' : 'behind Earth')
+        : state === 'off' ? (this._glass ? 'off screen, tap to turn' : 'off screen') : state === 'hidden' ? '(hidden in the key)' : '';
+      r.tagEl.textContent = text;
+      r.el.title = state === 'behind' ? 'behind Earth, tap to turn' : state === 'off' ? 'off screen, tap to turn' : state === 'hidden' ? 'its kind is hidden in the key' : (r.sub || '');
+    }
+  }
+
+  /** Draw the Highlight menu from the layer's state. `fromParent`: the caller redraws the key and the panel's place itself afterwards. */
+  _hlRender(fromParent) {
+    const e = this._els.hl;
+    if (!e) return;
+    const L = this._layer;
+    const cat = L && typeof L.catalogue === 'function' ? L.catalogue() : null;
+    const items = cat ? this._hlItemList(cat) : [];
+    const cur = L && typeof L.highlight === 'function' ? L.highlight() : null;
+    const mine = cur ? items.find((i) => i.id === cur.id) || null : null;
+    const p1 = this._page1(), glass = this._glass, folded = !!this._info;
+    const avail = items.length > 0 && !this._loadFailed;
+    let view = this._hlView;
+    if (cur && view === 'closed') view = 'list';
+    if (!cur && view === 'list') view = 'closed';
+    if (!avail && !cur) view = 'closed';
+    if (p1 && view === 'menu') view = cur ? 'list' : 'closed';
+    this._hlView = view;
+    const headOn = view === 'list' && !!cur;
+    const showBtn = !p1 && avail && view !== 'list';
+    const showItems = !p1 && avail && view === 'menu';
+    const showList = headOn && !p1 && !!mine && !folded;
+    const set = (n, on, kind = 'block') => { const v = on ? kind : 'none'; if (n.style.display !== v) n.style.display = v; };
+    const rowH = `${glass ? HL_ROW_PX_GLASS : HL_ROW_PX}px`;
+    set(e.wrap, showBtn || showItems || headOn);
+    // the Highlight row
+    set(e.btn, showBtn, 'flex');
+    e.btn.style.minHeight = rowH;
+    e.btn.textContent = '';
+    if (showBtn) {
+      const a = this._doc.createElement('span'); a.textContent = 'Highlight';
+      const b = this._doc.createElement('span'); b.style.cssText = 'color:#8392b3;font-size:10px'; b.textContent = view === 'menu' ? '\u25b4' : '\u25be';
+      e.btn.append(a, b);
+    }
+    e.btn.setAttribute('aria-expanded', view === 'menu' ? 'true' : 'false');
+    // the three items
+    set(e.items, showItems);
+    if (showItems) this._hlDrawItems(e, items, cur, rowH);
+    // the header: name, count, "Off"
+    set(e.head, headOn, 'flex');
+    e.head.style.minHeight = rowH;
+    e.off.style.minHeight = glass ? `${HL_ROW_PX_GLASS}px` : '20px';
+    e.off.style.minWidth = glass ? '64px' : '36px';
+    e.nameBtn.style.minHeight = e.head.style.minHeight;
+    if (headOn) {
+      const name = mine ? mine.header : String((cur && (cur.label || cur.id)) || '');
+      const text = mine && !p1 ? `${name} \u25be` : name;
+      if (e.nameBtn.textContent !== text) e.nameBtn.textContent = text;
+      e.nameBtn.style.cursor = mine && !p1 ? 'pointer' : 'default';
+      const honesty = mine ? `${mine.credit} \u00b7 ${mine.honesty}` : (L && L.highlightHonesty ? L.highlightHonesty() : '');
+      e.tag.textContent = honesty;
+    }
+    set(e.tag, headOn && !!e.tag.textContent);
+    // the line under the header: the last tapped row's note (touch rows carry their own note, so it shows only when the list is folded)
+    const stripOn = headOn && !p1 && !!mine && (folded || !glass);   // on the Mac its place is always kept: a line that came and went would move the rows under the pointer
+    e.strip.textContent = stripOn ? (this._hlHover || this._hlStrip) : '';
+    set(e.strip, stripOn);
+    // the list
+    set(e.list, showList);
+    set(e.more, false);
+    if (!showList) this._hlHover = '';
+    if (!headOn && e.listKey) { e.listKey = ''; e.rowEls = []; e.list.textContent = ''; }
+    if (showList) this._hlDrawList(e, mine, glass);
+    if (headOn !== this._hlHeadOn) { this._hlHeadOn = headOn; this._syncCardGap(); this._syncDisplay(); }
+    if (!fromParent) this._renderLegend();
+  }
+
+  _hlDrawItems(e, items, cur, rowH) {
+    const key = `${items.map((i) => `${i.id}:${i.count}:${i.country ? i.country.name : ''}`).join('|')}|${cur ? cur.id : ''}|${rowH}`;
+    if (e.itemsKey === key) return;
+    e.itemsKey = key;
+    e.items.textContent = '';
+    e.itemEls = [];
+    const d = this._doc;
+    for (const it of items) {
+      const row = d.createElement('div');
+      row.id = `real-sky-hl-item-${it.id}`;
+      row.style.cssText = `display:flex;align-items:center;justify-content:space-between;gap:6px;box-sizing:border-box;padding:0 8px;margin-top:2px;min-height:${rowH};${HL_BTN_CSS}`;
+      const a = d.createElement('span'); a.textContent = `${cur && cur.id === it.id ? '\u2713 ' : ''}${it.title}`;
+      const b = d.createElement('span'); b.style.cssText = 'color:#8392b3;font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis'; b.textContent = it.country ? it.country.name : String(it.count);
+      row.append(a, b);
+      e.press(row, () => this.hlPick(it.id));
+      e.items.append(row);
+      e.itemEls.push(row);
+    }
+  }
+
+  _hlDrawList(e, item, glass) {
+    const visible = glass ? HL_LIST_ROWS_GLASS : HL_LIST_ROWS;
+    const rowPx = glass ? HL_LIST_ROW_PX_GLASS : HL_LIST_ROW_PX;
+    const key = `${item.id}|${glass ? 1 : 0}|${item.rows.map((r) => `${r.key}${r.on ? '+' : ''}${r.label}`).join(',')}`;
+    e.list.style.maxHeight = `${visible * rowPx}px`;
+    if (e.listKey !== key) {
+      e.listKey = key;
+      e.list.textContent = '';
+      e.rowEls = [];
+      const d = this._doc;
+      for (const row of item.rows) {
+        const el = d.createElement('div');
+        el.style.cssText = `display:flex;flex-direction:${glass ? 'column' : 'row'};${glass ? 'justify-content:center;' : 'align-items:center;'}box-sizing:border-box;min-height:${rowPx}px;padding:0 6px;border-radius:3px;cursor:pointer;touch-action:manipulation;${glass ? '' : 'line-height:18px;'}`;
+        el.title = row.sub || '';
+        const top = d.createElement('div');
+        top.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0;width:100%';
+        const label = d.createElement('span'); label.style.cssText = 'flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#e8eefc'; label.textContent = row.label;
+        const tagEl = d.createElement('span'); tagEl.style.cssText = 'flex:none;font-size:9px;color:#ffb06b';
+        top.append(label);
+        el.append(top);
+        if (glass) {
+          // touch: the "behind Earth, tap to turn" tag stands above the note (beside the name it squeezed the name down to "1527 work...")
+          tagEl.style.display = 'block';   // its own line, so the note's name is never cut to "biggest: IS..." (empty: no height)
+          const sub = d.createElement('div'); sub.style.cssText = 'font-size:10px;line-height:12px;max-height:24px;color:#8392b3;overflow:hidden;white-space:normal;width:100%';   // two lines at most: the tag and the note
+          const note = d.createElement('span'); note.textContent = row.sub || '';
+          sub.append(tagEl, note);
+          el.append(sub);
+        } else top.append(tagEl);
+        e.press(el, () => this.hlTapRow(row));
+        if (!glass) {
+          // the line under the header takes the hovered row's note; its place is always kept (it never shows or hides on a hover: the rows below would move under the pointer)
+          el.addEventListener('mouseenter', () => { this._hlHover = row.sub || ''; if (this._hlHover) e.strip.textContent = this._hlHover; });
+          el.addEventListener('mouseleave', () => { this._hlHover = ''; e.strip.textContent = this._hlStrip; });
+        }
+        e.list.append(el);
+        e.rowEls.push({ el, tagEl, label: row.label, sub: row.sub || '', first: row.first, norads: row.norads || null, toggle: row.toggle || null, state: '' });
+      }
+    this._hlTickMs = -Infinity;
+    this._hlHeadOn = false;                         // the Highlight header shows (an item is on): page 1 then shows the panel with no card
+    }
+    const more = item.rows.length - visible;
+    if (more > 0) { e.more.textContent = `+ ${more} more below`; e.more.style.display = 'block'; }
+    this._hlTick(true);
+  }
+
   _render() {
     const e = this._els;
     if (!e.root) return;
+    this._hlRender(true);
     this._renderLegend();
     this._renderCredit();
     const i = this._info;

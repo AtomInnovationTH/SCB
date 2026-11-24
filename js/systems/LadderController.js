@@ -268,6 +268,14 @@ export class LadderController {
     this._sfx = deps.sfx || null;
     this._starfield = deps.starfield || null;
     this._cityLabels = deps.cityLabels || null;
+    // Sky 23 (Highlight menu, H3): the real sky layer. While one of its highlights is on, floor 4's city names hide (their pills sat among the
+    // highlight's name boxes); a change of the highlight re-runs the one city-names switch, `_setCityLabelsHidden`, with the floor it last got.
+    this._realSky = deps.realSky || null;
+    this._cityFloor = null;          // the floor `_applyFloorContent` last ran for, null while disengaged
+    this._cityMassBands = false;     // and whether that floor was the SDA chart
+    if (this._realSky && typeof this._realSky.onHighlightChange === 'function') {
+      this._realSky.onHighlightChange(() => this._refreshCityLabels());
+    }
     this._targetReticle = deps.targetReticle || null;
     this._dockingReticle = deps.dockingReticle || null;
     // The PUBLIC key-state map (inputManager.keys; InputManager is never edited). While the turntable is live, held arrows
@@ -990,6 +998,7 @@ export class LadderController {
    * report whether it was: InputManager calls this ONCE before it would command 'esc' and returns on true, so the ride-up is
    * the NEXT Esc. Absent dep / closed pane / disengaged → false. The pane's own close() fires its onOpenChange edge (D10 calm
    * cap + camera inset release): no second signal here. Not a ladder input for adaptHoldoff (no camera flight).
+   * Sky 23: with no pane open, a real-sky highlight that is on is cleared (and the key consumed) as the second thing in this order.
    * @returns {boolean} true when the pane was open and is now closed
    */
   closeTopPane() {
@@ -997,6 +1006,13 @@ export class LadderController {
     const w = this._workbench;
     if (w && w.isOpen && w.isOpen()) {
       if (w.close) w.close();
+      return true;
+    }
+    // Sky 23 (Highlight menu): the next Esc after the drawer ends a real-sky highlight (the normal sky is back); arm piloting and the ride
+    // up stay behind it, so they are the Esc after that.
+    const rs = this._realSky;
+    if (rs && typeof rs.highlight === 'function' && rs.highlight()) {
+      if (typeof rs.clearHighlight === 'function') rs.clearHighlight();
       return true;
     }
     return false;
@@ -1726,6 +1742,8 @@ export class LadderController {
     this._setReticlesHidden(false);
     this._setConstellationsHidden(false);
     // Clear the city/landmark-pill suppression (the 5-key preference decides whether the pills reappear).
+    this._cityFloor = null;                       // disengaged: a highlight change no longer touches the pills
+    this._cityMassBands = false;
     this._setCityLabelsHidden(false);
     if (this._rail && this._rail.hide) this._rail.hide();
     if (this._detailSlider && typeof this._detailSlider.setShown === 'function') this._detailSlider.setShown(false);
@@ -1914,7 +1932,9 @@ export class LadderController {
     // city names far out, never both"): at the hull Earth is a backdrop 2–7 m behind the ship and the pills would land among
     // the hull callout cards. F1 is keyed on FLOOR ID (debrisMode is 'full' on both F1 and F2); F2 keeps the shipped pills
     // (the player's 5-key choice). Same transient gate, restore on leave/disengage; F3/F4 untouched.
-    this._setCityLabelsHidden(massBands || floor === 1);
+    this._cityFloor = floor;
+    this._cityMassBands = massBands;
+    this._refreshCityLabels();
     // F1 (HULL CAM): keyed on FLOOR ID 1, NOT fidelity.debrisMode ('full' on both F1 and F2).
     if (this._hullcam) {
       if (floor === 1) { if (this._hullcam.activate) this._hullcam.activate(); }
@@ -2012,6 +2032,17 @@ export class LadderController {
       }
       this._constellationsPrior = null;
     }
+  }
+
+  /**
+   * @private The ONE city-names switch with the floor it last ran for: hidden on F5's chart, on F1, and on F4 while a real-sky highlight is on
+   * (Sky 23 H3). Always goes through `_setCityLabelsHidden` (never `cityLabels.setSuppressed` directly: a direct call would turn the names
+   * back on under page 1's chart at "Off", and this boolean, which never changed, would not hide them again). Nothing while disengaged.
+   */
+  _refreshCityLabels() {
+    if (this._cityFloor === null) return;
+    const highlightOn = !!(this._realSky && typeof this._realSky.highlight === 'function' && this._realSky.highlight());
+    this._setCityLabelsHidden(this._cityMassBands || this._cityFloor === 1 || (this._cityFloor === 4 && highlightOn));
   }
 
   /**
