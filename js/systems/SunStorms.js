@@ -400,6 +400,9 @@ export class SunStorms {
   /** The game date, ms: the real date of her first start plus the days the ship has lived. NaN before the first start. */
   dateMs() {
     const s = this._state;
+    // Before the first start `skyStartMs` is null, and null + 0 is 0 (1 January 1970), not NaN: training's globe, dots and Moon were drawn
+    // for 1970 instead of the real time the game clock stamps (owner 2026-11-24, Sky 24: "today is full beaver moon, yet moon in sim is not full").
+    if (!Number.isFinite(s.skyStartMs)) return NaN;
     return s.skyStartMs + (Number.isFinite(s.shipDays) ? s.shipDays : 0) * DAY_MS;
   }
 

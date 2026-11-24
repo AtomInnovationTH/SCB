@@ -724,6 +724,10 @@ export class SunLight {
     this._labelTmp = new THREE.Vector3();  // per-label offset temp
     this._sunDirView = new THREE.Vector3(); // sun dir in view space (moon shader)
     this._camQuatInv = new THREE.Quaternion(); // inverse camera quat (moon shader)
+    this._moonRay = new THREE.Vector3();       // Moon -> camera, then in view space (moon shader)
+    this._camWorld = new THREE.Vector3();      // scratch world position (moon shader)
+    this._moonDiscQ = new THREE.Quaternion();  // the Moon's own ray onto the view axis (moon shader)
+    this._viewZ = new THREE.Vector3(0, 0, 1);  // toward the viewer in view space
 
     // The real Moon on floors 4-5 (owner 2026-11-21, "Hide planets, real Moon"; see _updateMoon / _placeRealMoon).
     this._skyClock = null;                 // () => the dots' sky date, ms (main.js: realSkyLayer.skyDateMs); null = no real Moon
@@ -914,6 +918,14 @@ export class SunLight {
       this.moonMesh.quaternion.copy(camera.quaternion);
       this._camQuatInv.copy(camera.quaternion).invert();
       this._sunDirView.copy(this._moonRealOn ? this._realSunDir : this.sunDirection).applyQuaternion(this._camQuatInv);
+      // The shader's normal assumes the line of sight is the view axis; a Moon off the screen's centre (up to ~24° on floor 4) is seen
+      // along its own ray. Turn the Sun by the small rotation that takes the Moon's toward-camera ray onto +Z, so the lit part is the one
+      // seen from here and does not change as the view turns (owner 2026-11-24, Sky 24: "fullness seems to change with rotation of view").
+      this._moonRay.setFromMatrixPosition(camera.matrixWorld).sub(this._camWorld.setFromMatrixPosition(this.moonMesh.matrixWorld));
+      if (this._moonRay.lengthSq() > 0) {
+        this._moonRay.normalize().applyQuaternion(this._camQuatInv);
+        this._sunDirView.applyQuaternion(this._moonDiscQ.setFromUnitVectors(this._moonRay, this._viewZ));
+      }
       this._moonMaterial.uniforms.uSunDirView.value.copy(this._sunDirView);
     };
     this.scene.add(this.moonMesh);
