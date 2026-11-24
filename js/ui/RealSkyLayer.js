@@ -37,7 +37,7 @@ import { LOOK_IDS, buildLook, ringTextureBytes, dotTextureBytes, lookFromSearch,
 import { devGlareB } from '../core/DevHost.js';
 import {
   FADE_DEFAULT, NAMES_MAX, NAMES_MAX_GLASS, RING_CAP, HL_RING_PX, HL_RING_PX_GLASS, NAME_BOX_H, NAME_GAP, nameWidthPx, linearRgb, greyLinear, fadedHex,
-  maskOf, litIndexes, groupIndexOf, fillHighlightColours, rowColourInto, placeNames, sideOffset,
+  maskOf, litIndexes, groupIndexOf, fillHighlightColours, rowColourInto, placeNames, sideOffset, smoothSpeed, readableNext,
 } from './SkyHighlight.js';
 
 export { CLASS_COLORS };
@@ -286,6 +286,10 @@ export class RealSkyLayer {
     this._hlHold = new Uint8Array(0); this._hlSince = new Float64Array(0); this._hlSlideSide = new Int8Array(0);   // name hold and side slide (see _hlFrame)
     this._hlSlideT0 = new Float64Array(0); this._hlDrawDx = new Float32Array(0); this._hlDrawDy = new Float32Array(0);
     this._hlFromDx = new Float32Array(0); this._hlFromDy = new Float32Array(0);
+    // names only while readable (§103 row 4): each name's pin speed on screen from its own motion, and whether it may show
+    this._hlPrev = new Float32Array(0); this._hlPrevOk = new Uint8Array(0); this._hlSpd = new Float32Array(0);
+    this._hlReadable = new Uint8Array(0); this._hlHidAt = new Float64Array(0); this._hlPlSx = new Float32Array(0); this._hlPlSy = new Float32Array(0);
+    this._hlSpdT = -1;                  // wall ms of the last speed sample (-1 = none: off the globe or just built)
     this._hlOff = { x: 0, y: 0 }; this._hlOff2 = { x: 0, y: 0 };
     this._hlRingSx = new Float32Array(RING_CAP); this._hlRingSy = new Float32Array(RING_CAP);
     this._hlLitBox = { n: 0, a: new Float32Array(4 * RING_CAP) };   // the name boxes and rings drawn this frame (x, y, w, h each), for the city names to keep clear of (`litBoxes`)
@@ -1496,6 +1500,9 @@ export class RealSkyLayer {
     this._hlSlideSide = new Int8Array(nn).fill(-1);  // the side the drawn offset is heading for
     this._hlSlideT0 = new Float64Array(nn); this._hlDrawDx = new Float32Array(nn); this._hlDrawDy = new Float32Array(nn);
     this._hlFromDx = new Float32Array(nn); this._hlFromDy = new Float32Array(nn);
+    this._hlPrev = new Float32Array(3 * nn); this._hlPrevOk = new Uint8Array(nn); this._hlSpd = new Float32Array(nn).fill(-1);
+    this._hlReadable = new Uint8Array(nn).fill(1); this._hlHidAt = new Float64Array(nn); this._hlPlSx = new Float32Array(nn); this._hlPlSy = new Float32Array(nn);
+    this._hlSpdT = -1;
     for (let k = 0; k < nn; k++) this._hlWid[k] = nameWidthPx(text[k]);
     this._hlLitBox.n = 0;
     if (this._hlLitBox.a.length < 4 * (RING_CAP + 2 * nn)) this._hlLitBox.a = new Float32Array(4 * (RING_CAP + 2 * nn));
@@ -1570,6 +1577,35 @@ export class RealSkyLayer {
     return true;
   }
 
+  /**
+   * Names only while readable (§103 row 4): each name's pin speed on screen, from the object's OWN motion (this frame's position and last frame's,
+   * both through THIS frame's camera, so a drag or a zoom ease adds nothing), CSS px per wall second, smoothed over about 0.3 s; then whether the
+   * name may show (hidden above 80, back below 50 after 1 s). A frame with no usable sample leaves every state as it was. No allocation.
+   * @param {ArrayLike<number>} m view-projection elements @param {number} W @param {number} H @param {number} now wall ms
+   */
+  _hlReadFrame(m, W, H, now) {
+    const nn = this._hlNameRows.length, pos = this._pos, prev = this._hlPrev, ok = this._hlPrevOk, spd = this._hlSpd, rd = this._hlReadable;
+    const dtS = this._hlSpdT >= 0 ? (now - this._hlSpdT) / 1000 : 0;
+    this._hlSpdT = now;
+    const sample = dtS > 0 && dtS <= 0.5;   // a longer gap (a sleeping tab) is no speed
+    for (let k = 0; k < nn; k++) {
+      const i = this._hlNameRows[k], o = 3 * k, px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
+      if (sample && ok[k] === 1) {
+        const w1 = m[3] * px + m[7] * py + m[11] * pz + m[15], qx = prev[o], qy = prev[o + 1], qz = prev[o + 2];
+        const w0 = m[3] * qx + m[7] * qy + m[11] * qz + m[15];
+        if (w1 > 1e-9 && w0 > 1e-9) {
+          const x1 = ((m[0] * px + m[4] * py + m[8] * pz + m[12]) / w1 * 0.5 + 0.5) * W, y1 = (-(m[1] * px + m[5] * py + m[9] * pz + m[13]) / w1 * 0.5 + 0.5) * H;
+          const x0 = ((m[0] * qx + m[4] * qy + m[8] * qz + m[12]) / w0 * 0.5 + 0.5) * W, y0 = (-(m[1] * qx + m[5] * qy + m[9] * qz + m[13]) / w0 * 0.5 + 0.5) * H;
+          spd[k] = smoothSpeed(spd[k], Math.hypot(x1 - x0, y1 - y0) / dtS, dtS);
+          const was = rd[k] === 1, nowOk = readableNext(was, spd[k], now - this._hlHidAt[k]);
+          if (was && !nowOk) this._hlHidAt[k] = now;
+          rd[k] = nowOk ? 1 : 0;
+        }
+      }
+      prev[o] = px; prev[o + 1] = py; prev[o + 2] = pz; ok[k] = 1;
+    }
+  }
+
   /** Once per frame on floor 4: the overlay, then rings and names. */
   _hlFrame(t) {
     const h = this._hl;
@@ -1580,21 +1616,24 @@ export class RealSkyLayer {
     if (!cam || !this._doc || !this._doc.body || !this._doc.createElement) { this._hlDomHide(); return; }
     const v = this._getViewport(), W = v.w, H = v.h, m = this._vp.elements, cp = cam.position;
     const glass = this._isGlass(), ringPx = glass ? HL_RING_PX_GLASS : HL_RING_PX;
+    const now = this._now(), hold = this._hlHold, since = this._hlSince;
+    this._hlReadFrame(m, W, H, now);
     // names first (the order of `names` is the priority); they are the rings too when the set is over RING_CAP
-    const nn = this._hlNameRows.length, nsx = this._hlSx, nsy = this._hlSy;
+    const nn = this._hlNameRows.length, nsx = this._hlSx, nsy = this._hlSy, psx = this._hlPlSx, psy = this._hlPlSy, rd = this._hlReadable;
     for (let k = 0; k < nn; k++) {
       if (this._hlProject(this._hlNameRows[k], m, cp, W, H)) { nsx[k] = this._hlScr.x; nsy[k] = this._hlScr.y; } else { nsx[k] = NaN; nsy[k] = NaN; }
+      // a name too fast to read is not placed (it neither takes a slot nor blocks another); its ring stays
+      if (rd[k] === 1) { psx[k] = nsx[k]; psy[k] = nsy[k]; } else { psx[k] = NaN; psy[k] = NaN; }
     }
     let po = this._hlPlace;
     if (!po) po = this._hlPlace = { max: 0, boxH: NAME_BOX_H, ringPx: 0, vw: 0, vh: 0, keepOut: null, snap: 1, side: null };
     po.max = glass ? NAMES_MAX_GLASS : NAMES_MAX; po.ringPx = ringPx; po.vw = W; po.vh = H; po.keepOut = this._keepOut;
     const snap = po.snap = this._snap(); po.side = this._hlSide;
-    // a name shown less than HL_HOLD_MS ago keeps its place in the cap (wall time, not sky time)
-    const now = this._now(), hold = this._hlHold, since = this._hlSince;
+    // a name shown less than HL_HOLD_MS ago keeps its place in the cap (wall time, not sky time); only a readable name is held
     po.keepOut2 = this._clockKeepOut(now);   // the time buttons' box, read from the page (they move: top right today)
-    for (let k = 0; k < nn; k++) hold[k] = since[k] >= 0 && now - since[k] < HL_HOLD_MS ? 1 : 0;
+    for (let k = 0; k < nn; k++) hold[k] = rd[k] === 1 && since[k] >= 0 && now - since[k] < HL_HOLD_MS ? 1 : 0;
     po.hold = hold;
-    placeNames(nn, nsx, nsy, this._hlWid, po, this._hlBoxX, this._hlBoxY, this._hlBoxOk);
+    placeNames(nn, psx, psy, this._hlWid, po, this._hlBoxX, this._hlBoxY, this._hlBoxOk);
     // rings
     const lit = this._hlLit, all = lit.length <= RING_CAP;
     const rn = all ? lit.length : nn, rsx = all ? this._hlRingSx : nsx, rsy = all ? this._hlRingSy : nsy;
@@ -1605,7 +1644,7 @@ export class RealSkyLayer {
     }
     for (let k = 0; k < rn; k++) {
       const row = all ? lit[k] : this._hlNameRows[k];
-      const on = rsx[k] === rsx[k] && (all || this._hlBoxOk[k] === 1);
+      const on = rsx[k] === rsx[k] && (all || this._hlBoxOk[k] === 1 || rd[k] !== 1);   // over the cap a ring follows its name; a too-fast name keeps its ring (the ring always shows)
       this._hlRingAt(k, on, row, rsx[k], rsy[k], ringPx);
       if (on) this._hlLitPush(rsx[k] - ringPx / 2, rsy[k] - ringPx / 2, ringPx, ringPx);
     }
@@ -1721,6 +1760,7 @@ export class RealSkyLayer {
   /** Hide every ring and name box (another floor, page 1, Off). */
   _hlDomHide() {
     this._hlLitBox.n = 0;
+    this._hlSpdT = -1;      // off the globe: the speed clock restarts (no sample across the gap)
     if (!this._hlDomOn) return;
     this._hlSince.fill(-1); this._hlSlideSide.fill(-1);   // hidden at once: a name that comes back is new (no hold, no slide)
     for (let k = 0; k < this._hlRingEls.length; k++) { const s = this._hlRingShown[k]; if (s && s.on) { hlHideNow(this._hlRingEls[k]); s.on = false; } }

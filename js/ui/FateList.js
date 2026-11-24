@@ -37,8 +37,8 @@ export const ROW_PX_GLASS = 44;
 export const ROW_PX_DESKTOP = 28;
 /** Real-time ms between rebuilds while open (gas, mass and stock change while she thinks). */
 export const REFRESH_MS = 1000;
-/** Sits exactly where the where-next list sits (bottom centre, never past the top HUD strip). */
-export const BOTTOM_PX = 164;
+/** Sits exactly where the where-next list sits (bottom centre, never past the top HUD strip). 208 since Sky 31 (the page dots and the FLY THERE chip stand 44 px higher: PageRow DOTS_BOTTOM_PX). */
+export const BOTTOM_PX = 208;
 export const WIDTH_PX = 580;
 export const TOP_CLEAR_PX = 280;
 export const MAX_HEIGHT_CSS = `calc(100vh - ${BOTTOM_PX + TOP_CLEAR_PX}px)`;

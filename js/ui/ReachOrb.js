@@ -26,6 +26,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { StorageKeys } from '../core/StorageKeys.js';
 import { envelope } from '../entities/ReachabilityModel.js';
 
 /** Envelope recompute throttle (ms), ~2 Hz; budget ΔV changes bypass it. */
@@ -41,13 +42,19 @@ export class ReachOrb {
   /**
    * @param {object} [deps]
    * @param {function} [deps.now] - monotonic ms clock (tests); default performance.now
+   * @param {Storage|null} [deps.storage] - where the on/off switch is saved (tests); default localStorage
    */
   constructor(deps = {}) {
     this._now = deps.now || _nowMs;
+    this._storage = deps.storage !== undefined ? deps.storage : (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (_) { return null; } })();
     this._canvas = null;
     this._ctx2d = null;
     this._built = false;
     this._visible = false;
+    // The "reach" tick box (owner 2026-11-24, DECISIONS §103 row 5): on by default, saved across visits ('0' = off). Off only stops the PAINTING:
+    // the envelope is still computed every frame, because the card a click on `You` opens reads her reach from it.
+    this._enabled = true;
+    try { if (this._storage && this._storage.getItem(StorageKeys.REACH_BAND) === '0') this._enabled = false; } catch (_) { /* unreadable = on */ }
     this._env = null;           // cached ReachabilityModel.envelope() result
     this._envBudgetDv = null;   // budget.deltaV the cache was computed with
     this._envAtMs = -Infinity;  // when the cache was computed
@@ -55,6 +62,23 @@ export class ReachOrb {
 
   isVisible() { return this._visible; }
 
+  /** The "reach" box is ticked: the band and its two rings are drawn (when the floor shows the orb). */
+  isEnabled() { return this._enabled; }
+
+  /**
+   * Tick or untick the "reach" box. The band fades with the canvas (0.3 s); saved. Her reach numbers keep coming (the envelope is not paused).
+   * @param {boolean} on
+   */
+  setEnabled(on) {
+    const v = on !== false;
+    if (v === this._enabled) return;
+    this._enabled = v;
+    try { if (this._storage) this._storage.setItem(StorageKeys.REACH_BAND, v ? '1' : '0'); } catch (_) { /* private mode: not saved */ }
+    if (this._canvas) {
+      if (v && this._ctx2d) this._ctx2d.clearRect(0, 0, this._canvas.width, this._canvas.height);   // the next frame repaints; no stale ring flashes in
+      this._canvas.style.opacity = v && this._visible ? '1' : '0';
+    }
+  }
   /**
    * Orthonormal basis of the player's orbital plane. e1 points along the player's position (the band starts "under"
    * the ship), e2 completes the plane, normal = normalize(pos × vel). Degenerate pos ∥ vel (or missing vel) falls
@@ -146,7 +170,7 @@ export class ReachOrb {
     this._ctx2d = canvas.getContext ? canvas.getContext('2d') : null;
   }
 
-  show() { this._build(); this._visible = true; if (this._canvas) this._canvas.style.opacity = '1'; }
+  show() { this._build(); this._visible = true; if (this._canvas) this._canvas.style.opacity = this._enabled ? '1' : '0'; }
 
   hide() {
     this._visible = false;
@@ -199,7 +223,7 @@ export class ReachOrb {
   _paint(min, max, caption) {
     const canvas = this._canvas;
     const g = this._ctx2d;
-    if (!canvas || !g || !this._visible) return;
+    if (!canvas || !g || !this._visible || !this._enabled) return;   // unticked: nothing is painted (the canvas fades out holding its last frame)
     const w = (typeof window !== 'undefined') ? window.innerWidth : canvas.width;
     const h = (typeof window !== 'undefined') ? window.innerHeight : canvas.height;
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }

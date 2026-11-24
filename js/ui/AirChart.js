@@ -4,12 +4,13 @@
  *
  * Height on the vertical axis (100 km at the bottom, 900 at the top, a tick every 100 km), air density on a log horizontal axis (kg per
  * cubic metre). Four curves at the chosen Sun level: the whole air (bold, off-white), oxygen atoms, nitrogen (N2), helium; the whole
- * air at the other Sun levels as faint lines; today's whole air as a dashed line whenever it is not the chosen level. Four buttons:
- * Quiet Sun, Average Sun, Busy Sun, Today. A line at her height. A footer that says the gas split is modelled.
+ * air at the other two Sun levels as faint lines; today's whole air as a dashed line when the game has a date. Three buttons:
+ * Quiet Sun, Average Sun, Busy Sun (Sky 31, DECISIONS §103 row 7: no "Today" button, no "Other Sun levels" key line, no "Training: average Sun" note and no footer;
+ * Average Sun is down on arrival). A line at her height.
  *
  * Built like SdaChart: a full-screen 2D canvas, painted only when its frame signature changes, constructible in Node (no DOM: `render`
  * still computes and returns the frame, `painted` is false). Unlike SdaChart it has its own opaque dark backdrop (a container div), so
- * nothing behind it shows through, and four real <button>s for the Sun level (44 px or taller, touch-friendly).
+ * nothing behind it shows through, and three real <button>s for the Sun level (44 px or taller, touch-friendly).
  *
  * `buildFrame(model, wPx, hPx)` is pure: everything drawn is in its result, so tests read the frame instead of pixels.
  *
@@ -22,9 +23,9 @@ import { totalDensity, gasDensity, oxygenAtomsDensity, ROW0_KM, ROW_TOP_KM, LEVE
 import { DOTS_BOTTOM_PX, DOT_TARGET_PX, TITLE_TOP_PX, TITLE_H_PX } from './PageRow.js';
 
 /**
- * What page 2 keeps clear (CSS px; the dots measured 2026-11-21 at 1728x1117 and 1366x1024). The page row's dots stand at the bottom
- * (hit boxes from DOTS_BOTTOM_PX up to DOTS_BOTTOM_PX + DOT_TARGET_PX from the bottom edge), so nothing of the chart may reach below
- * `h - PAGE_ROW_CLEAR_PX` (the x axis title included). Sky 20 (owner 2026-11-23): the page title now stands at the TOP centre (PageRow
+ * What page 2 keeps clear (CSS px). The page row's dots stand at the bottom (hit boxes from DOTS_BOTTOM_PX up to DOTS_BOTTOM_PX + DOT_TARGET_PX from the bottom edge: h-148..h-100 since
+ * Sky 31, the same height on the globe, page 1 and page 2), so nothing of the chart may reach below
+ * `h - PAGE_ROW_CLEAR_PX` (the x axis title included; the footer that stood below the dots is gone, §103 row 7). Sky 20 (owner 2026-11-23): the page title now stands at the TOP centre (PageRow
  * TITLE_TOP_PX, TITLE_H_PX tall) and the time-speed panel is not on this page, so the chart has no heading of its own, its subtitle and
  * Sun buttons move up under the title, and the plot is centred on the screen with a key on its left and the Sun words on its right.
  */
@@ -35,17 +36,20 @@ const Y_LABEL_W = 6 * 13 * 0.6 + 8;
 export const SIDE_W = 250;
 export const SIDE_GAP = 24;
 
-/** The four buttons, left to right. */
+/** The three buttons, left to right (Sky 31: "Today" is gone; today's Sun stays as the dashed line and its words when the game has a date). */
 export const SUN_BUTTONS = Object.freeze([
   { id: 'low', label: 'Quiet Sun' },
   { id: 'mean', label: 'Average Sun' },
   { id: 'high', label: 'Busy Sun' },
-  { id: 'today', label: 'Today' },
 ]);
+/** The button that is down when the page opens. */
+export const DEFAULT_SUN_MODE = 'mean';
 /** Words for each table key (also the top-of-chart labels of the whole-air lines). */
 export const SUN_WORDS = Object.freeze({ low: 'Quiet Sun', mean: 'Average Sun', high: 'Busy Sun' });
-/** The footer, plain text, no link (§56 row 2). */
-export const AIR_FOOTER = 'Modelled, fitted to satellite data (NRLMSISE-00, ECSS-E-ST-10-04C tables)';
+/*
+ * The page's footer is gone (owner 2026-11-24 22:10Z, DECISIONS §103 row 7: "remove modeled..."). Its words, kept here as the source note: "Modelled, fitted to satellite data
+ * (NRLMSISE-00, ECSS-E-ST-10-04C tables)" (plain text, no link, §56 row 2).
+ */
 export const AIR_TITLE = 'Air by height';
 export const AIR_SUBTITLE = 'How thick the air is from 100 to 900 km, for a quiet, an average and a busy Sun';
 /** The gas curves, drawn over the whole air: key in AirGases, words, colour (calm; the words carry the meaning too), dash (nitrogen is dashed so it shows where it runs under oxygen). */
@@ -118,7 +122,6 @@ export function layoutChart(wPx, hPx) {
     plot: { x0, x1, y0, y1 },
     panel: { x: left, y: y0, w: SIDE_W },                 // the line key, left of the height labels
     panelR: { x: x1 + SIDE_GAP, y: y0, w: SIDE_W },       // today's Sun and a storm, right of the plot
-    footerY: hPx - 18,
     labelBaseY: y0 - 8,
     xTickY: y1 + 18,
     xTitleY: y1 + 40,
@@ -286,9 +289,9 @@ export function placeEdgeMarks(geom, ship, model, measure) {
 /**
  * Everything the chart draws for a model and a screen size.
  * @param {object} model what AirPage works out:
- *   mode 'low'|'mean'|'high'|'today'; curveLevel 'low'|'mean'|'high'|F10.7 number (the chosen curves); todayLevel (the same, for today);
- *   todayLine, todaySub (plain words), stormLine (string|null); shipAltKm (number|null); hereLines (strings about the air at her height,
- *   optional); fieldBandsKm ([[lo,hi],...], optional); stationKm (number, optional)
+ *   mode 'low'|'mean'|'high'; curveLevel 'low'|'mean'|'high' (the chosen curves); todayLevel (a level or F10.7 number; null when the game has no date, as in training:
+ *   then there is no dashed line, no "= today" and no today words); todayLine, todaySub (plain words; '' / null when there is no date), stormLine (string|null);
+ *   shipAltKm (number|null); hereLines (strings about the air at her height, optional); fieldBandsKm ([[lo,hi],...], optional); stationKm (number, optional)
  * @param {number} wPx @param {number} hPx
  * @param {(s:string, px:number)=>number} [measure] text width (default: an estimate)
  */
@@ -296,6 +299,7 @@ export function buildFrame(model, wPx, hPx, measure = approxWidth) {
   const geom = layoutChart(wPx, hPx);
   const mode = model.mode;
   const buttons = geom.buttons.map((b) => ({ ...b, active: b.id === mode }));
+  const hasToday = model.todayLevel !== null && model.todayLevel !== undefined;
 
   // The chosen curves: whole air (bold) and the three gases.
   const curves = CURVES.map((c) => ({
@@ -303,36 +307,28 @@ export function buildFrame(model, wPx, hPx, measure = approxWidth) {
     pts: curvePoints(geom, c.id, model.curveLevel),
   }));
 
-  // The whole air at other Sun levels, faint; today's as a dashed line when it is not the chosen one.
-  const faintKeys = mode === 'today' ? ['low', 'mean', 'high'] : ['low', 'mean', 'high'].filter((k) => k !== mode);
+  // The whole air at the other two Sun levels, faint; today's as a dashed line when the game has a date.
+  const faintKeys = ['low', 'mean', 'high'].filter((k) => k !== mode);
   const faint = faintKeys.map((k) => ({ id: `faint-${k}`, label: SUN_WORDS[k], level: k, pts: curvePoints(geom, 'total', k) }));
-  const todayDashed = mode === 'today' ? null
-    : { id: 'today-dashed', label: 'Today', level: model.todayLevel, pts: curvePoints(geom, 'total', model.todayLevel) };
+  const todayDashed = hasToday
+    ? { id: 'today-dashed', label: 'Today', level: model.todayLevel, pts: curvePoints(geom, 'total', model.todayLevel) }
+    : null;
 
   // Labels above the plot, at the 900 km end of each whole-air line. When today's Sun IS one of the three levels, that level gets ONE
   // label ("Average Sun = today"), never a "Today" label on top of the level's own (the faint line under the bold one has no label either).
   const topLabels = [];
   const topOf = (pts) => pts[pts.length - 1][0];
-  const todayKey = sunKeyOf(model.todayLevel);
+  const todayKey = hasToday ? sunKeyOf(model.todayLevel) : null;
   const todayWord = (k) => (todayKey === k ? `${SUN_WORDS[k]} = today` : SUN_WORDS[k]);
   const bold = curves[0];
-  if (mode === 'today') {
-    const text = todayKey ? todayWord(todayKey) : 'Today';
-    for (const f of faint) {
-      if (f.level === todayKey) continue;
-      topLabels.push({ id: f.id, text: f.label, x: topOf(f.pts), w: measure(f.label, SIZE.small) + 6, bold: false });
-    }
-    topLabels.push({ id: 'chosen', text, x: topOf(bold.pts), w: measure(text, SIZE.small) + 6, bold: true });
-  } else {
-    for (const f of faint) {
-      const text = todayWord(f.level);
-      topLabels.push({ id: f.id, text, x: topOf(f.pts), w: measure(text, SIZE.small) + 6, bold: false });
-    }
-    const text = todayWord(mode);
-    topLabels.push({ id: 'chosen', text, x: topOf(bold.pts), w: measure(text, SIZE.small) + 6, bold: true });
-    if (todayDashed && !todayKey) {
-      topLabels.push({ id: todayDashed.id, text: 'Today', x: topOf(todayDashed.pts), w: measure('Today', SIZE.small) + 6, bold: false });
-    }
+  for (const f of faint) {
+    const text = todayWord(f.level);
+    topLabels.push({ id: f.id, text, x: topOf(f.pts), w: measure(text, SIZE.small) + 6, bold: false });
+  }
+  const chosenText = todayWord(mode);
+  topLabels.push({ id: 'chosen', text: chosenText, x: topOf(bold.pts), w: measure(chosenText, SIZE.small) + 6, bold: true });
+  if (todayDashed && !todayKey) {
+    topLabels.push({ id: todayDashed.id, text: 'Today', x: topOf(todayDashed.pts), w: measure('Today', SIZE.small) + 6, bold: false });
   }
   const topPlaced = layoutTopLabels(topLabels);
 
@@ -356,31 +352,30 @@ export function buildFrame(model, wPx, hPx, measure = approxWidth) {
   const xTicks = [];
   for (let e = X_MIN_EXP; e <= X_MAX_EXP; e++) xTicks.push({ exp: e, x: xOfDensity(geom, Math.pow(10, e)), text: decadeLabel(e) });
 
-  // The side panel: what the lines are, then today's Sun, then a storm.
+  // The side panel: what the lines are, then today's Sun, then a storm. (No "Other Sun levels" key line since Sky 31, §103 row 7: the faint lines carry their own words above the plot.)
   const legend = [
     { id: 'total', text: 'All the air', color: OFF_WHITE, style: 'bold' },
     { id: 'nO', text: 'Oxygen atoms', color: CURVES[1].color, style: 'solid' },
     { id: 'nN2', text: 'Nitrogen', color: CURVES[2].color, style: 'solid', dash: CURVES[2].dash },
     { id: 'nHe', text: 'Helium', color: CURVES[3].color, style: 'solid' },
-    { id: 'faint', text: 'Other Sun levels', color: OFF_WHITE, style: 'faint' },
   ];
   if (todayDashed) legend.push({ id: 'today-dashed', text: 'Today', color: OFF_WHITE, style: 'dashed' });
   const textW = geom.panel.w;
   const paraLines = (s, px) => wrapText(s, textW, (t) => measure(t, px));
   const notes = [];
-  notes.push({ id: 'today', lines: paraLines(model.todayLine, SIZE.body), px: SIZE.body, color: OFF_WHITE });
+  if (model.todayLine) notes.push({ id: 'today', lines: paraLines(model.todayLine, SIZE.body), px: SIZE.body, color: OFF_WHITE });
   if (model.todaySub) notes.push({ id: 'today-sub', lines: paraLines(model.todaySub, SIZE.small), px: SIZE.small, color: TEXT_DIM });
   if (model.stormLine) notes.push({ id: 'storm', lines: paraLines(model.stormLine, SIZE.body), px: SIZE.body, color: VisualLaw.COLORS.CAUTION });
 
   const sig = [
-    mode, String(model.curveLevel), String(model.todayLevel), model.todayLine, model.todaySub || '', model.stormLine || '',
+    mode, String(model.curveLevel), String(model.todayLevel), model.todayLine || '', model.todaySub || '', model.stormLine || '',
     ship ? Math.round(ship.altKm) : '-', `${wPx}x${hPx}`,
     ship ? ship.readout.map((p) => p.join(' ')).join('/') : '', JSON.stringify(model.fieldBandsKm || null), String(model.stationKm ?? '-'),
   ].join('|');
 
   return {
     geom, mode, buttons, curves, faint, todayDashed, topLabels: topPlaced, ship, marks, yTicks, xTicks, legend, notes,
-    title: AIR_TITLE, subtitle: AIR_SUBTITLE, footer: AIR_FOOTER,
+    title: AIR_TITLE, subtitle: AIR_SUBTITLE,
     xTitle: 'Air density, kg per cubic metre (log scale: each step to the right is 10 times thicker)',
     sig,
   };
@@ -388,7 +383,7 @@ export function buildFrame(model, wPx, hPx, measure = approxWidth) {
 
 export class AirChart {
   /**
-   * @param {{onMode?:(id:string)=>void, fontEpoch?:object, parent?:HTMLElement}} [deps] `onMode` is called with 'low'|'mean'|'high'|'today' when a
+   * @param {{onMode?:(id:string)=>void, fontEpoch?:object, parent?:HTMLElement}} [deps] `onMode` is called with 'low'|'mean'|'high' when a
    *   button is pressed; `fontEpoch` stamps the signature so a chart painted before the faces settle repaints once; `parent` (default body).
    */
   constructor(deps = {}) {
@@ -590,7 +585,6 @@ export class AirChart {
       const mid = py - 5;
       g.beginPath(); g.moveTo(panel.x, mid); g.lineTo(panel.x + 44, mid);
       if (e.style === 'bold') { g.strokeStyle = e.color; g.lineWidth = 3.5; g.setLineDash([]); }
-      else if (e.style === 'faint') { g.strokeStyle = FAINT_COLOR; g.lineWidth = FAINT_WIDTH; g.setLineDash([]); }
       else if (e.style === 'dashed') { g.strokeStyle = 'rgba(238, 242, 247, 0.85)'; g.lineWidth = 2; g.setLineDash([7, 5]); }
       else { g.strokeStyle = e.color; g.lineWidth = 2.25; g.setLineDash(e.dash || []); }
       g.stroke(); g.setLineDash([]);
@@ -602,8 +596,6 @@ export class AirChart {
       for (const line of n.lines) { T(line, panelR.x, py, n.px, n.color); py += Math.round(n.px * 1.4); }
       py += 10;
     }
-
-    T(f.footer, f.geom.left, f.geom.footerY, SIZE.small, TEXT_DIM);
   }
 
   dispose() {

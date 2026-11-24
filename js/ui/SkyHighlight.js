@@ -31,6 +31,33 @@ export const NAME_GAP = 6;
 /** The hover label's width rule (RealSkyLayer `_placeHover`): 14 px of padding and 7.5 px a character, at most 260. */
 export const nameWidthPx = (text) => Math.min(260, 14 + String(text).length * 7.5);
 
+/**
+ * A name shows only while its pin is slow enough to read (owner 2026-11-24 22:03Z, DECISIONS §103 row 4). The speed is the pin's own motion on
+ * screen in CSS px per wall second, smoothed over about 0.3 s. Hysteresis: hidden above 80, shown again below 50 and only after at least 1 s hidden.
+ * The numbers are the coordinator's estimates ("about 60 px/s"), not measured reading limits; at 10x a low pin moves about 5 px/s (estimate).
+ */
+export const NAME_SPEED_HIDE = 80;
+export const NAME_SPEED_SHOW = 50;
+export const NAME_SPEED_SMOOTH_S = 0.3;
+export const NAME_MIN_HIDDEN_MS = 1000;
+
+/** The smoothed speed after one more sample (`prev` < 0 = no sample yet: the first sample is taken as is). @param {number} prev @param {number} sample @param {number} dtS wall seconds since the last sample */
+export function smoothSpeed(prev, sample, dtS) {
+  if (!(prev >= 0)) return sample;
+  return prev + (sample - prev) * (1 - Math.exp(-dtS / NAME_SPEED_SMOOTH_S));
+}
+
+/**
+ * Whether a name may show after this frame's speed: a shown name hides above NAME_SPEED_HIDE; a hidden one returns below NAME_SPEED_SHOW once it
+ * has been hidden NAME_MIN_HIDDEN_MS. @param {boolean} readable shown (readable) last frame @param {number} speed smoothed px/s (< 0 = unknown: unchanged)
+ * @param {number} hiddenMs wall ms since it was hidden @returns {boolean}
+ */
+export function readableNext(readable, speed, hiddenMs) {
+  if (!(speed >= 0)) return readable;
+  if (readable) return !(speed > NAME_SPEED_HIDE);
+  return speed < NAME_SPEED_SHOW && hiddenMs >= NAME_MIN_HIDDEN_MS;
+}
+
 const _c = new THREE.Color();
 
 /** A colour string as linear RGB [r, g, b] (what `THREE.Color.setStyle` gives, the buffer's own space). */

@@ -140,7 +140,7 @@ import { PageRow, createDebrisPage } from './ui/PageRow.js';
 import { AirPage } from './systems/AirPage.js';
 import { RealSkyLayer } from './ui/RealSkyLayer.js';
 import { OpeningDive, diveOn, diveVeil } from './ui/OpeningDive.js';
-import { RealSkyCard } from './ui/RealSkyCard.js';
+import { RealSkyCard, REACH_NAME } from './ui/RealSkyCard.js';
 import { ID_FAMOUS } from './ui/HighlightItems.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
@@ -2113,6 +2113,12 @@ async function init() {
     // F6 fuel reachability: Tsiolkovsky remaining-ΔV SSOT. Optional dep; without it the floor renders as before.
     getMassBudget: () => armManager.getMassBudget(),
   });
+  // The "reach" box at the end of the globe's key shows or hides the blue band around Earth (ReachOrb; owner 2026-11-24, DECISIONS §103 row 5).
+  // Its tick is the orb's own saved switch, not a kind: the `-` steps below route "reach" to it by name.
+  realSkyCard.setReachSwitch({
+    isOn: () => navcomFloor.reachOrb.isEnabled(),
+    setOn: (on) => { navcomFloor.reachOrb.setEnabled(on); realSkyCard.refreshKinds(); },
+  });
   // F5 (PROX NET) content orchestrator. Same contract as navcomFloor: built inside the ladder block, injected
   // into LadderController (activates on debrisMode 'tactical', dispatches its 'approach' Space verb).
   // getFocusedCluster is the F6→F5 handoff: the cluster focused on NAVCOM is the corridor target here.
@@ -2148,6 +2154,8 @@ async function init() {
     satSource: () => catalogLoader.getAllActiveSats(),
     realSkySource: () => catalogLoader.getRealSky(),
     kessler: kesslerSystem,
+    // the page 1 falling pieces stand still on the time buttons' Pause (map clock step 'pause') and in a paused game (Sky 31, DECISIONS §103 row 3)
+    isPaused: () => mapClock.stepRow().id === 'pause' || !!(gameFlowManager && gameFlowManager.paused),
   });
   // The page row (plan sky-top-1121): floor 4 is the top floor and floor 5 is "the row is open". PAGE LIST: page 1 = the debris
   // chart (an adapter over sdaFloor), page 2 = the air chart (systems/AirPage.js: her height and today's Sun, no game state of its own).
@@ -2910,8 +2918,9 @@ async function init() {
         setHidden: (h) => { _globeClockHidden = h === true; },
       },
       kinds: {
-        ticked: () => realSkyCard.legendDrawOrder().filter((n) => !realSkyLayer.isKindHidden(n)),
-        setTicked: (n, on) => { realSkyLayer.setKindHidden(n, !on); },
+        // "reach" is the last box (RealSkyCard.legendDrawOrder): its tick is the orb's switch, every other box a kind of the layer
+        ticked: () => realSkyCard.legendDrawOrder().filter((n) => (n === REACH_NAME ? navcomFloor.reachOrb.isEnabled() : !realSkyLayer.isKindHidden(n))),
+        setTicked: (n, on) => { if (n === REACH_NAME) { navcomFloor.reachOrb.setEnabled(on); realSkyCard.refreshKinds(); } else realSkyLayer.setKindHidden(n, !on); },
       },
     });
     if (hud && hud.paneDensity) hud.paneDensity.stepHook = globeSteps;

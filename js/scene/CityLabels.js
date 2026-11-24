@@ -156,8 +156,8 @@ export const SLOT_LOSS_GRACE_MS = 500;
 
 /**
  * Hysteresis for a label shown last frame that found no free slot this frame
- * (pure): stays drawn until it has been without a slot for SLOT_LOSS_GRACE_MS.
- * Limb, off-screen, behind-camera and occluder hides stay immediate.
+ * (pure): stays drawn until it has been without a slot for SLOT_LOSS_GRACE_MS, then fades out (CITY_FADE_OUT_MS).
+ * Limb, off-screen, behind-camera and occluder hides fade at once (no grace).
  * @param {boolean} shown — was displayed last frame
  * @param {number} lostAt — ms timestamp the loss began, or -1 if not losing yet
  * @returns {boolean} true = keep it drawn this frame
@@ -167,6 +167,30 @@ export function holdAfterLoss(shown, lostAt, nowMs, graceMs = SLOT_LOSS_GRACE_MS
   if (lostAt < 0) return true;           // first frame of the loss
   return (nowMs - lostAt) < graceMs;
 }
+
+/**
+ * A city name never vanishes in one frame, whatever takes it away (zoom, a drag past the edge or the limb, the Earth-edge rule, a lost slot, the
+ * ship in front, a lit name, the calm): the opacity it is DRAWN at follows its target (all those factors multiplied) no faster than this: down over
+ * CITY_FADE_OUT_MS, up over CITY_FADE_IN_MS (owner 2026-11-24, DECISIONS §103 row 8: "cities/landmarks disappear suddenly, change to fade"; the
+ * 0.6 s / 0.3 s are the coordinator's estimates). A frame that is itself long (over 250 ms) counts as 250 ms.
+ */
+export const CITY_FADE_OUT_MS = 600;
+export const CITY_FADE_IN_MS = 300;
+
+/**
+ * One step of the drawn opacity toward its target (pure): at most dt / CITY_FADE_IN_MS up, dt / CITY_FADE_OUT_MS down.
+ * @param {number} level 0..1 now @param {number} target 0..1 @param {number} dtMs wall time since the last step (ms)
+ * @returns {number} 0..1
+ */
+export function slewLevel(level, target, dtMs) {
+  const dt = Number.isFinite(dtMs) && dtMs > 0 ? dtMs : 0;
+  const lv = Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 0;
+  const tg = Number.isFinite(target) ? Math.max(0, Math.min(1, target)) : 0;
+  return tg > lv ? Math.min(tg, lv + dt / CITY_FADE_IN_MS) : Math.max(tg, lv - dt / CITY_FADE_OUT_MS);
+}
+
+/** The fade of a label that is wanted (placed) or not: slewLevel toward 1 or 0. */
+export function fadeLevelStep(level, dtMs, placed) { return slewLevel(level, placed ? 1 : 0, dtMs); }
 
 /** Margin (CSS px) around an occluder's screen circle before a dot counts as covered. */
 export const OCCLUDER_MARGIN_PX = 4;
@@ -630,6 +654,7 @@ export class CityLabels {
     this._suppressed = false;
     /** Ladder `citypills` rung gate (NOT persisted); the 5 key ON path clears it. */
     this._densityHidden = false;
+    this._vDt = 0; this._vPrev = null;   // the frame step of the names' fade (update())
     this._loadPreference();
 
     eventBus.on(Events.CITY_LABELS_TOGGLE, () => this.toggle());
@@ -803,6 +828,10 @@ export class CityLabels {
         anchor: new THREE.Vector3(pos.x, pos.y, pos.z),
         shown: false, _sx: 0, _sy: 0, _op: 1, _dist: 0,
         _slot: null,
+        // Drawn opacity (0..1): follows the target (_op x tier x _discFade x _yl) at the slew rate of slewLevel, so nothing it multiplies in can make
+        // the label vanish in one frame (owner 2026-11-24, DECISIONS §103 row 8). `_dom` = its element is displayed (a fading-out label is `shown`
+        // false but still displayed).
+        _vis: 0, _dom: false,
         // Disc rule fade (pickSlotOnDisc): 1 = pill lies on the disc.
         _discFade: 1,
         // Give-way level (yieldStep): 1 = clear of every lit object's name and ring, 0 = gone for touching one.
@@ -861,6 +890,9 @@ export class CityLabels {
     const W = window.innerWidth, H = window.innerHeight;
     const now = nowMs != null ? nowMs
       : (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    // wall ms since the last frame: steps every name's fade level (`_hide` and `draw` read it); a long gap counts as one 250 ms step
+    this._vDt = this._vPrev === null ? 0 : Math.min(250, Math.max(0, now - this._vPrev));
+    this._vPrev = now;
     for (const layer of this._layers) {
       const active = (!layer.isActive || layer.isActive()) && layer.parent.visible !== false;
       if (layer.root.style.display !== (active ? 'block' : 'none')) {
@@ -922,7 +954,16 @@ export class CityLabels {
       cand.length = 0;
       for (const item of layer.items) {
         // Pinned labels opt out of the LOD gate.
-        if (item.tier > maxTier && !item.pin) { this._hide(item); continue; }
+        if (item.tier > maxTier && !item.pin) {
+          let track = false;
+          if (item._vis > 0) {   // still fading (zoomed out past its tier): project so the pill keeps to its city (Sky 31 review)
+            _world.copy(item.anchor); layer.parent.localToWorld(_world); _proj.copy(_world).project(camera);
+            track = _proj.z <= 1;
+            if (track) { item._sx = (_proj.x * 0.5 + 0.5) * W; item._sy = (_proj.y * -0.5 + 0.5) * H; }
+          }
+          this._hide(item, track);
+          continue;
+        }
 
         _world.copy(item.anchor);
         layer.parent.localToWorld(_world);
@@ -941,12 +982,13 @@ export class CityLabels {
         item._sx = (_proj.x * 0.5 + 0.5) * W;
         item._sy = (_proj.y * -0.5 + 0.5) * H;
         // Off-viewport reject (see isLabelInViewport).
+        // `true`: _sx/_sy are this frame's, so a fading pill keeps to its city during a drag (Sky 31 review)
         if (!isLabelInViewport(item._sx, item._sy, item.w, W, H, item.offX, item.offY)) {
-          this._hide(item);
+          this._hide(item, true);
           continue;
         }
         if (occN && dotInOccluder(item._sx, item._sy, layer._occ, occN)) {
-          this._hide(item);
+          this._hide(item, true);
           continue;
         }
         item._dist = _world.distanceTo(_cam);
@@ -983,8 +1025,10 @@ export class CityLabels {
           item.textEl.style.transform = slotTransform(slot, item.w, item.offX, item.offY);
           item._slot = slot;
         }
-        item.el.style.opacity = (item._op * item._opScale * item._discFade * item._yl).toFixed(3);
-        if (!item.shown) { item.el.style.display = 'flex'; item.shown = true; }
+        item._vis = slewLevel(item._vis, item._op * item._opScale * item._discFade * item._yl, this._vDt);
+        item.el.style.opacity = item._vis.toFixed(3);
+        if (!item._dom) { item.el.style.display = 'flex'; item._dom = true; }
+        item.shown = true;
 
         // Cameo pulse: the fired pad's pill breathes cyan until _pulseEnd (one label at a time).
         if (item._pulseEnd) {
@@ -1010,7 +1054,7 @@ export class CityLabels {
           if (item._lostAt < 0) item._lostAt = now;
           draw(item, item._slot || 'E', item._dotOnly);
         } else {
-          this._hide(item);
+          this._hide(item, true);
         }
       };
 
@@ -1033,10 +1077,10 @@ export class CityLabels {
       // Place one candidate: free slot (with hysteresis), reserve pill box AND dot
       // square, position the DOM. Returns true if placed (counts toward the caps).
       const place = (item) => {
-        // Drawn whole or not at all: an edge-cut dot or pill hides the label (no dot-only
+        // Drawn whole or not at all: an edge-cut dot or pill fades the label out (no dot-only
         // fallback; that is for a pill blocked by another label).
         if (!labelFitsViewport(item._sx, item._sy, item.w, W, H, item.offX, item.offY)) {
-          this._hide(item);
+          this._hide(item, true);
           return false;
         }
         const slot = disc.on
@@ -1097,10 +1141,26 @@ export class CityLabels {
     }
   }
 
-  /** @private Hide a label if currently shown (single style write). */
-  _hide(item) {
+  /**
+   * @private A label that can no longer be shown fades out over CITY_FADE_OUT_MS (never a one-frame hide; DECISIONS §103 row 8): it counts as
+   * not shown from now on (no box reserved, no cap place), its element stays on screen where it was while its level falls, and is hidden for
+   * good when the level reaches 0. Called every frame for every label that is not drawn, so a label already gone returns at once.
+   * `track` (the caller has this frame's screen position `_sx`, `_sy`): the fading label follows its dot while it fades.
+   */
+  _hide(item, track = false) {
     item._lostAt = -1;
-    if (item.shown) { item.el.style.display = 'none'; item.shown = false; }
+    const was = item.shown;
+    item.shown = false;
+    if (item._dom && item._vis > 0) {
+      item._vis = slewLevel(item._vis, 0, this._vDt);
+      if (item._vis > 0) {
+        item.el.style.opacity = item._vis.toFixed(3);
+        if (track) item.el.style.transform = `translate(${item._sx.toFixed(1)}px, ${item._sy.toFixed(1)}px) translate(${-DOT_PX / 2}px, -50%)`;
+        return;
+      }
+    }
+    item._vis = 0;
+    if (item._dom || was) { item.el.style.display = 'none'; item._dom = false; }
     // Next show starts fresh (pill, not dot-only).
     if (item._dotOnly) { item.textEl.style.display = ''; item._dotOnly = false; }
     // A pulse must not leave stale glow/scale styles for the next show.

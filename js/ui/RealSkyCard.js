@@ -48,6 +48,13 @@ export const LEGEND_HINTS = Object.freeze([
   'unknown: objects the catalogue lists as unknown, with no kind',
   'Starlink: the working Starlink internet satellites',
 ]);
+/**
+ * The last box of the key: the blue see-through band around Earth (ReachOrb). Its name in `legendDrawOrder()`, its word, its swatch (the band's
+ * own cyan, ReachOrb `_paint` rgba(0,204,255)) and its hover text (owner 2026-11-24, DECISIONS §103 row 5).
+ */
+export const REACH_NAME = 'reach';
+export const REACH_COLOR = '#00ccff';
+export const REACH_HINT = 'reach: the band of heights your gas can take you to';
 
 /**
  * The one small credit line: every source the full credit names, in a few words. Built from the full text (never typed
@@ -250,6 +257,7 @@ export class RealSkyCard {
     this._onClose = null;
     this._onToggleKind = null;
     this._isKindHidden = null;
+    this._reachSwitch = null;             // the "reach" box's switch (setReachSwitch)
     this._onFlyName = null;
     this._shown = false;
     this._panelHidden = false;            // the player hid the panel (globe `-` step): nothing drawn, no dodge, no keep-out box
@@ -279,6 +287,15 @@ export class RealSkyCard {
   /** The legend's boxes again (the layer changed a kind). */
   refreshKinds() { this._renderLegend(); }
 
+  /**
+   * Wire the "reach" box at the end of the key (main.js): `isOn()` = the blue band is shown, `setOn(on)` shows or hides it. Without it the box is not shown.
+   * @param {{isOn: () => boolean, setOn: (on: boolean) => void}|null} sw
+   */
+  setReachSwitch(sw) {
+    this._reachSwitch = sw && typeof sw.isOn === 'function' && typeof sw.setOn === 'function' ? sw : null;
+    this._renderLegend();
+  }
+
   /** Legend state for tests and the browser probe: kind name -> true when its box is ticked (shown). Entries the legend does not show are left out. */
   legendState() {
     const out = {};
@@ -295,10 +312,13 @@ export class RealSkyCard {
     const e = this._els;
     return e.legendItems ? CLASS_NAMES.filter((n, i) => e.legendItems[i].style.display !== 'none') : [];
   }
-  /** The boxes that show now, in the order they are drawn, top to bottom (LEGEND_ORDER): what `-` on the globe unticks from the bottom. */
+  /** The boxes that show now, in the order they are drawn, top to bottom (LEGEND_ORDER, then "reach" last): what `-` on the globe unticks from the bottom. */
   legendDrawOrder() {
     const e = this._els;
-    return e.legendItems ? LEGEND_ORDER.filter((i) => e.legendItems[i].style.display !== 'none').map((i) => CLASS_NAMES[i]) : [];
+    if (!e.legendItems) return [];
+    const out = LEGEND_ORDER.filter((i) => e.legendItems[i].style.display !== 'none').map((i) => CLASS_NAMES[i]);
+    if (e.reachItem && e.reachItem.style.display !== 'none') out.push(REACH_NAME);
+    return out;
   }
 
   /**
@@ -388,6 +408,22 @@ export class RealSkyCard {
       legendItems.push(item);
     });
     for (const i of LEGEND_ORDER) legend.append(legendItems[i]);
+    // The last box: the blue see-through band around Earth, her reach (owner 2026-11-24, DECISIONS §103 row 5). Not a kind of object: the switch is
+    // wired by main.js (`setReachSwitch`), so it shows only when one is wired.
+    const reachItem = el('div', 'display:none;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;box-sizing:border-box;min-height:22px;padding:0 3px;border-radius:4px;touch-action:manipulation');
+    reachItem.id = 'real-sky-key-reach';
+    reachItem.title = `${REACH_HINT} (tap to show or hide)`;
+    reachItem.setAttribute('role', 'checkbox');
+    reachItem.setAttribute('tabindex', '0');
+    reachItem.setAttribute('aria-label', REACH_NAME);
+    reachItem.append(
+      el('span', 'flex:none;display:inline-block;width:12px;height:12px;box-sizing:border-box;border:1px solid #9fb0d0;border-radius:2px;line-height:10px;text-align:center;font-size:10px;color:#e8eefc'),
+      el('span', `flex:none;display:inline-block;width:7px;height:7px;border-radius:50%;background:${REACH_COLOR}`),
+      el('span', null, REACH_NAME));
+    const toggleReach = () => { const sw = this._reachSwitch; if (sw) sw.setOn(!sw.isOn()); this._renderLegend(); };
+    reachItem.addEventListener('click', () => { toggleReach(); if (typeof reachItem.blur === 'function') reachItem.blur(); });
+    reachItem.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); toggleReach(); } });
+    legend.append(reachItem);
     // One small credit line naming every source; a tap opens the full wording, a second tap closes it (owner 2026-11-17, DECISIONS §74 row 3).
     const credit = el('div', 'margin-top:2px;padding:4px 0 0;font-size:10px;line-height:1.3;color:#8392b3;cursor:pointer');
     credit.id = 'real-sky-credit';
@@ -405,7 +441,7 @@ export class RealSkyCard {
     d.body.appendChild(root);
     // A size change the render calls do not see (the full credit wording opened, a late font) moves the panel's bottom too.
     if (typeof ResizeObserver !== 'undefined') { try { this._ro = new ResizeObserver(() => this._syncDodge()); this._ro.observe(root); } catch (_) { this._ro = null; } }
-    Object.assign(this._els, { root, input, msg, card, nameEl, dot, body, credit, legend, legendItems, fail, hl });
+    Object.assign(this._els, { root, input, msg, card, nameEl, dot, body, credit, legend, legendItems, reachItem, fail, hl });
     // A double-click or double-tap on the object's name turns floor 4's globe to it (two clicks within 350 ms; a click fires for mouse and finger).
     let lastNameClick = -Infinity;
     title.style.cursor = 'pointer';
@@ -635,6 +671,15 @@ export class RealSkyCard {
       item.setAttribute('aria-checked', off ? 'false' : 'true');
       item.children[0].textContent = off ? '' : '\u2713';
     });
+    const ri = e.reachItem;
+    if (ri) {   // the reach box: shown with its switch, ticked while the band is on
+      const sw = this._reachSwitch, offR = !!sw && !sw.isOn();
+      ri.style.display = sw ? 'flex' : 'none';
+      ri.style.minHeight = this._glass ? '44px' : '22px';
+      ri.style.opacity = offR ? '0.45' : '1';
+      ri.setAttribute('aria-checked', offR ? 'false' : 'true');
+      ri.children[0].textContent = offR ? '' : '\u2713';
+    }
     this._syncDodge();                              // the panel's height may have changed (rows shown or hidden)
   }
 

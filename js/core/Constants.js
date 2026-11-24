@@ -5298,10 +5298,10 @@ export const Constants = {
     SIDE_CHOOSE_PX: 460,      // the biggest square while the list is open
     SIDE_TRIP_PX: 560,        // the list is closed during the trip: the map may grow
     MIN_SIDE_PX: 240,         // narrower than this the map is not shown
-    LIST_BOTTOM_PX: 164,      // copies of the list's CSS (WhereNextList.js): bottom edge 164 px up,
+    LIST_BOTTOM_PX: 208,      // copies of the list's CSS (WhereNextList.js): bottom edge 208 px up (164 before Sky 31 lifted the page dots and the FLY THERE chip 44 px),
     LIST_WIDTH_PX: 580,       // width min(580, 100vw - 24) at the bottom centre,
     LIST_SIDE_PX: 12,         // (the 12 of that 24, per side),
-    LIST_TOP_CLEAR_PX: 280,   // and a height that never passes 100vh - 444, i.e. its top is never above y 280
+    LIST_TOP_CLEAR_PX: 280,   // and a height that never passes 100vh - 488, i.e. its top is never above y 280
     LIST_GAP_PX: 16,          // clear space between the map and the list
     RAIL_EDGE_PX: 16,         // the floor rail (RailIndicator): 16 px in from the right edge (RailGeometry EDGE_PX), mid-height,
     RAIL_W_PX: 140,           // about 135 px wide and 165 px tall (measured in the 10-25 shots at 1728x1117 and 1366x1024; rounded up);

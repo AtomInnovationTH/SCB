@@ -46,6 +46,9 @@ export const StorageKeys = {
   CITY_LABELS: 'sc_city_labels_visible',
   /** RealSkyLayer: the legend kinds she switched off on floors 4-5 (JSON list of kind names; missing or bad = all shown). */
   REAL_SKY_HIDDEN: 'sc_real_sky_hidden_v1',
+  /** ReachOrb: the "reach" tick box at the end of the globe's key (the blue band around Earth): '0' = switched off; missing or anything else = on
+   *  (owner 2026-11-24, DECISIONS §103 row 5). PLAYER-owned: a New player reset removes it. */
+  REACH_BAND: 'sc_reach_band_v1',
   /** BlackPatchHeal's ring of the last 20 "centre went black on F4/F5" records (detected, which repair step healed it).
    *  Device-owned diagnostics, never in the run save; read back from the owner's browser
    *  (BLACK_SCREEN_TRIAGE.md, Producer 4). */

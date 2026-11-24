@@ -34,12 +34,12 @@ export const ROW_PX_GLASS = 44;
 export const ROW_PX_DESKTOP = 28;
 export const REFRESH_MS = 1000;
 /**
- * Where it sits: bottom centre, its lower edge BOTTOM_PX above the screen's bottom - clear of the FLY THERE chip (88 px
- * up, 48 px high, centred), the transfer readout (bottom left, 400 px wide, to 863 px of a 1024 px screen) and the floor
+ * Where it sits: bottom centre, its lower edge BOTTOM_PX above the screen's bottom - clear of the FLY THERE chip (132 px
+ * up, 48 px high, centred: its top is 180; lifted from 88 and the list from 164 by Sky 31 when the page dots moved up over the timeline strip), the transfer readout (bottom left, 400 px wide, to 863 px of a 1024 px screen) and the floor
  * rail (right). The top centre is the vitals, comms, score, pause and next-pane strip (measured at 1366x1024: 0-262 px
  * down).
  */
-export const BOTTOM_PX = 164;
+export const BOTTOM_PX = 208;
 export const WIDTH_PX = 580;
 /**
  * The panel never grows past the space between the top HUD strip (0-262 px down at 1366x1024) and its own lower edge:

@@ -28,12 +28,15 @@ export const SWIPE_FLICK_PX_S = 500;
 /** Dot touch target (CSS px, at least 44). */
 export const DOT_TARGET_PX = 48;
 /**
- * Where the dots and the page title sit (CSS px, both centred). The dots stand this far from the bottom edge: measured 2026-11-21 at
- * 1728x1117 and 1366x1024, the bottom 6-45 px hold the globe's REACH pill. The page title (Sky 20, owner 2026-11-23: "move 'debris by
+ * Where the dots and the page title sit (CSS px, both centred). The dots stand this far from the bottom edge. Sky 31 (owner 2026-11-24 22:03Z, DECISIONS §103 row 1:
+ * "move the 'object in orbit' pane to bottom left, below screen indicator"): the timeline strip is the lowest thing on page 1 now (SdaChart STRIP_*_FROM_BOTTOM_PX: its title
+ * row's glyph tops stand at h-99), so the dots' hit boxes (h-148..h-100) stand right over it, one height on the globe, page 1 and page 2 on both screens (before: 56, measured
+ * 2026-11-21 at 1728x1117 and 1366x1024; the bottom 6-45 px then held the globe's REACH pill, which is gone). The bottom safe-area inset lifts them further (`env()`). The globe's
+ * FLY THERE chip and the where-next list stand over the dots (TouchVerbButton BOTTOM_PX[4], WhereNextList BOTTOM_PX). The page title (Sky 20, owner 2026-11-23: "move 'debris by
  * height' to top so users immediately know what they are looking at") stands at the TOP centre, where the score bar was on floor 5 (the
  * bar is gone there now), so nothing sits at the old bottom spot. TITLE_FONT_PX is the one size (about 26 px; the old label was 12.8 px).
  */
-export const DOTS_BOTTOM_PX = 56;
+export const DOTS_BOTTOM_PX = 100;
 export const TITLE_TOP_PX = 14;
 export const TITLE_FONT_PX = 26;
 /** The title's line box is this tall (CSS px, line-height 1.2 of TITLE_FONT_PX, rounded up). */
@@ -401,7 +404,7 @@ export class PageRow {
     root.id = 'page-row-dots';
     root.setAttribute && root.setAttribute('role', 'tablist');
     root.style.cssText = [
-      'position:fixed', 'left:50%', 'transform:translateX(-50%)', `bottom:${DOTS_BOTTOM_PX}px`, 'display:none',
+      'position:fixed', 'left:50%', 'transform:translateX(-50%)', `bottom:calc(${DOTS_BOTTOM_PX}px + env(safe-area-inset-bottom, 0px))`, 'display:none',
       'flex-direction:row', 'align-items:center', 'z-index:36', 'pointer-events:none',
       'font-family:var(--font-mono)',
     ].join(';');

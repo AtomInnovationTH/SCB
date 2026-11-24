@@ -68,8 +68,13 @@ export const WIDE_FLOORS = Object.freeze([2, 3]);
 /** The floor where this button carries the mission 3 wide-scan lesson (the ticker chip is hidden on floor 3). */
 export const LESSON_BUTTON_FLOOR = 3;
 
-/** CSS px above the viewport bottom, by floor (floor 2: clear of the hint strip, 88 up to ~148 with a 44 px step button on it; gone on 3-5). */
-export const BOTTOM_PX = Object.freeze({ 2: 168, 3: 88, 4: 88 });
+/**
+ * CSS px above the viewport bottom, by floor (floor 2: clear of the hint strip, 88 up to ~148 with a 44 px step button on it; gone on 3-5).
+ * Floor 4 (Sky 31, DECISIONS §103 row 1): 132. The page dots now stand 100..148 px up (PageRow DOTS_BOTTOM_PX 100 + DOT_TARGET_PX 48, since the timeline strip took the bottom edge);
+ * their circles' tops are 130 px up (measured), so the chip clears the circles by 2 px, as it did before (88 over circles topping at 86), and covers the top 16 px of the tap boxes
+ * as before. The where-next list stands over the chip (WhereNextList BOTTOM_PX 208 = chip top 180 + 28). A HUD toast (bottom 144) can cover the chip for a few seconds (coordinator's call, Sky 31, 2026-11-25).
+ */
+export const BOTTOM_PX = Object.freeze({ 2: 168, 3: 88, 4: 132 });
 
 /**
  * CHOOSE opens the fate list of a big catch (U): the only touch way in on floors 3-4 (no ticker chip there); floor 2 also

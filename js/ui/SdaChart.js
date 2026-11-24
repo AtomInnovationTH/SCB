@@ -41,6 +41,7 @@ import { FloorContract } from '../core/FloorContract.js';
 import { mono, fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { clamp01 } from '../core/MathUtil.js';
 import { CLASS_COLORS } from './RealSkyCard.js';
+import { ReentryShow, YEAR_LINE, YEAR_LINE_FROM_BOTTOM_PX, YEAR_LINE_FONT_PX } from './ReentryShow.js';
 import { hudScaleFor } from './HudScale.js';
 
 /** The SDA DOWNLINK (id 5) contract row (chart framing + labelBudget + lenses). */
@@ -65,8 +66,11 @@ export const PULSE_PERIOD_MS = 2000;
 export const LEO_VFRAC = 0.6;
 /**
  * Sky 20 (owner 2026-11-23: "move 'objects in orbit' pane to bottom to improve view of debris"): the timeline strip moved down, so the LEO
- * ring may grow until its bottom edge is this far above the screen bottom (the strip's top label row glyphs end at h-191, plus 10 px of air).
+ * ring may grow until its bottom edge is this far above the screen bottom (the strip's top label row glyphs then ended at h-191, plus 10 px of air).
  * The ring still never shrinks below LEO_VFRAC of the half-height. Both numbers are in `meoRadialMap`.
+ * Sky 31 (DECISIONS §103 row 1): the strip is at the very bottom now (h-99..h-14) and the page dots stand over it (hit boxes h-148..h-100), so 201 would not
+ * be needed any more. It stays 201 on purpose: the real Earth under the chart (`chartEarthDistU`) and every ring keep their size on both screens
+ * (§102 row 11: "the chart is not made bigger for its own sake"); the ring's bottom edge is 53 px over the dots' hit boxes.
  */
 export const RING_BOTTOM_RESERVE_PX = 201;
 
@@ -205,6 +209,26 @@ export function lensWeights(bands, lens) {
   });
   const max = raw.reduce((a, v) => Math.max(a, v), 0);
   return raw.map((v) => (max > 0 ? v / max : 0));
+}
+
+/** Danger view (Sky 31, §102 row 12 "Danger also reddens the heights where crashes are most likely"): a band at or over this share of the strongest band's danger stands out. */
+export const HOT_BAND_MIN_WEIGHT = 0.6;
+/** At most this many bands stand out (the top one or two). */
+export const HOT_BAND_MAX = 2;
+/**
+ * The bands that stand out in the Danger view: the most crash-prone heights, strongest first - the top band always (when any has danger), the second only when it is
+ * close (at least HOT_BAND_MIN_WEIGHT of the top). Measured 2026-11-25 with the real counts: the 400-600 km band is 1.0, the next two 0.35 and 0.33, so one stands out.
+ * @param {Array<{id:string, weight:number}>} rings
+ * @returns {string[]} ring ids
+ */
+export function hotBandIds(rings) {
+  const list = (Array.isArray(rings) ? rings : []).filter((r) => r && r.weight > 0).slice().sort((a, b) => b.weight - a.weight);
+  const out = [];
+  for (const r of list) {
+    if (out.length >= HOT_BAND_MAX) break;
+    if (out.length === 0 || r.weight >= HOT_BAND_MIN_WEIGHT) out.push(r.id);
+  }
+  return out;
 }
 
 /**
@@ -387,9 +411,14 @@ export const CHART_TOP_CLEAR_PX = 62;
  * (hit boxes h-104..h-56, circles h-80 +-5) stand at the bottom now. The strip's bottom is 124 (ticks end at h-120, the 20-year labels'
  * baseline h-109, descenders h-106: 2 px above the dots' hit boxes) and its top 176 (the plot stays 52 px tall; the top label row's glyphs
  * run h-191..h-179). One line of credit used to stand under the dots: it is in the Tech library now.
+ * 2026-11-25 (Sky 31, owner 2026-11-24 22:03Z, DECISIONS §103 row 1: "move the 'object in orbit' pane to bottom left. below screen indicator"): the strip is now the lowest
+ * thing on the page and the page dots stand over it. Its bottom is 32 (the plot's bottom edge; the decade ticks end at h-28, the 20-year labels' baseline h-17 and
+ * their descenders h-14, so the text ends 14 px over the screen's bottom, in the 12-16 px asked) and its top 84 (the plot stays 52 px tall; the title row's glyph tops
+ * are 15 px over the top edge: h-99). The dots' hit boxes run h-148..h-100 (PageRow DOTS_BOTTOM_PX 100 + DOT_TARGET_PX 48): they stand 1 px over the title row's glyph tops.
+ * The safe-area inset at the bottom (an iPad's home bar) lifts both by the same amount (`stripRect`'s `safeBottom`, PageRow's CSS `env()`).
  */
-export const STRIP_TOP_FROM_BOTTOM_PX = 176;
-export const STRIP_BOTTOM_FROM_BOTTOM_PX = 124;
+export const STRIP_TOP_FROM_BOTTOM_PX = 84;
+export const STRIP_BOTTOM_FROM_BOTTOM_PX = 32;
 /** Decade ticks hang this far under the strip's bottom edge. */
 export const STRIP_TICK_PX = 4;
 /** The 20-year labels' baseline, px under the strip's bottom edge. */
@@ -435,7 +464,7 @@ export const LEADER_RISE_PX = 7;
 const COLUMN_W_GUESS_PX = 420;
 /**
  * Clearance the column keeps from the ring's outer edge, px (Sky 30 fix, review of the labels): at each row's height every label's right end and its leader's turn point stand at
- * least this far left of the ring. When one-line labels do not fit (the iPad's Danger view: "400-600 km \u00b7 512 of 1,800 not working" reaches the ring at the bottom rows) the
+ * least this far left of the ring. When one-line labels do not fit (before Sky 31's one-height labels the iPad's Danger view: "400-600 km \u00b7 512 of 1,800 not working" reached the ring at the bottom rows; "400 km \u00b7 115 of 1,864 not working" is shorter) the
  * labels wrap at the "\u00b7" into two lines (the span, then the count), COLUMN_LINE_PX apart; the leader leaves the first line. The choice is per screen and lens, never per row.
  */
 export const RING_CLEAR_PX = 8;
@@ -467,14 +496,15 @@ const GLYPH_PX = 6.6;
 export const GEO_LABEL_LINE1 = '36,000 km ring + graveyard';
 
 /**
- * One band's label, in plain words (Sky 30, §102 row 9). Tonnes: "400\u2013600 km \u00b7 6,099 tonnes", and where the mass is an estimate "about 6,100 tonnes" (the sum rounded
- * to the nearest 100 t; it replaces the old "\u00b7 est."). Danger: the count, or "N of M not working" where the real catalogue gave both.
+ * One band's label, in plain words (Sky 30, §102 row 9; Sky 31, §103 row 2: "A number is better than a range"): ONE height, the band's top, so "400 km \u00b7 894 tonnes" for the
+ * 180-400 km band, then 600, 800, 1,000 and 2,000 km. Tonnes: where the mass is an estimate "about 6,100 tonnes" (the sum rounded to the nearest 100 t; it replaces the old
+ * "\u00b7 est."). Danger: the count, or "N of M not working" where the real catalogue gave both.
  * @param {string} lens 'VALUE' | 'THREAT'
  * @param {{altKm:number[], massT:number, liveMassT:number, estimate?:boolean, count:number, realCount?:number, realNotWorking?:number}} r
  * @returns {string}
  */
 export function bandLabelText(lens, r) {
-  const span = `${_thousands(r.altKm[0])}\u2013${_thousands(r.altKm[1])} km`;
+  const span = `${_thousands(r.altKm[1])} km`;
   if (lens === 'VALUE') {
     const t = r.massT + r.liveMassT;
     return r.estimate ? `${span} \u00b7 about ${_thousands(Math.round(t / 100) * 100)} tonnes` : `${span} \u00b7 ${_thousands(t)} tonnes`;
@@ -667,10 +697,10 @@ export const STRIP_LOG_MIN = 1000;
 /** The gap the strip keeps before an open card at the bottom right (the iPad's panel), px. */
 export const STRIP_KEEPOUT_GAP_PX = 16;
 /**
- * The strip is a wide box along the bottom (Sky 30, owner 2026-11-24, DECISIONS §102 row 8: "it should be a wide box"): it runs from STRIP_LEFT_PX to STRIP_RIGHT_PX
- * short of the screen's right edge, the same 24 px at both ends. The time buttons left the bottom-right corner for the top right (row 7), so nothing stands there
- * except the iPad's panel while a card or the Highlight row is up (it stops STRIP_KEEPOUT_GAP_PX before that). Its vertical place stays above the page dots
- * (STRIP_*_FROM_BOTTOM_PX); the dots stand at the bottom centre, inside the strip's width.
+ * The strip is a wide box along the bottom, starting at the left (Sky 30, owner 2026-11-24, DECISIONS §102 row 8: "it should be a wide box"; Sky 31, §103 row 1: bottom left, below
+ * the page dots): it runs from STRIP_LEFT_PX to STRIP_RIGHT_PX short of the screen's right edge, the same 24 px at both ends. The time buttons and the object panel are at the top right
+ * on both screens (row 7), so nothing stands below them; the open-card keep-out stays for any card that does reach the strip's rows (it stops STRIP_KEEPOUT_GAP_PX before it). Its
+ * vertical place is the bottom edge (STRIP_*_FROM_BOTTOM_PX); the page dots stand just over it, at the bottom centre, over the strip's width.
  */
 export const STRIP_LEFT_PX = 24;
 export const STRIP_RIGHT_PX = 24;
@@ -678,11 +708,13 @@ export const STRIP_RIGHT_PX = 24;
 /**
  * The strip's rectangle (CSS px; pure): x0, x1 left and right ends of the plot, y0, y1 its top and bottom.
  * @param {number} w @param {number} h - viewport
- * @param {{x0:number,y0:number,x1:number,y1:number}|null} [cardBox] - the object panel (the iPad's stands bottom right): where its box reaches the strip's rows the strip also stops before it
+ * @param {{x0:number,y0:number,x1:number,y1:number}|null} [cardBox] - an open card: where its box reaches the strip's rows the strip also stops before it
+ * @param {number} [safeBottom] - the bottom safe-area inset, px (0 on a Mac and on an iPad in the browser): the strip stands that much higher
  * @returns {{x0:number, x1:number, y0:number, y1:number}}
  */
-export function stripRect(w, h, cardBox = null) {
-  const y0 = h - STRIP_TOP_FROM_BOTTOM_PX, y1 = h - STRIP_BOTTOM_FROM_BOTTOM_PX;
+export function stripRect(w, h, cardBox = null, safeBottom = 0) {
+  const lift = Number.isFinite(safeBottom) && safeBottom > 0 ? safeBottom : 0;
+  const y0 = h - STRIP_TOP_FROM_BOTTOM_PX - lift, y1 = h - STRIP_BOTTOM_FROM_BOTTOM_PX - lift;
   let x1 = w - STRIP_RIGHT_PX;
   // The box matters only where it reaches the strip's rows: the title line over the plot (glyph tops 15 px over y0) down to the year labels' descenders.
   if (cardBox && cardBox.y1 > y0 - 16 && cardBox.y0 < y1 + STRIP_LABEL_DROP_PX + 4) x1 = Math.min(x1, cardBox.x0 - STRIP_KEEPOUT_GAP_PX);
@@ -709,6 +741,11 @@ export class SdaChart {
     this._lensButtons = new Map();
     /** A press on a lens button calls this with 'VALUE' | 'THREAT' (SdaFloor sets it to its own setLens); unset: the chart's own. */
     this.onLens = null;
+    /** () => true while the falling pieces must stand still (the time buttons' Pause, a paused game); SdaFloor sets it; unset: never paused. */
+    this.isPaused = null;
+    /** The falling pieces (Sky 31, DECISIONS §103 row 3): their own canvas, drawn every frame while the chart shows (the chart's own canvas stays write-on-change). */
+    this._reentry = new ReentryShow({ now: this._now });
+    this._reGeom = { cx: 0, cy: 0, rEarth: 0, pxPerKm: 0 };
     this._lens = LENSES[0]; // VALUE — the arrival default (00-spec §3 F5)
     // Write-on-change state: last painted signature + paint clock.
     this._lastSig = null;
@@ -883,12 +920,13 @@ export class SdaChart {
   /** The chart's canvas (built on first use; null headless): the page row slides this node. */
   element() { this._build(); return this._canvas || null; }
 
-  /** Every top-level node the page row slides: the canvas and the lens buttons (empty headless). */
-  elements() { this._build(); return [this._canvas, this._buttonsRoot].filter(Boolean); }
+  /** Every top-level node the page row slides: the canvas, the lens buttons and the falling pieces' box (empty headless). */
+  elements() { this._build(); return [this._canvas, this._buttonsRoot, this._reentry.element()].filter(Boolean); }
 
   show() {
     this._build();
     this._visible = true;
+    this._reentry.show();
     if (this._canvas) this._canvas.style.opacity = '1';
     if (this._buttonsRoot) {
       this._syncLensButtons();
@@ -901,6 +939,7 @@ export class SdaChart {
 
   hide() {
     this._visible = false;
+    this._reentry.hide();
     this._clearPageChrome();
     this._boxes = [];
     _setChartTextBoxes([]);
@@ -930,6 +969,12 @@ export class SdaChart {
     const hPx = m.hPx || ((typeof window !== 'undefined') ? window.innerHeight : 720);
     const bands = m.bands || [];
     const map = meoRadialMap({ wPx, hPx });
+    // The falling pieces move every frame on the real-time clock (not through the paint gate below); the geometry is Earth's circle and the honest LEO px per km.
+    if (this._visible) {
+      const rg = this._reGeom;
+      rg.cx = wPx / 2; rg.cy = hPx / 2; rg.rEarth = Constants.EARTH_RADIUS * map.sLeoPxPerU; rg.pxPerKm = Constants.SCENE_SCALE * map.sLeoPxPerU;
+      this._reentry.frame(rg, !!(this.isPaused && this.isPaused()));
+    }
     const weights = lensWeights(bands, lens);
 
     const rings = bands.map((b, i) => {
@@ -1040,6 +1085,19 @@ export class SdaChart {
       g.stroke();
     }
 
+    // The most crash-prone heights stand out in the Danger view: a thin crowded band is hidden under its own dots (the real-sky canvas draws over this one), so it gets a soft
+    // halo and a stronger red along its width (Sky 31). Three strokes per band, at the pulse's rhythm; no shadowBlur.
+    if (lens === 'THREAT') {
+      const hot = hotBandIds(rings);
+      for (const r of rings) {
+        if (!hot.includes(r.id)) continue;
+        const mid = (r.innerPx + r.outerPx) / 2, thick = r.outerPx - r.innerPx;
+        g.strokeStyle = this._rgba(ramp, 0.18 * pulse); g.lineWidth = thick + 26; g.beginPath(); g.arc(cx, cy, mid, 0, Math.PI * 2); g.stroke();
+        g.strokeStyle = this._rgba(ramp, 0.34 * pulse); g.lineWidth = thick + 12; g.beginPath(); g.arc(cx, cy, mid, 0, Math.PI * 2); g.stroke();
+        g.strokeStyle = this._rgba(ramp, 0.95 * pulse); g.lineWidth = thick; g.beginPath(); g.arc(cx, cy, mid, 0, Math.PI * 2); g.stroke();
+      }
+    }
+
     // GEO ring at the screen edges: gold, dashed, STEADY on both lenses.
     g.beginPath();
     g.arc(cx, cy, map.geoPx, 0, Math.PI * 2);
@@ -1119,6 +1177,14 @@ export class SdaChart {
     g.globalAlpha = 1;
 
     if (timeline) this._paintStrip(g, w, h, lens, timeline, labels, pulse, f.cardBox || null);
+    // The one line about the year of falling pieces (Sky 31, §103 row 3): centred in the free band between the ring's bottom (h-201) and the page dots' tap boxes (h-148).
+    // Painted after the strip (which sets its own font) so no font has to be put back.
+    g.font = mono(YEAR_LINE_FONT_PX);
+    g.textAlign = 'center';
+    g.fillStyle = VisualLaw.COLORS.INFO;
+    g.globalAlpha = 0.85;
+    this._text(g, YEAR_LINE, cx, h - YEAR_LINE_FROM_BOTTOM_PX - this._safeBottomPx(), YEAR_LINE_FONT_PX);
+    g.globalAlpha = 1;
     _setChartTextBoxes(this._boxes);
   }
 
@@ -1164,6 +1230,24 @@ export class SdaChart {
     return m && Number.isFinite(m.width) ? m.width : str.length * 6.1;
   }
 
+  /**
+   * @private The bottom safe-area inset in CSS px (an iPad's home bar; 0 on a Mac and in the browser, and headless): a canvas cannot read `env()`, so a hidden
+   * zero-size probe with `padding-bottom: env(safe-area-inset-bottom)` is read. Called only inside a paint (the paint is gated), never per frame.
+   */
+  _safeBottomPx() {
+    if (typeof document === 'undefined' || !document.body || typeof document.createElement !== 'function' || typeof getComputedStyle !== 'function') return 0;
+    try {
+      if (!this._safeProbe) {
+        const d = document.createElement('div');
+        d.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;padding-bottom:env(safe-area-inset-bottom, 0px)';
+        document.body.appendChild(d);
+        this._safeProbe = d;
+      }
+      const v = parseFloat(getComputedStyle(this._safeProbe).paddingBottom);
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    } catch (_e) { return 0; }
+  }
+
   /** @private fillText that also records the string's box (the glyphs sit about 0.9 of the font size above the baseline, 0.3 of descender; `px` is the font size, default 10). */
   _text(g, s, x, y, px = 10) {
     const str = String(s);
@@ -1180,8 +1264,7 @@ export class SdaChart {
    * solid line; the forecast after "today" (the last keyframe year) is dashed and fainter than the history.
    */
   _paintStrip(g, w, h, lens, timeline, labels, pulse, cardBox = null) {
-    const { x0, x1 } = stripRect(w, h, cardBox);
-    const y0 = h - STRIP_TOP_FROM_BOTTOM_PX, y1 = h - STRIP_BOTTOM_FROM_BOTTOM_PX;
+    const { x0, x1, y0, y1 } = stripRect(w, h, cardBox, this._safeBottomPx());
     const hist = timeline.history || [];
     const proj = timeline.projection || [];
     if (!hist.length && !proj.length) return;
@@ -1262,6 +1345,9 @@ export class SdaChart {
     this._clearPageChrome();
     if (this._canvas && this._canvas.remove) this._canvas.remove();
     if (this._buttonsRoot && this._buttonsRoot.remove) this._buttonsRoot.remove();
+    if (this._safeProbe && this._safeProbe.remove) this._safeProbe.remove();
+    this._safeProbe = null;
+    this._reentry.dispose();
     this._buttonsRoot = null;
     this._lensButtons = new Map();
     this._canvas = null;

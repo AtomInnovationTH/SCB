@@ -11,8 +11,9 @@
  *     // optional: getViewport () => {w, h}; stormMultiplier (altKm, f107, kp) => number; fontEpoch; parent (HTMLElement)
  *   })
  *
- * "Today" is the Sun on the game's date (`sunStorms.today()`); in training missions 1-3 `today()` is null and "Today" shows the
- * average Sun and says so. A storm day adds one line with the storm's air factor at her height from `stormMultiplier`
+ * "Today" is the Sun on the game's date (`sunStorms.today()`); in training missions 1-3 `today()` is null and the page has no today at all (Sky 31, DECISIONS §103 row 7:
+ * the "Today" button and the "Training: average Sun" line are gone; the Average Sun button is down on arrival, before: the Today button, which showed the average Sun in
+ * training and today's own F10.7 with a game date). With a date the dashed line, its "Today" words and the "Today's Sun: ..." note stay. A storm day adds one line with the storm's air factor at her height from `stormMultiplier`
  * (SunStorms.js:139, today's Sun level and Kp): never `dayAirMultiplier`, which already holds the Sun's level. No gas split is
  * made up for a storm: the curves stay at the Sun's level.
  *
@@ -24,7 +25,7 @@
 
 import { stormMultiplier as defaultStormMultiplier, multText } from './SunStorms.js';
 import { todaySunWords, totalDensity } from './AirGases.js';
-import { AirChart } from '../ui/AirChart.js';
+import { AirChart, DEFAULT_SUN_MODE } from '../ui/AirChart.js';
 import { fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { Constants } from '../core/Constants.js';
 import { atmosphericDensityBase, atmosphericDragOn } from '../entities/OrbitalMechanics.js';
@@ -90,7 +91,7 @@ export class AirPage {
     this._getViewport = typeof deps.getViewport === 'function' ? deps.getViewport : null;
     this._storm = typeof deps.stormMultiplier === 'function' ? deps.stormMultiplier : defaultStormMultiplier;
     this._fontEpoch = deps.fontEpoch || defaultFontEpoch;
-    this._mode = 'today';
+    this._mode = DEFAULT_SUN_MODE;
     this._active = false;
     this._key = null;
     /** Times the chart was asked to draw (tests, probes). */
@@ -98,12 +99,12 @@ export class AirPage {
     this.chart = new AirChart({ onMode: (id) => this.setMode(id), fontEpoch: this._fontEpoch, parent: deps.parent });
   }
 
-  /** @returns {'low'|'mean'|'high'|'today'} the button that is down */
+  /** @returns {'low'|'mean'|'high'} the button that is down */
   getMode() { return this._mode; }
 
   /** Press a Sun button. Unknown ids are ignored. @returns {string} the mode */
   setMode(id) {
-    if (id === 'low' || id === 'mean' || id === 'high' || id === 'today') {
+    if (id === 'low' || id === 'mean' || id === 'high') {
       if (id !== this._mode) { this._mode = id; this._key = null; }
     }
     if (this._active) this._draw();
@@ -166,14 +167,14 @@ export class AirPage {
 
   /**
    * What the chart is told to show now.
-   * @returns {{mode:string, curveLevel:(string|number), todayLevel:(string|number), todayLine:string, todaySub:(string|null), stormLine:(string|null), shipAltKm:(number|null), storm:(null|{kp:number,factor:number,altKm:number})}}
+   * @returns {{mode:string, curveLevel:string, todayLevel:(string|number|null), todayLine:string, todaySub:(string|null), stormLine:(string|null), shipAltKm:(number|null), storm:(null|{kp:number,factor:number,altKm:number})}}
    */
   model() {
     const t = this._today();
     const alt = this._alt();
-    const todayLevel = t ? t.f107 : 'mean';
-    const curveLevel = this._mode === 'today' ? todayLevel : this._mode;
-    const todayLine = t ? `Today's Sun: ${todaySunWords(t.f107)}` : 'Training: average Sun';
+    const todayLevel = t ? t.f107 : null;                // no date (training): no today at all
+    const curveLevel = this._mode;
+    const todayLine = t ? `Today's Sun: ${todaySunWords(t.f107)}` : '';
     const todaySub = t && Number.isFinite(t.ms) ? `Game date ${new Date(t.ms).toISOString().slice(0, 10)}` : null;
     let storm = null;
     let stormLine = null;
