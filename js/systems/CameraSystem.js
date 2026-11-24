@@ -644,6 +644,7 @@ export class CameraSystem {
     // (Constants.LADDER.ENABLED + gameplay); untouched when the flag is off, so shipped views stay byte-identical.
     this._ladderUpdateSeq = 0;   // drawn-frame counter (ladderDragNudge coalescing)
     this._ladderUpdateWallMs = null;   // wall clock of the last ladder update (stale-nudge guard)
+    this._ladderGrabMs = -Infinity;    // wall clock of the globe's last grab-drag (ladderGrabMs; city names)
     this._wallNowMs = () => ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now());
     this._ladderCam = {
       active: false,
@@ -3774,6 +3775,7 @@ export class CameraSystem {
   _ladderDragTurn(dx, dy, rotateSpeed) {
     const lc = this._ladderCam;
     if (lc.floor === 4 && lc.anchor === 'earth') {
+      this._ladderGrabMs = this._wallNowMs();   // the globe's last grab-drag (city names: ladderGrabMs)
       const R = Constants.EARTH_RADIUS;
       const D = lc.curDistU;
       const H = this._ladderViewportHeightPx();
@@ -3786,6 +3788,20 @@ export class CameraSystem {
       }
     }
     return { theta: -dx * rotateSpeed, phi: dy * rotateSpeed };
+  }
+
+  /**
+   * Wall time (ms, performance.now clock) of the globe's last grab-drag of Earth (mouse or finger): the last drag move, or
+   * now while a finger that has moved is held. A mouse press alone is no drag (a click on a dot must not bring the city
+   * names back, §102 row 5). -Infinity before any (Sky 30 L2: the city names fade 10 s after it).
+   * @returns {number}
+   */
+  ladderGrabMs() {
+    const d = this._ladderCam.drag;
+    if (this._ladderCam.active && this._ladderCam.floor === 4 && d.touchHeld) {
+      this._ladderGrabMs = this._wallNowMs();
+    }
+    return Number.isFinite(this._ladderGrabMs) ? this._ladderGrabMs : -Infinity;
   }
 
   /**

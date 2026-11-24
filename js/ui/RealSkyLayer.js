@@ -60,7 +60,7 @@ export const HOVER_MIN_MS = 100;
 export const HOVER_RING_PX = 24;
 /** A Highlight ring or name box fades in or out over this many ms (Sky 25; it used to pop). */
 export const HL_FADE_MS = 150;
-/** A name that changes side slides to the new side over this many ms of wall time (its offset from the ring eases; the ring never does). */
+/** A name's offset from its ring eases over this many ms of wall time (the ring never does). A name sits on the left only (§102 row 6), so this eases a position, never a side change. */
 export const HL_SLIDE_MS = 200;
 /** A name keeps its place in the name cap this many ms after it appeared, unless it can no longer be placed. */
 export const HL_HOLD_MS = 2000;
@@ -282,12 +282,13 @@ export class RealSkyLayer {
     this._hlNameRows = new Int32Array(0); this._hlNameText = [];
     this._hlSx = new Float32Array(0); this._hlSy = new Float32Array(0); this._hlWid = new Float32Array(0);
     this._hlBoxX = new Float32Array(0); this._hlBoxY = new Float32Array(0); this._hlBoxOk = new Uint8Array(0);
-    this._hlSide = new Int8Array(0);    // the side each name's box used last frame (-1 none): it is tried first, so a box does not flip
+    this._hlSide = new Int8Array(0);    // the side each name's box used last frame (1 = left, -1 none)
     this._hlHold = new Uint8Array(0); this._hlSince = new Float64Array(0); this._hlSlideSide = new Int8Array(0);   // name hold and side slide (see _hlFrame)
     this._hlSlideT0 = new Float64Array(0); this._hlDrawDx = new Float32Array(0); this._hlDrawDy = new Float32Array(0);
     this._hlFromDx = new Float32Array(0); this._hlFromDy = new Float32Array(0);
     this._hlOff = { x: 0, y: 0 }; this._hlOff2 = { x: 0, y: 0 };
     this._hlRingSx = new Float32Array(RING_CAP); this._hlRingSy = new Float32Array(RING_CAP);
+    this._hlLitBox = { n: 0, a: new Float32Array(4 * RING_CAP) };   // the name boxes and rings drawn this frame (x, y, w, h each), for the city names to keep clear of (`litBoxes`)
     this._hlRingEls = []; this._hlRingShown = [];     // pooled DOM rings and what each last showed {on, x, y, row}
     this._hlNameEls = []; this._hlNameShown = [];
     this._hlScr = { x: 0, y: 0 };
@@ -1388,6 +1389,22 @@ export class RealSkyLayer {
     else this._keepOut = { x0: rect.x, y0: rect.y, x1: rect.x + rect.w, y1: rect.y + rect.h };
   }
 
+  /**
+   * The time buttons' box ({x0, y0, x1, y1}, CSS px) while they are shown, else null: Highlight names keep clear of it (owner
+   * 2026-11-24, §102 row 6). Read from the page, never assumed to be in a corner (it moves); re-read at most every 250 ms of wall time.
+   * @param {number} now wall ms
+   */
+  _clockKeepOut(now) {
+    if (this._clockAtMs !== undefined && now - this._clockAtMs < 250 && now >= this._clockAtMs) return this._clockRect;
+    this._clockAtMs = now; this._clockRect = null;
+    const el = this._doc && this._doc.getElementById ? this._doc.getElementById('map-clock-slider') : null;
+    if (el && el.style && el.style.display !== 'none' && el.getBoundingClientRect) {
+      const b = el.getBoundingClientRect();
+      if (b && b.width > 0 && b.height > 0) this._clockRect = { x0: b.left, y0: b.top, x1: b.right, y1: b.bottom };
+    }
+    return this._clockRect;
+  }
+
   _hlEmit() { for (const fn of this._hlListeners.slice()) { try { fn(this._hl); } catch (err) { if (typeof console !== 'undefined') console.warn('[RealSkyLayer] highlight listener:', err && err.message); } } }
 
   /**
@@ -1480,6 +1497,8 @@ export class RealSkyLayer {
     this._hlSlideT0 = new Float64Array(nn); this._hlDrawDx = new Float32Array(nn); this._hlDrawDy = new Float32Array(nn);
     this._hlFromDx = new Float32Array(nn); this._hlFromDy = new Float32Array(nn);
     for (let k = 0; k < nn; k++) this._hlWid[k] = nameWidthPx(text[k]);
+    this._hlLitBox.n = 0;
+    if (this._hlLitBox.a.length < 4 * (RING_CAP + 2 * nn)) this._hlLitBox.a = new Float32Array(4 * (RING_CAP + 2 * nn));
     // (the slot arrays fill by index as slots first show, so they have holes: `for...of` yields undefined there; Sky 23 H3 found this on the second highlight)
     this._hlNameShown.forEach((s) => { s.row = -1; });
     this._hlRingShown.forEach((s) => { s.row = -1; });
@@ -1554,6 +1573,7 @@ export class RealSkyLayer {
   /** Once per frame on floor 4: the overlay, then rings and names. */
   _hlFrame(t) {
     const h = this._hl;
+    this._hlLitBox.n = 0;   // refilled below once the rings and names are placed
     if (h.overlay && h.overlay.update) h.overlay.update(t, this._getCamera());
     if (this._floor !== FLOOR_NAVCOM || h.stage === 'chart' || !this._hlMask) { this._hlDomHide(); return; }
     const cam = this._viewProj();
@@ -1571,6 +1591,7 @@ export class RealSkyLayer {
     const snap = po.snap = this._snap(); po.side = this._hlSide;
     // a name shown less than HL_HOLD_MS ago keeps its place in the cap (wall time, not sky time)
     const now = this._now(), hold = this._hlHold, since = this._hlSince;
+    po.keepOut2 = this._clockKeepOut(now);   // the time buttons' box, read from the page (they move: top right today)
     for (let k = 0; k < nn; k++) hold[k] = since[k] >= 0 && now - since[k] < HL_HOLD_MS ? 1 : 0;
     po.hold = hold;
     placeNames(nn, nsx, nsy, this._hlWid, po, this._hlBoxX, this._hlBoxY, this._hlBoxOk);
@@ -1586,6 +1607,7 @@ export class RealSkyLayer {
       const row = all ? lit[k] : this._hlNameRows[k];
       const on = rsx[k] === rsx[k] && (all || this._hlBoxOk[k] === 1);
       this._hlRingAt(k, on, row, rsx[k], rsy[k], ringPx);
+      if (on) this._hlLitPush(rsx[k] - ringPx / 2, rsy[k] - ringPx / 2, ringPx, ringPx);
     }
     for (let k = rn; k < this._hlRingShown.length; k++) this._hlRingAt(k, false, -1, NaN, NaN, ringPx);
     for (let k = 0; k < nn; k++) {
@@ -1600,14 +1622,32 @@ export class RealSkyLayer {
         this._hlSlideSide[k] = s; this._hlSlideT0[k] = now;
       }
       const u = (now - this._hlSlideT0[k]) / HL_SLIDE_MS;
-      if (!(u >= 0 && u < 1)) { this._hlDrawDx[k] = to.x; this._hlDrawDy[k] = to.y; this._hlNameAt(k, true, x, y); continue; }
+      if (!(u >= 0 && u < 1)) { this._hlDrawDx[k] = to.x; this._hlDrawDy[k] = to.y; this._hlNameAt(k, true, x, y); this._hlLitPush(x, y, this._hlWid[k], NAME_BOX_H); continue; }
       const e = u * u * (3 - 2 * u), fx = this._hlFromDx[k], fy = this._hlFromDy[k];   // smoothstep
       const dx = fx + (to.x - fx) * e, dy = fy + (to.y - fy) * e;
       this._hlDrawDx[k] = dx; this._hlDrawDy[k] = dy;
-      this._hlNameAt(k, true, Math.round((nsx[k] + dx) * snap) / snap, Math.round((nsy[k] + dy) * snap) / snap);
+      const sx = Math.round((nsx[k] + dx) * snap) / snap, sy = Math.round((nsy[k] + dy) * snap) / snap;
+      this._hlNameAt(k, true, sx, sy);
+      this._hlLitPush(sx, sy, this._hlWid[k], NAME_BOX_H);
     }
     for (let k = nn; k < this._hlNameEls.length; k++) this._hlNameAt(k, false, 0, 0);   // boxes left over from a longer list
   }
+
+  /** Adds one box (x, y, w, h; CSS px) to this frame's list of lit rings and name boxes (no allocation; silently full at capacity). */
+  _hlLitPush(x, y, w, h) {
+    const b = this._hlLitBox, i = b.n * 4;
+    if (i + 4 > b.a.length) return;
+    b.a[i] = x; b.a[i + 1] = y; b.a[i + 2] = w; b.a[i + 3] = h;
+    b.n++;
+  }
+
+  /**
+   * The lit objects' rings and name boxes drawn this frame, `{ n, a }`: `a` holds x, y, w, h (CSS px) for each of the first `n` boxes. One shared
+   * object, refilled every frame (never copy it per frame); `n` is 0 with no highlight, off the globe, or while the names are hidden. The globe's
+   * city names read it and give way to what it holds (Sky 30 F).
+   * @returns {{n:number, a:Float32Array}}
+   */
+  litBoxes() { return this._hlLitBox; }
 
   /** The kind's colour for a lit row's ring (a Starlink group's own colour when it has one). */
   _hlRingColour(row) {
@@ -1680,6 +1720,7 @@ export class RealSkyLayer {
 
   /** Hide every ring and name box (another floor, page 1, Off). */
   _hlDomHide() {
+    this._hlLitBox.n = 0;
     if (!this._hlDomOn) return;
     this._hlSince.fill(-1); this._hlSlideSide.fill(-1);   // hidden at once: a name that comes back is new (no hold, no slide)
     for (let k = 0; k < this._hlRingEls.length; k++) { const s = this._hlRingShown[k]; if (s && s.on) { hlHideNow(this._hlRingEls[k]); s.on = false; } }

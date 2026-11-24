@@ -142,6 +142,10 @@ export class NavcomFloor {
     if (typeof this._icons.setOnSelect === 'function') {
       this._icons.setOnSelect((id) => this.focusById(id));
     }
+    // A click on `You` opens a card with her field, the debris there and her reach (Sky 30, DECISIONS §102 row 2): the reach is the last envelope
+    // the orb computed (the REACH pill that used to print it is gone).
+    this._lastReachEnv = null;
+    if (typeof this._icons.setShipInfo === 'function') this._icons.setShipInfo(() => this._lastReachEnv);
   }
 
   isActive() { return this._active; }
@@ -632,6 +636,7 @@ export class NavcomFloor {
       const playerOrbitKm = this._playerOrbitRadiusKm();
       if (posU && playerOrbitKm > 0) {
         orb = this._orb.update({ project, posU, velU, budget: this._budget, playerOrbitKm });
+        if (orb && orb.env) this._lastReachEnv = orb.env;
       }
     }
     return { icons, window, orb };

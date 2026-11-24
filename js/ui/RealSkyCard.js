@@ -30,6 +30,24 @@ export function isStarlinkRow(row) {
 export const CLASS_COLORS = ['#d8a050', '#e07f3a', '#c89070', '#6f8fa8', '#8a96a0', '#6a7078', '#3f4a58'];
 /** The one-row colour key's short words (same order as CLASS_NAMES; the full name is each item's tooltip). */
 export const LEGEND_LABELS = ['debris', 'stage', 'dead', 'working', 'sat', 'unknown', 'Starlink'];
+/**
+ * The order the tick boxes are drawn in: CLASS_NAMES indexes, "unknown" below Starlink (owner 2026-11-24, DECISIONS §102 row 4). Only the
+ * drawing order changes; CLASS_NAMES, CLASS_COLORS and the data's class numbers keep theirs.
+ */
+export const LEGEND_ORDER = Object.freeze([0, 1, 2, 3, 4, CLS_STARLINK, 5]);
+/**
+ * What each box means, one plain sentence per kind (same order as CLASS_NAMES), true to how the catalogue sorts objects
+ * (scripts/skyPack.mjs `classify`: Space-Track's object type, and CelesTrak's status letter for satellites). The hover text is this + "(tap to show or hide)".
+ */
+export const LEGEND_HINTS = Object.freeze([
+  'debris: broken pieces and fragments left by launches, breakups and collisions',
+  'stage: a used rocket stage left in orbit after a launch',
+  'dead: satellites that have stopped working',
+  'working: satellites still doing their job (Starlink has its own box)',
+  'sat: satellites where the catalogue does not say if they still work',
+  'unknown: objects the catalogue lists as unknown, with no kind',
+  'Starlink: the working Starlink internet satellites',
+]);
 
 /**
  * The one small credit line: every source the full credit names, in a few words. Built from the full text (never typed
@@ -116,30 +134,46 @@ export const HL_LIST_ROWS = 8, HL_LIST_ROWS_GLASS = 4;
 const HL_TICK_MS = 400;
 
 /**
+ * The time buttons' box in the top-right corner (Sky 30 F, owner 2026-11-24 14:45Z: "comms pane is really top right. all the way top, all the way
+ * right"): it sits where the radio box (`#hud-comms-panel`) sits on floor 2, flush at the top and right edges (measured 1728 x 1117 and 1366 x 1024:
+ * top 0, right 0), SKY_CLOCK_H_PX tall (measured 70 px on both screens: 5 px top padding, the 12 px caption, 2 px gap, 44 px buttons, 6 px padding,
+ * 1 px bottom border; `MapClockSlider` BUTTON_MIN_PX). The object panel stands directly under it, on the Mac and the iPad alike, sharing its
+ * bottom border (SKY_CLOCK_OVERLAP_PX), and is as wide as the wider of the two (SKY_COLUMN_MIN_W_PX is the least either is); the radio box and
+ * right column dodge under the panel, or under the buttons when no panel is up.
+ */
+export const SKY_CLOCK_EDGE_PX = 0;
+export const SKY_CLOCK_H_PX = 70;
+export const SKY_CLOCK_OVERLAP_PX = 1;
+export const SKY_COLUMN_MIN_W_PX = 284;
+/** The time buttons' element (MapClockSlider.MAP_CLOCK_SLIDER_ID; spelled here so the card does not import the control). */
+const CLOCK_ID = 'map-clock-slider';
+
+/**
  * Where the panel sits (plan sky-1116-lsky-card, owner 2026-11-17: "move it clear of Earth"). Measured (tmp/sky-card-probe.mjs):
  * with the ISS card open (272 x 342 px) at top:176px the iPad (1366 x 1024, touch) card sat 0 to 18 px over Earth's right edge on
  * floor 4 (Earth r 393-417 px, widest point at the screen's middle height, x 1076-1100 vs the card's left edge 1082) and 11 px over the
- * HUD's right-hand status strip (bottom y 187). No top offset clears it: the card is taller than the gap above Earth's widest point.
- * On touch, floor 4, the panel therefore sits in the bottom-right corner (card top y 670; Earth's edge at that height x 1069),
- * growing upward. (Until Sky 20, on floor 5 the top-right stayed: Earth's disc there ends at x 917 (card left 1082), and the bottom-right held the
- * Kessler timeline (a bottom-right card covered it in the probe's screenshot).) The Mac (1728 x 1117, mouse) has 151 px between Earth's
- * edge and the card on floor 4, so its placement stays as it was.
- * Sky 20 (owner 2026-11-23: the object card "in same position as Floor 4 top"): floor 5's page 1 takes floor 4's place on both screens,
- * and the Kessler timeline moved to the bottom, clear of the iPad's bottom-right corner (see SdaChart `STRIP_*`).
+ * HUD's right-hand status strip (bottom y 187). That is why the iPad's card sat bottom right (Sky 17-30). Sky 30 F (owner 2026-11-24 14:45Z: "object info pane
+ * should be directly below time button pane"): both screens put it directly under the time buttons in the top-right corner, flush right; the iPad keeps
+ * its 342 px height limit (PANEL_MAX_PX_GLASS), so with a card open it covers a sliver of Earth's right edge again (his pick; the lane's test allows
+ * up to 6 px at the measured arrival distance, and a closer view covers more).
+ * Mac floors 4 and 5 (Sky 19-20: "move the right panel to top right"; "the object card in same position as Floor 4 top"; floor 5 = page 1 shows the card there only).
  * @param {boolean} glass touch device
  * @param {number|null} [floor] 4 or 5
- * @returns {{top:string, bottom:string, maxHeight:string}} CSS values
+ * @param {boolean} [clockUp=true] the time buttons are on screen (the `-` steps can hide them): the panel then stands under them, else at the very top
+ * @returns {{top:string, bottom:string, right:string, maxHeight:string}} CSS values
  */
-export function panelPlacement(glass, floor) {
-  // Sky 23 (Highlight menu, plan sky-1124-highlight): the iPad panel is at most 342 px high (the ISS card's size, the tallest state before the menu), so its top
-  // edge stays at y 670 or lower on a 1024 px screen and clears Earth's rim (13 px at that height); anything taller scrolls inside the panel.
-  if (glass && (floor === FLOOR_GLOBE || floor === FLOOR_CHART)) return { top: 'auto', bottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', maxHeight: `min(${PANEL_MAX_PX_GLASS}px, calc(100vh - 260px))` };
-  // Mac floor 4 (lane sky-skylook-1119, owner 2026-11-19: "move the right panel to top right to improve visibility of the object cloud"):
-  // the panel's top edge is 12 px from the top. The radio box and the right column (Targets, Target info, NEXT when `+` brings it back; NEXT is gone on floor 4 by default since DECISIONS §78 row 11) that sat there move out of its way (see `SKY_PANEL_TOP_ATTR`).
-  // Floor 5 = page 1 of the page row (Sky 19, owner 2026-11-22: "a cleaner layout, remove irrelevant panes"; Sky 20: the card only, see `_place`):
-  // with a mouse it keeps the floor-4 place.
-  if (!glass && (floor === FLOOR_GLOBE || floor === FLOOR_CHART)) return { top: 'calc(12px + env(safe-area-inset-top, 0px))', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
-  return { top: '176px', bottom: 'auto', maxHeight: 'calc(100vh - 260px)' };
+export function panelPlacement(glass, floor, clockUp = true) {
+  if (floor === FLOOR_GLOBE || floor === FLOOR_CHART) {
+    const inset = 'env(safe-area-inset-top, 0px)';
+    return {
+      top: clockUp ? `calc(${inset} + ${SKY_CLOCK_EDGE_PX + SKY_CLOCK_H_PX - SKY_CLOCK_OVERLAP_PX}px)` : inset,
+      bottom: 'auto',
+      right: 'env(safe-area-inset-right, 0px)',
+      // Sky 23: the iPad panel is at most 342 px high (the ISS card's size); anything taller scrolls inside the panel.
+      maxHeight: glass ? `min(${PANEL_MAX_PX_GLASS}px, calc(100vh - 260px))` : 'calc(100vh - 260px)',
+    };
+  }
+  return { top: '176px', bottom: 'auto', right: '12px', maxHeight: 'calc(100vh - 260px)' };
 }
 
 /**
@@ -153,17 +187,9 @@ export function panelPlacement(glass, floor) {
 export const SKY_PANEL_TOP_ATTR = 'data-sky-panel-top';
 export const SKY_PANEL_DY_VAR = '--sky-panel-dy';
 export const SKY_PANEL_STYLE_ID = 'real-sky-panel-dodge-style';
-/** Touch floor 4: the panel's height + gap (px) while it shows in the bottom-right corner; the speed control's bottom edge adds it. */
-export const SKY_PANEL_LIFT_VAR = '--sky-panel-lift';
 export const SKY_PANEL_TOP_CSS = `html[${SKY_PANEL_TOP_ATTR}] #hud-comms-panel, html[${SKY_PANEL_TOP_ATTR}] #hud-right-column { translate: 0 var(${SKY_PANEL_DY_VAR}, 0px); }`;
 /** Gap between the panel's bottom edge and the radio box / right column under it, px. */
 export const SKY_PANEL_GAP_PX = 12;
-/**
- * Touch page 1 with no card open: the speed control stands where it does on the globe, above the globe's always-shown panel (iPad: panel 208 px
- * high with no card + SKY_PANEL_GAP_PX, measured 2026-11-23 by tmp/sky20-pages/p1.mjs: control y 722-792 of 1024). The lift var holds this until a
- * card opens, then the card's own height + gap.
- */
-export const SKY_PANEL_GLOBE_LIFT_PX = 220;
 /**
  * How far the dodge rule has moved the radio box and the right column down right now, px (0 when it is off). HUD reads it so the right
  * column's layout top (radio box bottom + 10) is measured without the radio box's own translate: both carry the same one, and counting it
@@ -182,7 +208,7 @@ export function skyPanelDodgePx(doc = typeof document !== 'undefined' ? document
 const HL_BTN_CSS = 'border:1px solid rgba(160,180,220,0.35);border-radius:4px;cursor:pointer;color:#e8eefc;background:rgba(40,60,100,0.35);touch-action:manipulation;font-size:11px;user-select:none;-webkit-user-select:none';
 
 const PANEL_CSS = [
-  'position:fixed', 'right:12px', 'overflow:auto', 'width:272px', 'z-index:36', 'display:none', 'pointer-events:auto',
+  'position:fixed', 'right:0', 'overflow:auto', `width:${SKY_COLUMN_MIN_W_PX}px`, 'z-index:36', 'display:none', 'pointer-events:auto',
   'box-sizing:border-box', 'padding:8px 10px', 'border-radius:6px', 'background:rgba(8,12,22,0.82)',
   'border:1px solid rgba(160,180,220,0.28)', 'color:#dbe4f5', 'font-family:var(--font-mono)', 'font-size:11px',
   'line-height:1.35', 'letter-spacing:0.02em', 'user-select:none', '-webkit-user-select:none',
@@ -226,6 +252,9 @@ export class RealSkyCard {
     this._isKindHidden = null;
     this._onFlyName = null;
     this._shown = false;
+    this._panelHidden = false;            // the player hid the panel (globe `-` step): nothing drawn, no dodge, no keep-out box
+    this._clockShown = true;              // the time buttons are on screen (main.js: `setClockShown`); the panel stands under them
+    this._colW = NaN;                     // the panel's width written now (as wide as the time buttons' box when that is wider)
     this._built = false;
     this._info = null;
     this._credit = '';
@@ -266,6 +295,32 @@ export class RealSkyCard {
     const e = this._els;
     return e.legendItems ? CLASS_NAMES.filter((n, i) => e.legendItems[i].style.display !== 'none') : [];
   }
+  /** The boxes that show now, in the order they are drawn, top to bottom (LEGEND_ORDER): what `-` on the globe unticks from the bottom. */
+  legendDrawOrder() {
+    const e = this._els;
+    return e.legendItems ? LEGEND_ORDER.filter((i) => e.legendItems[i].style.display !== 'none').map((i) => CLASS_NAMES[i]) : [];
+  }
+
+  /**
+   * The player hides or shows the whole panel (the globe's `-` / `+` steps, DECISIONS §102 row 3). The panel still counts as shown for the layer
+   * (`isShown`); it just draws nothing, reports no box, and the radio box / right column's dodge and the touch lift go with it. A tapped dot
+   * (`setObject` with an object) shows it again.
+   * @param {boolean} hidden
+   */
+  setPanelHidden(hidden) {
+    const h = hidden === true;
+    if (h === this._panelHidden) return;
+    this._panelHidden = h;
+    if (this._els.root) {
+      if (h && this._doc && this._doc.activeElement && this._els.root.contains && this._els.root.contains(this._doc.activeElement) && typeof this._doc.activeElement.blur === 'function') this._doc.activeElement.blur();
+      this._syncDisplay();
+      this._syncDodge();
+    }
+  }
+
+  /** True while the player has the panel hidden. */
+  panelHidden() { return this._panelHidden === true; }
+
   /** True while the card shows its "could not be loaded" line. */
   loadFailedShown() { return !!(this._els.fail && this._els.fail.style.display === 'block'); }
 
@@ -315,9 +370,9 @@ export class RealSkyCard {
     const legend = el('div', 'margin-top:7px;display:grid;grid-template-columns:repeat(3,1fr);gap:2px 4px;font-size:10px;letter-spacing:0;color:#aebbd6');
     legend.id = 'real-sky-key';
     const legendItems = [];
-    CLASS_NAMES.forEach((n, i) => {
+    CLASS_NAMES.forEach((n, i) => {   // built in class order (legendItems[i] is class i); appended in LEGEND_ORDER below
       const item = el('div', 'display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;box-sizing:border-box;min-height:22px;padding:0 3px;border-radius:4px;touch-action:manipulation');
-      item.title = `${n} (tap to show or hide)`;
+      item.title = `${LEGEND_HINTS[i]} (tap to show or hide)`;
       item.setAttribute('role', 'checkbox');
       item.setAttribute('tabindex', '0');
       item.setAttribute('aria-label', n);
@@ -330,9 +385,9 @@ export class RealSkyCard {
       // instead of the game. A chip reached by Tab toggles with Enter only; Space is never handled here, so it always reaches InputManager.
       item.addEventListener('click', () => { toggle(); if (typeof item.blur === 'function') item.blur(); });
       item.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); toggle(); } });
-      legend.append(item);
       legendItems.push(item);
     });
+    for (const i of LEGEND_ORDER) legend.append(legendItems[i]);
     // One small credit line naming every source; a tap opens the full wording, a second tap closes it (owner 2026-11-17, DECISIONS §74 row 3).
     const credit = el('div', 'margin-top:2px;padding:4px 0 0;font-size:10px;line-height:1.3;color:#8392b3;cursor:pointer');
     credit.id = 'real-sky-credit';
@@ -402,14 +457,21 @@ export class RealSkyCard {
     this.hlPick(id, true);
   }
 
-  /** Applies panelPlacement(glass, floor) to the panel (no-op before the panel is built). */
+  /** Applies panelPlacement(glass, floor, clock shown) to the panel (no-op before the panel is built). */
   _place() {
     const root = this._els.root;
     if (!root) return;
-    const p = panelPlacement(this._glass, this._floor);
+    const p = panelPlacement(this._glass, this._floor, this._clockShown);
     root.style.top = p.top;
     root.style.bottom = p.bottom;
+    root.style.right = p.right;
     root.style.maxHeight = p.maxHeight;
+    // On the globe and page 1 the panel is the second box of the corner column (Sky 30 F): flush with the screen's right edge like the radio box (no right border,
+    // no round corners on the sides that touch the screen or the buttons), round only at the bottom left.
+    const column = this._floor === FLOOR_GLOBE || this._floor === FLOOR_CHART;
+    root.style.borderRightWidth = column ? '0' : '1px';
+    root.style.borderRadius = column ? '0 0 0 6px' : '6px';
+    this._syncColumnWidth();
     // Page 1 (floor 5, Sky 20): the panel is the object card ONLY: no search box, tick boxes or credit row (the page has its own buttons and the
     // credit is in the Tech library), and nothing at all while no dot is picked (`_syncDisplay`).
     const page1 = this._floor === FLOOR_CHART;
@@ -424,6 +486,34 @@ export class RealSkyCard {
     this._hlRender(true);
     this._renderLegend();
     this._syncDodge();
+  }
+
+  /**
+   * The panel is as wide as the time buttons' box above it when that is wider than SKY_COLUMN_MIN_W_PX (the buttons' width depends on the
+   * language's words), so the two read as one column. Read from the page at write moments only; written on change.
+   */
+  _syncColumnWidth() {
+    const root = this._els.root;
+    if (!root) return;
+    let w = SKY_COLUMN_MIN_W_PX;
+    const clock = this._clockShown && this._doc && this._doc.getElementById ? this._doc.getElementById(CLOCK_ID) : null;
+    if (clock && clock.style && clock.style.display !== 'none' && typeof clock.getBoundingClientRect === 'function') {
+      const cw = clock.getBoundingClientRect().width;
+      if (cw > w) w = Math.ceil(cw);
+    }
+    if (w !== this._colW) { this._colW = w; root.style.width = `${w}px`; }
+  }
+
+  /**
+   * Whether the time buttons are on screen (main.js tells the card each frame; the globe's `-` steps can hide them). The panel then stands under them,
+   * else at the top, and the radio box and right column dodge to match.
+   * @param {boolean} shown
+   */
+  setClockShown(shown) {
+    const s = shown !== false;
+    if (s === this._clockShown) return;
+    this._clockShown = s;
+    if (this._els.root && this._placed) { this._place(); this._measure(); }
   }
 
   /** The card's own top rule and gap separate it from what is above it; page 1 shows the card alone, or under the Highlight header when one is on. */
@@ -443,7 +533,7 @@ export class RealSkyCard {
   _syncDisplay() {
     const root = this._els.root;
     if (!root) return;
-    const want = this._shown && (!this._page1() || !!this._info || !!this._hlHeadOn);
+    const want = this._shown && this._panelHidden !== true && (!this._page1() || !!this._info || !!this._hlHeadOn);
     const v = want ? 'block' : 'none';
     if (root.style.display !== v) root.style.display = v;
   }
@@ -463,6 +553,15 @@ export class RealSkyCard {
       const r = root.getBoundingClientRect();
       if (r && r.width > 0 && r.height > 0) b = { x0: Math.round(r.left), y0: Math.round(r.top), x1: Math.round(r.right), y1: Math.round(r.bottom) };
     }
+    // The time buttons above the panel are part of the corner column: the highlight's names keep clear of them too (Sky 30 F), whether or not the panel is up.
+    const clock = this._shown && this._clockShown && this._floor != null && this._doc && this._doc.getElementById ? this._doc.getElementById(CLOCK_ID) : null;
+    if (clock && clock.style && clock.style.display !== 'none' && typeof clock.getBoundingClientRect === 'function') {
+      const c = clock.getBoundingClientRect();
+      if (c && c.width > 0 && c.height > 0) {
+        const cb = { x0: Math.round(c.left), y0: Math.round(c.top), x1: Math.round(c.right), y1: Math.round(c.bottom) };
+        b = b ? { x0: Math.min(b.x0, cb.x0), y0: Math.min(b.y0, cb.y0), x1: Math.max(b.x1, cb.x1), y1: Math.max(b.y1, cb.y1) } : cb;
+      }
+    }
     const o = this._box;
     if ((!o && !b) || (o && b && o.x0 === b.x0 && o.y0 === b.y0 && o.x1 === b.x1 && o.y1 === b.y1)) return;
     this._box = b;
@@ -470,32 +569,10 @@ export class RealSkyCard {
   }
 
   /**
-   * The room the panel takes at the bottom right, for the map speed control (lane sky-floor4-1119, DECISIONS §78 row 12): on touch, floors 4
-   * and 5's page 1, the panel sits in the bottom-right corner and grows upward, so the speed control stands just above it. `--sky-panel-lift`
-   * on <html> is the panel's height + SKY_PANEL_GAP_PX while it shows there, else removed (page 1 with no card open: the globe's no-card lift
-   * SKY_PANEL_GLOBE_LIFT_PX, so the control stays in the globe's spot; a card opened there lifts it by the card's height); MapClockSlider's bottom edge adds it (CSS only, so the control moves with the panel when a tapped dot's card opens, with no
-   * per-frame work). Same write-on-change and same rect-read moments as the dodge.
-   * @private
-   */
-  _syncLift(de, root) {
-    const on = !!root && this._shown && this._glass && (this._floor === FLOOR_GLOBE || this._floor === FLOOR_CHART);
-    if (!on) {
-      if (this._liftPx !== undefined) { de.style.removeProperty(SKY_PANEL_LIFT_VAR); this._liftPx = undefined; }
-      return;
-    }
-    let lift = SKY_PANEL_GLOBE_LIFT_PX;   // page 1 with no card: the globe's spot
-    if (this._floor === FLOOR_GLOBE || this._info || this._hlHeadOn) {
-      const r = typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null;
-      lift = Math.round((r && r.height) || 0) + SKY_PANEL_GAP_PX;
-    }
-    if (lift !== this._liftPx) { de.style.setProperty(SKY_PANEL_LIFT_VAR, `${lift}px`); this._liftPx = lift; }
-  }
-
-  /**
-   * Mouse + floor 4 or 5 + showing: put the radio box and the right column (Targets / Target info panes, NEXT when shown) under the panel (attribute + the panel's
-   * bottom + SKY_PANEL_GAP_PX as a CSS variable on <html>); in every other state take it all back. Floor 5 (D7, review of 2026-11-19):
-   * the panel stays at top 176 px, right 12 px, 272 px wide, over `#hud-right-column` (right 0, 350 px), and `+` after a scan shows the
-   * panes there as on floor 4 (no floor test in the `+` walk: PaneDensity, HUD `_densityIsAvailable`; the `+` / `-` KEYS are locked on floor 5 since Sky 20, the slider is not), so the same dodge applies. Writes
+   * Floor 4 or 5 + showing: put the radio box and the right column (Targets / Target info panes, NEXT when shown) under the panel (attribute + the panel's
+   * bottom + SKY_PANEL_GAP_PX as a CSS variable on <html>), on the Mac and the iPad alike (Sky 30 F: the panel is directly under the time buttons on both);
+   * with no panel up on the globe they go under the time buttons; in every other state take it all back. Floor 5 (D7, review of 2026-11-19):
+   * the panes of the right column are there on page 1 after a `+` as on floor 4 (no floor test in the `+` walk: PaneDensity, HUD `_densityIsAvailable`; the `+` / `-` KEYS are locked on floor 5 since Sky 20, the slider is not), so the same dodge applies. Writes
    * only on change; reads the panel's rect only here (a show, a re-render, a size change), never per frame.
    */
   _syncDodge() {
@@ -504,9 +581,13 @@ export class RealSkyCard {
     const root = this._els.root;
     this._syncDisplay();
     this._measure();
-    this._syncLift(de, root);
+    this._syncColumnWidth();
     // Page 1 shows the panel only with a card open: with none there is nothing to dodge.
-    const on = !!root && this._shown && !this._glass && (this._floor === FLOOR_GLOBE || (this._floor === FLOOR_CHART && (!!this._info || !!this._hlHeadOn)));
+    const panelUp = !!root && this._shown && this._panelHidden !== true && (this._floor === FLOOR_GLOBE || (this._floor === FLOOR_CHART && (!!this._info || !!this._hlHeadOn)));
+    // Sky 30 (§102 row 7): on the globe the time buttons stand at the top right on every screen, so with no panel under them (the player hid it with `-`)
+    // the radio box and right column still start under the buttons; with the buttons hidden too (a second `-`) they go back to the top.
+    const clockOnly = !panelUp && !!root && this._floor === FLOOR_GLOBE && this._clockShown;
+    const on = panelUp || clockOnly;
     if (!on) {
       if (this._dodgeOn) { de.removeAttribute(SKY_PANEL_TOP_ATTR); de.style.removeProperty(SKY_PANEL_DY_VAR); this._dodgeOn = false; this._dodgeDy = NaN; }
       return;
@@ -518,8 +599,8 @@ export class RealSkyCard {
       d.head.appendChild(st);
       this._dodgeStyle = st;
     }
-    const r = typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null;
-    const dy = Math.round((r && r.bottom) || 0) + SKY_PANEL_GAP_PX;
+    const r = panelUp && typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null;
+    const dy = panelUp ? Math.round((r && r.bottom) || 0) + SKY_PANEL_GAP_PX : SKY_CLOCK_EDGE_PX + SKY_CLOCK_H_PX + SKY_PANEL_GAP_PX;
     if (!this._dodgeOn) { de.setAttribute(SKY_PANEL_TOP_ATTR, ''); this._dodgeOn = true; }
     if (dy !== this._dodgeDy) { de.style.setProperty(SKY_PANEL_DY_VAR, `${dy}px`); this._dodgeDy = dy; }
   }
@@ -583,6 +664,7 @@ export class RealSkyCard {
   /** The object's card (fields from cardFields) or null to close it. */
   setObject(info) {
     this._info = info || null;
+    if (info && this._panelHidden === true) this.setPanelHidden(false);   // a tapped dot shows the panel again (DECISIONS §102 row 3)
     if (this._els.msg) this._els.msg.textContent = '';
     this._render();
   }

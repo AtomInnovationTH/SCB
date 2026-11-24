@@ -34,6 +34,7 @@ import { Constants } from '../core/Constants.js';
 import { prefersReducedMotion } from '../ui/hudPulse.js';
 import { cubicInOut } from './CameraSystem.js';
 import { clamp01 } from '../core/MathUtil.js';
+import { chartEarthDistU } from '../ui/SdaChart.js';
 
 /** Crossing-ride duration: midpoint of the locked 450–650 ms window. */
 const CROSS_RIDE_MS = 550;
@@ -268,14 +269,10 @@ export class LadderController {
     this._sfx = deps.sfx || null;
     this._starfield = deps.starfield || null;
     this._cityLabels = deps.cityLabels || null;
-    // Sky 23 (Highlight menu, H3): the real sky layer. While one of its highlights is on, floor 4's city names hide (their pills sat among the
-    // highlight's name boxes); a change of the highlight re-runs the one city-names switch, `_setCityLabelsHidden`, with the floor it last got.
+    // Sky 23 (Highlight menu, H3): the real sky layer (Esc ends a highlight). Sky 30 F: a highlight no longer touches the city names.
     this._realSky = deps.realSky || null;
     this._cityFloor = null;          // the floor `_applyFloorContent` last ran for, null while disengaged
     this._cityMassBands = false;     // and whether that floor was the SDA chart
-    if (this._realSky && typeof this._realSky.onHighlightChange === 'function') {
-      this._realSky.onHighlightChange(() => this._refreshCityLabels());
-    }
     this._targetReticle = deps.targetReticle || null;
     this._dockingReticle = deps.dockingReticle || null;
     // The PUBLIC key-state map (inputManager.keys; InputManager is never edited). While the turntable is live, held arrows
@@ -513,6 +510,7 @@ export class LadderController {
     this._syncTakeover();   // a camera input took the focus pose over (a drag): the ladder's zoom state follows it
     this._dzTick(t);        // daughter zoom: the camera comes back from her limit when the follow has ended
     this._glideTick(t);
+    this._chartReframeTick();
     this._refreshRail();
     return decisions;
   }
@@ -2035,14 +2033,14 @@ export class LadderController {
   }
 
   /**
-   * @private The ONE city-names switch with the floor it last ran for: hidden on F5's chart, on F1, and on F4 while a real-sky highlight is on
-   * (Sky 23 H3). Always goes through `_setCityLabelsHidden` (never `cityLabels.setSuppressed` directly: a direct call would turn the names
+   * @private The ONE city-names switch with the floor it last ran for: hidden on F5's chart and on F1. (Until Sky 30 F it also hid them on F4 while
+   * a real-sky highlight was on; with "Famous" on by default the cities never showed there. Owner 2026-11-24 14:45Z: they show with any
+   * list on, and a city name gives way only where it would touch a lit object's name or ring: `CityLabels` `blockers`.) Always goes through `_setCityLabelsHidden` (never `cityLabels.setSuppressed` directly: a direct call would turn the names
    * back on under page 1's chart at "Off", and this boolean, which never changed, would not hide them again). Nothing while disengaged.
    */
   _refreshCityLabels() {
     if (this._cityFloor === null) return;
-    const highlightOn = !!(this._realSky && typeof this._realSky.highlight === 'function' && this._realSky.highlight());
-    this._setCityLabelsHidden(this._cityMassBands || this._cityFloor === 1 || (this._cityFloor === 4 && highlightOn));
+    this._setCityLabelsHidden(this._cityMassBands || this._cityFloor === 1);
   }
 
   /**
@@ -2121,7 +2119,34 @@ export class LadderController {
     }
     const anchor = (f.anchor === 'earth') ? 'earth' : 'ship';
     const fov = (f.camera.fov != null) ? f.camera.fov : Constants.CAMERA_FOV;
+    // The row's floor (page 1's chart; Sky 30, owner 2026-11-24, DECISIONS §102 row 11): the real globe fills the chart's centre circle exactly, so the camera
+    // stands where `chartEarthDistU` puts it for this window (the floor's own 500..1300 u range is not read here: the chart owns the framing; the wheel does nothing on a page).
+    if (floor === PAGE_ROW_FLOOR && f.chart) {
+      const vp = this._viewport();
+      if (vp) distU = chartEarthDistU(vp.w, vp.h, fov);
+    }
     return { distU, fov, anchor, floor, z01 };
+  }
+
+  /** @private The window's size in CSS px, or null headless (the chart's framing waits for one). */
+  _viewport() {
+    if (typeof window === 'undefined' || !(window.innerWidth > 0) || !(window.innerHeight > 0)) return null;
+    return { w: window.innerWidth, h: window.innerHeight };
+  }
+
+  /** @private Page 1's camera follows a resized window: the target is re-aimed when the size changed (the camera's own ease does the rest). */
+  _chartReframeTick() {
+    const st = this._ladder.getState();
+    if (!st || st.floor !== PAGE_ROW_FLOOR || this.isRiding()) { this._chartVp = null; return; }
+    const vp = this._viewport();
+    if (!vp) return;
+    const k = `${vp.w}x${vp.h}`;
+    if (this._chartVp === k) return;
+    const first = this._chartVp == null;
+    this._chartVp = k;
+    if (first) return;   // the arrival's ride already carried this size
+    const cs = this._cameraSystem;
+    if (cs && cs.ladderSetTarget) cs.ladderSetTarget(this._frame(st.floor, st.z01));
   }
 
   _refreshRail() {

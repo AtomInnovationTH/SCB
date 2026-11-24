@@ -82,8 +82,7 @@ export const CASCADE_CEIL_FACTOR = 20;
  */
 export const BAU_QUADRUPLE_YEAR = 2059;
 
-/** Chart chrome colors (the SDA chart costume, not VisualLaw semantics). */
-const CHART_EARTH_BLUE = 'rgba(24, 62, 100, 0.92)'; // chart-blue flat disc
+/** Chart chrome colors (the SDA chart costume, not VisualLaw semantics). Sky 30: no flat Earth disc any more, the real turning globe shows (`chartEarthDistU`). */
 const CHART_GRID = 'rgba(0, 204, 255, 0.18)';       // faint INFO grid/rings
 
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -329,6 +328,24 @@ export function radiusPxForAltKm(map, altKm) {
 }
 
 /**
+ * Where the camera must stand so the real, turning Earth under the chart fills the chart's Earth circle (Sky 30, owner 2026-11-24, DECISIONS §102 row 11:
+ * "the real globe fills the centre circle exactly"). The chart's circle is `rEarth = EARTH_RADIUS * map.sLeoPxPerU` px about the screen's centre; a sphere of
+ * radius R seen from distance d on the view axis (the camera aims at Earth's centre) has the angular radius asin(R/d), and a perspective camera of vertical
+ * field of view `fov` over a viewport `hPx` tall draws it with the radius (hPx/2) * tan(asin(R/d)) / tan(fov/2) px. Solved for d: with t = rEarth * tan(fov/2) / (hPx/2),
+ * d = R * sqrt(1 + 1/t^2). Pure; page 1's camera distance on both screens and after a resize (CameraSystem, LadderController `_frame`).
+ * @param {number} wPx @param {number} hPx - viewport (CSS px)
+ * @param {number} fovDeg - the camera's vertical field of view, degrees
+ * @returns {number} distance from Earth's centre, scene units
+ */
+export function chartEarthDistU(wPx, hPx, fovDeg) {
+  const map = meoRadialMap({ wPx, hPx });
+  const R = Constants.EARTH_RADIUS;
+  const rEarthPx = R * map.sLeoPxPerU;
+  const t = rEarthPx * Math.tan((fovDeg * Math.PI) / 360) / (Math.max(1, hPx) / 2);
+  return R * Math.sqrt(1 + 1 / (t * t));
+}
+
+/**
  * Rank label candidates for the floor's labelBudget (SDA = 7): weight-desc, stable on ties by id, truncate.
  * Mirrors ClusterIcons.rank.
  * @param {Array<{id:*, weight:number}>} candidates
@@ -393,94 +410,201 @@ export function chartTextVersion() { return _chartTextVersion; }
 function _setChartTextBoxes(list) { _chartTextBoxes = list; _chartTextVersion++; }
 /** The lowest a label baseline may start: below the tag and the caveat row (CHART_TOP_CLEAR_PX + 2 rows). */
 export const LABEL_TOP_PX = CHART_TOP_CLEAR_PX + 28;
-/** Label x offset from the centre for a label that has no leader (the far ring's label at the top). */
-const LABEL_X_NEAR = 8;
 /**
- * The five height labels stand in a column on the LEFT of the ring (owner 2026-11-23, Sky 23: "improve the tonnage callouts. Maybe moving
- * to left side with clearer and better organized layout for callout lines"; they stood at the upper right, sky 18). The labels end (their
- * text is right-aligned) this far left of the outermost ring's left edge; each leader leaves its own ring on the ring's left side,
- * runs slanting to a common upright line (the elbow) and ends in a short horizontal run into its label.
+ * The height labels' size (Sky 30, owner 2026-11-24, DECISIONS §102 row 9: "double the size of the weight numbers"). They were 10 px (`mono(10)`); twice that is 20 px,
+ * and the iPad's least is 18, so one size serves both screens. The 36,000 km label is LABEL_GEO_FONT_PX.
  */
-export const COLUMN_CLEAR_PX = 44;
-/** The horizontal run of every leader, from its elbow into the label's end (the last 4 px are the gap before the glyphs), px. */
-export const COLUMN_RUN_PX = 14;
-/** Rows of the column stand this far apart (baseline to baseline), px: twice a text line, so each label reads as its own row. */
-export const COLUMN_ROW_GAP_PX = 26;
+export const LABEL_FONT_PX = 20;
+export const LABEL_GEO_FONT_PX = 16;
 /**
- * A leader leaves its ring at this fraction of its label row's distance from the chart's middle height (0 = every leader leaves at 9 o'clock,
- * 1 = horizontal leaders): the leaders fan out gently instead of bunching, and none can cross (the rows and the departure points keep one order).
+ * The five height labels stand in ONE column at the UPPER LEFT, highest band on top (Sky 30, §102 row 9: "move numbers and call out high to point at top of globe
+ * where layers are easier to see vertical"; before, Sky 23, they stood in a column left of the ring's 9 o'clock side). The text is left-aligned, COLUMN_LEFT_PX from the
+ * screen's left edge, the rows COLUMN_ROW_GAP_PX apart (baseline to baseline: 1.7 lines of 20 px). Each label has ONE straight leader from just after its text to its own
+ * band at the TOP of the ring (12 o'clock, x = the centre, where the bands stack one above the other). The rows and the band points keep the same order (highest first), so
+ * no two leaders cross and, being almost level, none passes through another label. The block is centred on the mean height of the band points, but never higher than
+ * the colour key's row under the lens buttons and the radio notice.
  */
-const LEADER_FAN = 0.5;
-/** A guess of the widest column row (the key line, about 44 glyphs), px: only where an avoid box is tested (the layout is pure and measures no text). */
-const COLUMN_W_GUESS_PX = 300;
+export const COLUMN_LEFT_PX = 24;
+/** Rows of the column stand this far apart (baseline to baseline), px. */
+export const COLUMN_ROW_GAP_PX = 34;
+/** The gap between the text's end and the start of its leader, px. */
+export const LEADER_GAP_PX = 8;
+/** A leader meets the glyphs' middle: this far above the baseline (20 px digits are about 14 px tall). */
+export const LEADER_RISE_PX = 7;
+/** A guess of the widest column row, px: only where an avoid box is tested (the layout is pure and measures no text). */
+const COLUMN_W_GUESS_PX = 420;
+/**
+ * Clearance the column keeps from the ring's outer edge, px (Sky 30 fix, review of the labels): at each row's height every label's right end and its leader's turn point stand at
+ * least this far left of the ring. When one-line labels do not fit (the iPad's Danger view: "400-600 km \u00b7 512 of 1,800 not working" reaches the ring at the bottom rows) the
+ * labels wrap at the "\u00b7" into two lines (the span, then the count), COLUMN_LINE_PX apart; the leader leaves the first line. The choice is per screen and lens, never per row.
+ */
+export const RING_CLEAR_PX = 8;
+/** Baseline to baseline of a wrapped label's two lines, px (the 20 px line's text box is 24 px tall: the two boxes touch, never overlap). */
+export const COLUMN_LINE_PX = 24;
+/** Two leaders' end points on the ring's top stay at least this far apart, px (the bands are thin on the iPad: 7.4 px between two middles before). */
+export const LEADER_END_GAP_PX = 8;
+/** What the layout aims at, so rounding never leaves 7.999...: the bound itself stays LEADER_END_GAP_PX. */
+const LEADER_END_AIM_PX = LEADER_END_GAP_PX + 1e-6;
+/** Glyph tops stand this far over a 20 px baseline, and descenders this far under it (the box `_text` records is 0.9 / 0.3 of the size). */
+const GLYPH_UP_PX = 0.9 * LABEL_FONT_PX;
+const GLYPH_DOWN_PX = 0.3 * LABEL_FONT_PX;
+/** Backing plate behind the column and the key (the 36,000 km label's own plate colour), and its padding, px: the dashed 36,000 km ring never cuts through the text. */
+export const PLATE_FILL = 'rgba(2, 6, 12, 0.78)';
+export const PLATE_PAD_PX = 5;
 /**
  * The colour key above the label column (Sky 19: the search / tick-box panel and its key are not on page 1 any more): one short line,
  * each half drawn in its own colour. Ring dots are warm (orange) for debris, rocket stages and dead satellites and grey-blue for working,
  * "sat" and unknown ones (RealSkyCard CLASS_COLORS, the colours RealSkyLayer's floor-5 canvas fills with). It stands this far above the
- * column's first label baseline.
+ * column's first label baseline (the 20 px row's glyph tops are 15 px over its baseline, the key's descenders 3 px under its own).
  */
-export const KEY_ABOVE_PX = 18;
+export const KEY_ABOVE_PX = 26;
 export const KEY_WARM = { text: '\u25cf debris, stage, dead', color: CLASS_COLORS[1] };
 export const KEY_COOL = { text: '\u25cf working, sat, unknown', color: CLASS_COLORS[3] };
 /** Width of one 10 px label when there is no canvas to measure it (the face is about 6.1 px a glyph). */
 const GLYPH_PX = 6.6;
 
+/** The 36,000 km label's first line (its second line is the gold tonnes, "4,384 tonnes"). */
+export const GEO_LABEL_LINE1 = '36,000 km ring + graveyard';
+
 /**
- * Lay the ring labels out so no two text boxes overlap. The band labels (ids `band-…`) stand in ONE column on the LEFT of the ring (Sky 23),
- * outermost band first at `minGap` spacing, their right ends COLUMN_CLEAR_PX left of the outermost ring (`outerPx`, the outer radius of the
- * last band) and the whole block (colour key + rows) centred on the chart's middle height. Each label has an elbow leader: from its OWN ring
- * (its `rPx`, on the ring's left side), slanting to the common elbow line, then a COLUMN_RUN_PX horizontal run into the label. The departure
- * points keep the rows' order, so no two leaders cross. When the block would meet a box over it (`avoid`: {x0, x1, y0, y1} as offsets from
- * the centre/top) it goes above that box, or under it when there is no room above. Any
- * other label (the GEO ring's) sits at the top beside the centre line. The input is not mutated; the strip title (rPx 0, painted
- * with the strip) passes through untouched.
+ * One band's label, in plain words (Sky 30, §102 row 9). Tonnes: "400\u2013600 km \u00b7 6,099 tonnes", and where the mass is an estimate "about 6,100 tonnes" (the sum rounded
+ * to the nearest 100 t; it replaces the old "\u00b7 est."). Danger: the count, or "N of M not working" where the real catalogue gave both.
+ * @param {string} lens 'VALUE' | 'THREAT'
+ * @param {{altKm:number[], massT:number, liveMassT:number, estimate?:boolean, count:number, realCount?:number, realNotWorking?:number}} r
+ * @returns {string}
+ */
+export function bandLabelText(lens, r) {
+  const span = `${_thousands(r.altKm[0])}\u2013${_thousands(r.altKm[1])} km`;
+  if (lens === 'VALUE') {
+    const t = r.massT + r.liveMassT;
+    return r.estimate ? `${span} \u00b7 about ${_thousands(Math.round(t / 100) * 100)} tonnes` : `${span} \u00b7 ${_thousands(t)} tonnes`;
+  }
+  if (r.realCount != null) return `${span} \u00b7 ${_thousands(r.realNotWorking)} of ${_thousands(r.realCount)} not working`;
+  return `${span} \u00b7 ${_thousands(r.count)} ${r.count === 1 ? 'object' : 'objects'}`;
+}
+
+/**
+ * Lay the ring labels out so no two text boxes overlap. The band labels (ids `band-...`) stand in ONE column at the upper left (see COLUMN_LEFT_PX), highest band first at
+ * `minGap` spacing. Each has a straight leader from its text's end to its band at the top of the ring: `ringX` 0 (the centre), `ringY` = the centre height less the
+ * label's `rPx` (the middle of the band). When the block would meet a box over it (`avoid`: {x0, x1, y0, y1} as offsets from the centre/top) it goes above that box, or
+ * under it when there is no room above. The block never starts above the colour key's lowest row (under the lens buttons). Any other label (the strip title) passes
+ * through untouched; the GEO ring's label is placed by `geoLabelPlacement`, not here. The input is not mutated.
  * @param {Array<{id:*, rPx:number, text?:string}>} labels
  * @param {number} cy - chart centre y, px
- * @param {number} [minGap]
- * @param {number} [minY]     - first baseline the column may use
- * @param {number} [outerPx]  - outer radius of the outermost band, px (default: the outermost label's radius + 4)
+ * @param {number} [minGap] - rows' spacing
+ * @param {number} [minY]     - first baseline any label may use
+ * @param {number} [cxPx]  - chart centre x, px (the column's left edge is COLUMN_LEFT_PX from the screen's left: offset COLUMN_LEFT_PX - cxPx)
  * @param {{x0:number,x1:number,y0:number,y1:number}|null} [avoid] - a rectangle the column must not touch (x from the centre, y from the top)
- * @returns {Array<object>} each label plus `x` (the text's RIGHT end, offset from the centre; `align` is 'right'), `y` (baseline),
- *   `ringX` / `ringY` (leader start: x from the centre, y from the top), `elbowX` / `leaderY` (the turn: x from the centre, y from the top), `leader`
+ * @param {function(string):number} [measure] - text width at LABEL_FONT_PX (default: a glyph guess)
+ * @param {number} [ringPx] - the outer LEO ring's radius, px (default 0: no ring to keep clear of, labels stay on one line). With it, every label's right end and its leader's turn
+ *   point stay RING_CLEAR_PX left of the ring's edge at their own height; when one line each does not fit, ALL the labels wrap at the "\u00b7" into two lines.
+ * @returns {Array<object>} each label plus `x` (the text's LEFT end, offset from the centre; `align` is 'left'), `y` (first line's baseline), `lines` (the text's one or two lines;
+ *   the second stands COLUMN_LINE_PX under the first), `ringX` / `ringY` (leader end: x from the centre, y from the top; the band's middle, spread so neighbours are LEADER_END_GAP_PX apart),
+ *   `leaderX` / `leaderY` (leader start, at the first line), `elbowX` (where its level run turns toward the band: x from the centre; the same for every row), `leader`
  */
-export function layoutLabels(labels, cy, minGap = LABEL_MIN_GAP_PX, minY = 12, outerPx = 0, avoid = null) {
+export function layoutLabels(labels, cy, minGap = COLUMN_ROW_GAP_PX, minY = LABEL_TOP_PX, cxPx = 0, avoid = null, measure = null, ringPx = 0) {
+  const width = typeof measure === 'function' ? measure : (t) => String(t || '').length * GLYPH_PX * (LABEL_FONT_PX / 10);
   const out = labels.map((l) => {
     const ringY = cy - l.rPx;
-    return { ...l, x: LABEL_X_NEAR, y: Math.max(minY, ringY - 3), ringX: 0, ringY, leader: false };
+    return { ...l, x: 8, y: Math.max(minY, ringY - 3), ringX: 0, ringY, leader: false };
   });
   const bands = out.filter((l) => String(l.id).startsWith('band-')).sort((a, b) => b.rPx - a.rPx);
   if (!bands.length) return out;
-  const edge = outerPx > 0 ? outerPx : bands[0].rPx + 4;
-  const textRight = -(edge + COLUMN_CLEAR_PX);                 // the labels' right ends, x from the centre (left of the ring)
-  const elbowX = textRight + 4 + COLUMN_RUN_PX;                // where every leader turns horizontal
-  const span = (bands.length - 1) * minGap;
-  // The block is the colour key (KEY_ABOVE_PX over the first row, glyph top 9 px over its baseline), the rows and the last row's 3 px of descender:
-  // centred on the chart's middle height, the middle of the free band between the lens buttons (top) and the strip (bottom).
-  const blockH = 9 + KEY_ABOVE_PX + span + 3;
-  let top = cy - blockH / 2 + 9 + KEY_ABOVE_PX;               // first row's baseline
-  if (avoid) {
-    // A box over the column (an open card stands left of the ring only on a narrow screen): the block goes above it when it fits, else under it.
-    const right = textRight, left = textRight - COLUMN_W_GUESS_PX;
-    const blockTop = top - 9 - KEY_ABOVE_PX, blockBottom = top + span + 3;
-    if (left < avoid.x1 && right > avoid.x0 && blockBottom > avoid.y0 && blockTop < avoid.y1) {
-      const above = avoid.y0 - 6 - 3 - span;
-      top = above - 9 - KEY_ABOVE_PX >= minY + 14 ? above : avoid.y1 + 6 + 9 + KEY_ABOVE_PX;
+  const left = COLUMN_LEFT_PX - cxPx;
+  const meanEnd = bands.reduce((a, l) => a + (cy - l.rPx), 0) / bands.length;
+  // Under the lens buttons (bottom LENS_STACK_EDGE_PX + 2 * LENS_BTN_H + LENS_STACK_GAP_PX) and the radio notice beside them: the key's baseline is 24 px under their bottom edge.
+  const keyMin = LENS_STACK_EDGE_PX + 2 * LENS_BTN_H + LENS_STACK_GAP_PX + 24;
+  const keyH = KEY_ABOVE_PX + 15;                                  // the key's glyph tops over the first row's baseline
+  const linesOf = (l, wrap) => {
+    const text = String(l.text || ''), cut = text.indexOf(' \u00b7 ');
+    return wrap && cut > 0 ? [text.slice(0, cut), text.slice(cut + 3)] : [text];
+  };
+  // Where the block goes for one line count: centred on the band points, above or under an avoid box, never higher than the key's row.
+  const plan = (wrap) => {
+    const pitch = wrap ? minGap + COLUMN_LINE_PX : minGap;
+    const tail = wrap ? COLUMN_LINE_PX : 0;                        // the last label's second line
+    const span = (bands.length - 1) * pitch + tail;
+    let top = meanEnd - span / 2;                                  // first row's baseline
+    if (avoid) {
+      // A box over the column (an open card stands left of the ring only on a narrow screen): the block goes above it when it fits, else under it.
+      const right = left + COLUMN_W_GUESS_PX;
+      const blockTop = top - keyH, blockBottom = top + span + 4;
+      if (left < avoid.x1 && right > avoid.x0 && blockBottom > avoid.y0 && blockTop < avoid.y1) {
+        const above = avoid.y0 - 6 - 4 - span;
+        top = above >= keyMin + KEY_ABOVE_PX ? above : avoid.y1 + 6 + keyH;
+      }
     }
+    return { pitch, top: Math.max(top, keyMin + KEY_ABOVE_PX, minY) };
+  };
+  // The ring's outer edge, x from the centre, over a vertical stretch [y0, y1] (the edge is furthest left at the stretch's end nearest the centre height; none above the ring's top).
+  const ringEdge = (y0, y1) => {
+    if (!(ringPx > 0)) return Infinity;
+    const dy = y0 <= cy && cy <= y1 ? 0 : Math.min(Math.abs(y0 - cy), Math.abs(y1 - cy));
+    return dy >= ringPx ? Infinity : -Math.sqrt(ringPx * ringPx - dy * dy);
+  };
+  const elbowFor = (wrap) => Math.max(...bands.flatMap((l) => linesOf(l, wrap).map((t) => left + width(t)))) + LEADER_GAP_PX + 12;
+  const fits = (wrap) => {
+    const { pitch, top } = plan(wrap), elbow = elbowFor(wrap);
+    return bands.every((l, k) => {
+      const y = top + k * pitch;
+      if (elbow > ringEdge(y - LEADER_RISE_PX, y - LEADER_RISE_PX) - RING_CLEAR_PX) return false;
+      return linesOf(l, wrap).every((t, j) => {
+        const b = y + j * COLUMN_LINE_PX;
+        return left + width(t) <= ringEdge(b - GLYPH_UP_PX, b + GLYPH_DOWN_PX) - RING_CLEAR_PX;
+      });
+    });
+  };
+  const wrap = ringPx > 0 && !fits(false) && bands.some((l) => linesOf(l, true).length === 2);
+  const { pitch, top } = plan(wrap);
+  // One common elbow right of the longest line: every leader runs level from its first line's end to the elbow, then straight to its band. The starts of the slanting parts
+  // share one x and keep the rows' order, as do their ends (the ring's top, one band above the next): so no two leaders cross, and none reaches into another row's text.
+  const elbowX = elbowFor(wrap);
+  // The band points (the middles, highest band first = smallest y first), spread so neighbours are at least LEADER_END_GAP_PX apart.
+  const ends = bands.map((l) => cy - l.rPx);
+  for (let pass = 0; pass < 60; pass++) {
+    let moved = false;
+    for (let i = 1; i < ends.length; i++) {
+      const d = LEADER_END_AIM_PX - (ends[i] - ends[i - 1]);
+      if (d > 1e-9) { ends[i - 1] -= d / 2; ends[i] += d / 2; moved = true; }
+    }
+    if (!moved) break;
   }
-  top = Math.max(top, minY + 14 + 9 + KEY_ABOVE_PX);          // never up into the top lines (the GEO label's row)
   bands.forEach((l, k) => {
-    l.x = textRight;
-    l.align = 'right';
-    l.y = top + k * minGap;
+    l.x = left;
+    l.align = 'left';
+    l.y = top + k * pitch;
+    l.lines = linesOf(l, wrap);
     l.leader = true;
+    l.leaderX = left + width(l.lines[0]) + LEADER_GAP_PX;
     l.elbowX = elbowX;
-    l.leaderY = l.y - 4;                                       // the leader meets the glyphs' middle
-    // The leader leaves its own ring on the ring's left side, at LEADER_FAN of its row's distance from the middle height.
-    const dy = LEADER_FAN * (l.leaderY - cy);
-    l.ringY = cy + dy;
-    l.ringX = -Math.sqrt(Math.max(0, l.rPx * l.rPx - dy * dy));
+    l.leaderY = l.y - LEADER_RISE_PX;
+    l.ringX = 0;                                                   // the top of the ring: x = the centre
+    l.ringY = ends[k];                                             // the middle of the band (nudged under 1 px at most), where the bands stack vertically
   });
   return out;
+}
+
+/** The 36,000 km label's height under the screen's middle, and the dark plate's padding around its text, px. */
+export const GEO_LABEL_DY_PX = 120;
+export const GEO_LABEL_PAD_PX = 8;
+
+/**
+ * The 36,000 km ring's label sits ON its dashed ring (Sky 30, §102 row 10: "the 36,000 km ring label sits on its own ring"). The ring has the radius w / 2 about the screen's
+ * centre, so it runs off the screen at the top and bottom and shows as two arcs at the left and right edges. The label stands on the LEFT arc, GEO_LABEL_DY_PX under the
+ * middle height: there nothing else is on it (the object panel and the time buttons are at the right, the lens buttons and the height column at the top left, the strip at the bottom),
+ * on both screens. Two lines, left-aligned from the ring (the ring runs under the text's left end, behind a dark plate). The "GEO means ..." line stands right under it.
+ * @param {number} wPx @param {number} hPx - viewport
+ * @returns {{ringX:number, ringY:number, textX:number, y1:number, y2:number, toastTop:number}} screen px: the ring's point, the text's left edge, the two baselines, the toast's top edge
+ */
+export function geoLabelPlacement(wPx, hPx) {
+  const r = wPx / 2;
+  const dy = GEO_LABEL_DY_PX;
+  const ringY = hPx / 2 + dy;
+  const ringX = wPx / 2 - Math.sqrt(Math.max(0, r * r - dy * dy));
+  const textX = Math.max(ringX, 0) + 6;
+  const y1 = ringY - 4;
+  const y2 = y1 + Math.round(LABEL_GEO_FONT_PX * 1.3);
+  return { ringX, ringY, textX, y1, y2, toastTop: y2 + 14 };
 }
 
 /** The two lens buttons, in flip order: words for what each lens shows (gold = tonnes, red = danger). */
@@ -505,12 +629,8 @@ export const NOTICE_MIN_W_PX = 340;
  * there was 350 px wide). Measured by the browser probe (tmp/sky20-pages/p1.mjs prints the title's rect); not scaled by the HUD scale (the title is not a HUD group).
  */
 export const TITLE_HALF_W_PX = 160;
-/**
- * The once-only "GEO means ..." toast's top edge on page 1 (Sky 20): in the free band at the top, under the radio notice box (its bottom
- * about y 117, measured by tmp/sky20-pages/p1.mjs) and the chart's top lines (the "36,000 km ring + graveyard" label ends y 93), over the
- * ring's top (y 201 on both screens). Even two lines at the 1.25 HUD scale (about 50 px) end above y 201.
- */
-export const TOAST_TOP_PX = 124;
+/** The once-only "GEO means ..." toast stands left-aligned right under the 36,000 km label and wraps at this width (Sky 30). */
+export const TOAST_MAX_W_PX = 260;
 export const PAGE_ATTR = 'data-sda-page';
 const PAGE_STYLE_ID = 'sda-page-chrome-style';
 
@@ -538,39 +658,35 @@ export const STRIP_TITLE = 'Objects in orbit, 1957\u20132126 \u00b7 after today:
 /** The strip's scale note: the count axis is logarithmic, so every step up is ten times more. */
 export const STRIP_SCALE_NOTE = 'Each step up is 10 times more objects';
 /** The strip's honest-scale caveats (VALUE: some masses are estimates; THREAT: the timeline's two caveats). */
-export const NOTE_ESTIMATES = 'Band masses marked est. are estimates';
+export const NOTE_ESTIMATES = 'Band masses marked "about" are estimates';
 export const NOTE_THREAT = 'Some jumps before 2020 are better tracking, not new pieces \u00b7 when a chain reaction starts is disputed';
 
 /** The lowest count the strip's log axis shows (the 1957 start of zero sits on this line), and the decades it spans. */
 export const STRIP_LOG_MIN = 1000;
 
-/**
- * The speed control's width (CSS px, measured 2026-11-23 by tmp/sky20-pages/p1.mjs at both screens) and the gap the strip keeps before the
- * bottom-right column (card + control) when a card is open there (the iPad).
- */
-export const SPEED_CONTROL_W_PX = 300;
+/** The gap the strip keeps before an open card at the bottom right (the iPad's panel), px. */
 export const STRIP_KEEPOUT_GAP_PX = 16;
 /**
- * The strip stands at the bottom LEFT (Sky 23, owner 2026-11-23: "consider moving the 'objects in orbit' pane to bottom left, and adjusting
- * slightly so it fits well with the time slider on bottom right"): its left edge STRIP_LEFT_PX from the screen's left, its right end
- * STRIP_SPEED_GAP_PX before the speed control, which is SPEED_CONTROL_W_PX wide and SPEED_CONTROL_RIGHT_PX from the right edge (MapClockSlider
- * EDGE_PX 12, both screens). The same 24 px at both ends is what makes the pair read as one bottom band. Its vertical place stays above the page
- * dots (STRIP_*_FROM_BOTTOM_PX): the dots stand at the bottom centre, inside the strip's width.
+ * The strip is a wide box along the bottom (Sky 30, owner 2026-11-24, DECISIONS §102 row 8: "it should be a wide box"): it runs from STRIP_LEFT_PX to STRIP_RIGHT_PX
+ * short of the screen's right edge, the same 24 px at both ends. The time buttons left the bottom-right corner for the top right (row 7), so nothing stands there
+ * except the iPad's panel while a card or the Highlight row is up (it stops STRIP_KEEPOUT_GAP_PX before that). Its vertical place stays above the page dots
+ * (STRIP_*_FROM_BOTTOM_PX); the dots stand at the bottom centre, inside the strip's width.
  */
 export const STRIP_LEFT_PX = 24;
-export const STRIP_SPEED_GAP_PX = 24;
-export const SPEED_CONTROL_RIGHT_PX = 12;
+export const STRIP_RIGHT_PX = 24;
 
 /**
  * The strip's rectangle (CSS px; pure): x0, x1 left and right ends of the plot, y0, y1 its top and bottom.
  * @param {number} w @param {number} h - viewport
- * @param {{x0:number,y0:number,x1:number,y1:number}|null} [cardBox] - an open card (the iPad's stands bottom right): the strip also stops before it
+ * @param {{x0:number,y0:number,x1:number,y1:number}|null} [cardBox] - the object panel (the iPad's stands bottom right): where its box reaches the strip's rows the strip also stops before it
  * @returns {{x0:number, x1:number, y0:number, y1:number}}
  */
 export function stripRect(w, h, cardBox = null) {
-  let x1 = w - SPEED_CONTROL_RIGHT_PX - SPEED_CONTROL_W_PX - STRIP_SPEED_GAP_PX;
-  if (cardBox && cardBox.y1 > h - STRIP_TOP_FROM_BOTTOM_PX + 15) x1 = Math.min(x1, Math.min(cardBox.x0, cardBox.x1 - SPEED_CONTROL_W_PX) - STRIP_KEEPOUT_GAP_PX);
-  return { x0: STRIP_LEFT_PX, x1, y0: h - STRIP_TOP_FROM_BOTTOM_PX, y1: h - STRIP_BOTTOM_FROM_BOTTOM_PX };
+  const y0 = h - STRIP_TOP_FROM_BOTTOM_PX, y1 = h - STRIP_BOTTOM_FROM_BOTTOM_PX;
+  let x1 = w - STRIP_RIGHT_PX;
+  // The box matters only where it reaches the strip's rows: the title line over the plot (glyph tops 15 px over y0) down to the year labels' descenders.
+  if (cardBox && cardBox.y1 > y0 - 16 && cardBox.y0 < y1 + STRIP_LABEL_DROP_PX + 4) x1 = Math.min(x1, cardBox.x0 - STRIP_KEEPOUT_GAP_PX);
+  return { x0: STRIP_LEFT_PX, x1, y0, y1 };
 }
 /** The "today" label keeps at least this far from the strip's title; closer than that it moves to the right of its line. */
 const TODAY_TITLE_GAP_PX = 12;
@@ -724,9 +840,9 @@ export class SdaChart {
   }
 
   /**
-   * @private While page 1 shows: the radio notice goes to the top left and the "GEO means" toast to the top band (TOAST_TOP_PX; the toast grows
+   * @private While page 1 shows: the radio notice goes to the top left and the "GEO means" toast under the 36,000 km label (`geoLabelPlacement`; the toast grows
    * downward from its top edge). One attribute on <html>
-   * and three variables feed two rules (`!important`: the box's inline width and the sky panel's dodge translate would win otherwise);
+   * and five variables feed two rules (`!important`: the box's inline width and the sky panel's dodge translate would win otherwise);
    * write-on-change; hide() / dispose() take it all away, so the globe has the box back at the top right.
    */
   _syncPageChrome(wPx, hPx) {
@@ -736,16 +852,20 @@ export class SdaChart {
       const st = document.createElement('style');
       st.id = PAGE_STYLE_ID;
       st.textContent = `html[${PAGE_ATTR}] #hud-comms-panel { translate: var(--sda-notice-x) var(--sda-notice-y) !important; width: var(--sda-notice-w) !important; }`
-        + ` html[${PAGE_ATTR}] #notification-zone { top: ${TOAST_TOP_PX}px !important; bottom: auto !important; transform-origin: 0 0 !important; }`;
+        + ` html[${PAGE_ATTR}] #notification-zone { top: var(--sda-toast-y) !important; left: var(--sda-toast-x) !important; bottom: auto !important; transform: none !important; transform-origin: 0 0 !important;`
+        + ` text-align: left !important; max-width: ${TOAST_MAX_W_PX}px !important; }`;
       document.head.appendChild(st);
     }
     const p = noticePlacement(wPx, hPx);
-    const key = `${Math.round(p.x)}|${Math.round(p.y)}|${Math.round(p.wCss)}`;
+    const gp = geoLabelPlacement(wPx, hPx);
+    const key = `${Math.round(p.x)}|${Math.round(p.y)}|${Math.round(p.wCss)}|${Math.round(gp.textX)}|${Math.round(gp.toastTop)}`;
     if (this._pageKey === key && de.hasAttribute(PAGE_ATTR)) return;
     this._pageKey = key;
     de.style.setProperty('--sda-notice-x', `${Math.round(p.x)}px`);
     de.style.setProperty('--sda-notice-y', `${Math.round(p.y)}px`);
     de.style.setProperty('--sda-notice-w', `${Math.round(p.wCss)}px`);
+    de.style.setProperty('--sda-toast-x', `${Math.round(gp.textX)}px`);
+    de.style.setProperty('--sda-toast-y', `${Math.round(gp.toastTop)}px`);
     de.setAttribute(PAGE_ATTR, '');
   }
 
@@ -755,7 +875,7 @@ export class SdaChart {
     if (typeof document === 'undefined' || !document.documentElement || !document.documentElement.removeAttribute) return;
     const de = document.documentElement;
     de.removeAttribute(PAGE_ATTR);
-    for (const v of ['--sda-notice-x', '--sda-notice-y', '--sda-notice-w']) de.style.removeProperty(v);
+    for (const v of ['--sda-notice-x', '--sda-notice-y', '--sda-notice-w', '--sda-toast-x', '--sda-toast-y']) de.style.removeProperty(v);
   }
 
   isVisible() { return this._visible; }
@@ -839,17 +959,13 @@ export class SdaChart {
     const candidates = rings.map((r, i) => ({
       id: r.id,
       weight: weights[i],
-      text: lens === 'VALUE'
-        ? `${_thousands(r.altKm[0])}\u2013${_thousands(r.altKm[1])} km \u00b7 ${_thousands(r.massT + r.liveMassT)} t${r.estimate ? ' \u00b7 est.' : ''}`
-        : (r.realCount != null
-          ? `${_thousands(r.altKm[0])}\u2013${_thousands(r.altKm[1])} km \u00b7 ${_thousands(r.realNotWorking)} of ${_thousands(r.realCount)} not working`
-          : `${_thousands(r.altKm[0])}\u2013${_thousands(r.altKm[1])} km \u00b7 ${_thousands(r.count)} ${r.count === 1 ? 'object' : 'objects'}`),
+      text: bandLabelText(lens, r),
       rPx: (r.innerPx + r.outerPx) / 2,
     }));
     candidates.push({
       id: 'geo-ring',
       weight: lens === 'VALUE' ? 1.01 : 0.5, // the gold ring headlines VALUE
-      text: `36,000 km ring + graveyard \u00b7 ${_thousands(gold)} t`,
+      text: `${GEO_LABEL_LINE1} \u00b7 ${_thousands(gold)} tonnes`,
       rPx: map.geoPx,
     });
     candidates.push({
@@ -864,7 +980,7 @@ export class SdaChart {
     const cardBox = m.cardBox && Number.isFinite(m.cardBox.x0) ? m.cardBox : null;
     const avoid = cardBox ? { x0: cardBox.x0 - wPx / 2, x1: cardBox.x1 - wPx / 2, y0: cardBox.y0, y1: cardBox.y1 } : null;
     const labels = layoutLabels(rankLabels(candidates, FLOOR.labelBudget), hPx / 2, COLUMN_ROW_GAP_PX, LABEL_TOP_PX,
-      map.leoTopPx, avoid);
+      wPx / 2, avoid, this._labelMeasure(), map.leoTopPx);
     this._syncPageChrome(wPx, hPx);
 
     const timeline = m.timeline || null;
@@ -909,12 +1025,7 @@ export class SdaChart {
       ? 0.75 + 0.25 * Math.sin((now % PULSE_PERIOD_MS) / PULSE_PERIOD_MS * Math.PI * 2)
       : 1;
 
-    // Earth: chart-blue flat disc — an overlay; the real Earth mesh is untouched.
-    const rEarth = Constants.EARTH_RADIUS * map.sLeoPxPerU;
-    g.beginPath();
-    g.arc(cx, cy, rEarth, 0, Math.PI * 2);
-    g.fillStyle = CHART_EARTH_BLUE;
-    g.fill();
+    // Earth: no flat disc (Sky 30, §102 row 11): the real globe under the chart is framed to fill the Earth circle (`chartEarthDistU`).
 
     for (const r of rings) {
       g.beginPath();
@@ -938,38 +1049,52 @@ export class SdaChart {
     g.stroke();
     g.setLineDash([]);
 
-    g.font = mono(10);
-    for (const l of labels) {
-      if (l.id === 'kessler-strip') continue; // painted with the strip below
-      g.fillStyle = this._rgba(ramp, 0.95);
-      g.textAlign = l.align === 'right' ? 'right' : 'left';
-      if (l.leader) { // column label: an elbow leader from its own ring (same colour as the label), a dot where it leaves the ring
-        g.beginPath();
-        g.moveTo(cx + l.ringX, l.ringY);
-        g.lineTo(cx + l.elbowX, l.leaderY);
-        g.lineTo(cx + l.x + 4, l.leaderY);
-        g.strokeStyle = this._rgba(ramp, 0.95);
-        g.lineWidth = 1;
-        g.stroke();
-        g.beginPath();
-        g.arc(cx + l.ringX, l.ringY, 1.5, 0, Math.PI * 2);
-        g.fill();
-      }
-      this._text(g, l.text, cx + l.x, l.y);
-    }
-
-    // The colour key: one line above the label column, right-aligned with it, each half in its dot's colour (what the ring dots mean now that the panel's key is gone).
+    // The height labels (Sky 30, §102 row 9): 20 px, a column at the upper left, one straight leader each from the column's elbow to its band at the top of the ring.
+    g.font = mono(LABEL_FONT_PX);
     const column = labels.filter((l) => l.leader);
+    // A dark plate behind each label and the key hides the dashed 36,000 km ring where it runs under the text (it read "1,000/2,000"); the same plate as the 36,000 km label's.
+    g.fillStyle = PLATE_FILL;
+    for (const l of column) {
+      const lines = l.lines || [l.text];
+      const plateW = Math.max(...lines.map((t) => this._textW(g, t))) + 2 * PLATE_PAD_PX;
+      g.fillRect(cx + l.x - PLATE_PAD_PX, l.y - GLYPH_UP_PX - 2, plateW, GLYPH_UP_PX + 2 + (lines.length - 1) * COLUMN_LINE_PX + GLYPH_DOWN_PX + 2);
+    }
+    for (const l of column) {
+      g.fillStyle = this._rgba(ramp, 0.95);
+      g.textAlign = 'left';
+      (l.lines || [l.text]).forEach((t, j) => this._text(g, t, cx + l.x, l.y + j * COLUMN_LINE_PX, LABEL_FONT_PX));
+    }
+    g.lineWidth = 1;
+    g.strokeStyle = this._rgba(ramp, 0.95);
+    g.fillStyle = this._rgba(ramp, 0.95);
+    for (const l of column) {
+      g.beginPath();
+      g.moveTo(cx + l.leaderX, l.leaderY);
+      g.lineTo(cx + l.elbowX, l.leaderY);
+      g.lineTo(cx + l.ringX, l.ringY);
+      g.stroke();
+      g.beginPath();
+      g.arc(cx + l.ringX, l.ringY, 2, 0, Math.PI * 2);
+      g.fill();
+    }
+    const geo = labels.find((l) => l.id === 'geo-ring');
+    if (geo) this._paintGeoLabel(g, w, h, lens, geo);
+
+    // The colour key: one line above the label column, left-aligned with it, each half in its dot's colour (what the ring dots mean now that the panel's key is gone).
     if (column.length) {
+      g.font = mono(12);
       const kx = cx + column[0].x, ky = Math.min(...column.map((l) => l.y)) - KEY_ABOVE_PX;
-      g.textAlign = 'right';
+      g.fillStyle = PLATE_FILL;                                   // the key's plate (see the labels' plates above)
+      g.fillRect(kx - PLATE_PAD_PX, ky - 12, this._textW(g, KEY_WARM.text) + 18 + this._textW(g, KEY_COOL.text) + 2 * PLATE_PAD_PX, 12 + 4 + 2);
+      g.textAlign = 'left';
       g.globalAlpha = 0.95;
-      g.fillStyle = KEY_COOL.color;
-      this._text(g, KEY_COOL.text, kx, ky);
       g.fillStyle = KEY_WARM.color;
-      this._text(g, KEY_WARM.text, kx - this._textW(g, KEY_COOL.text) - 14, ky);
+      this._text(g, KEY_WARM.text, kx, ky, 12);
+      g.fillStyle = KEY_COOL.color;
+      this._text(g, KEY_COOL.text, kx + this._textW(g, KEY_WARM.text) + 18, ky, 12);
       g.globalAlpha = 1;
     }
+    g.font = mono(10);
 
     // Honesty chrome (not world labels): the scale tag + ESTIMATE provenance.
     g.textAlign = 'center';
@@ -997,6 +1122,41 @@ export class SdaChart {
     _setChartTextBoxes(this._boxes);
   }
 
+  /**
+   * @private The 36,000 km label on its ring (Sky 30, §102 row 10): two lines in the ring's gold on a dark plate that hides the dashed line behind the text, the ring
+   * point `geoLabelPlacement` gives at the left; the "GEO means" toast stands right under it (`_syncPageChrome`).
+   */
+  _paintGeoLabel(g, w, h, lens, geo) {
+    const p = geoLabelPlacement(w, h);
+    const line2 = geo.text.slice(geo.text.indexOf('\u00b7') + 2);
+    g.font = mono(LABEL_GEO_FONT_PX);
+    g.textAlign = 'left';
+    const w1 = this._textW(g, GEO_LABEL_LINE1), w2 = this._textW(g, line2);
+    const plateX = Math.max(0, p.textX - GEO_LABEL_PAD_PX), plateW = Math.max(w1, w2) + 2 * GEO_LABEL_PAD_PX;
+    const plateY = p.y1 - 14, plateH = (p.y2 - p.y1) + 14 + 7;   // glyph tops 12 px over a baseline, descenders 4 px under it
+    g.fillStyle = 'rgba(2, 6, 12, 0.78)';
+    g.fillRect(plateX, plateY, plateW, plateH);
+    g.strokeStyle = this._rgba(VisualLaw.COLORS.VALUE, lens === 'VALUE' ? 0.9 : 0.4);
+    g.lineWidth = lens === 'VALUE' ? 2 : 1;
+    g.beginPath(); g.moveTo(p.ringX, plateY + plateH / 2); g.lineTo(plateX, plateY + plateH / 2); g.stroke();   // the ring's own tick into the plate
+    g.fillStyle = this._rgba(VisualLaw.COLORS.VALUE, lens === 'VALUE' ? 0.98 : 0.8);
+    this._text(g, GEO_LABEL_LINE1, p.textX, p.y1, LABEL_GEO_FONT_PX);
+    this._text(g, line2, p.textX, p.y2, LABEL_GEO_FONT_PX);
+  }
+
+  /** @private The width of a height label at LABEL_FONT_PX (null without a canvas: the layout then guesses). */
+  _labelMeasure() {
+    const g = this._ctx2d;
+    if (!g || typeof g.measureText !== 'function') return null;
+    return (t) => {
+      g.save();
+      g.font = mono(LABEL_FONT_PX);
+      const w = this._textW(g, t);
+      g.restore();
+      return w;
+    };
+  }
+
   /** @private A string's width in the current font (the fallback _text uses when there is no measureText). */
   _textW(g, s) {
     const str = String(s);
@@ -1004,13 +1164,13 @@ export class SdaChart {
     return m && Number.isFinite(m.width) ? m.width : str.length * 6.1;
   }
 
-  /** @private fillText that also records the string's box (the glyphs sit about 8 px above the baseline, 3 px of descender). */
-  _text(g, s, x, y) {
+  /** @private fillText that also records the string's box (the glyphs sit about 0.9 of the font size above the baseline, 0.3 of descender; `px` is the font size, default 10). */
+  _text(g, s, x, y, px = 10) {
     const str = String(s);
     const m = typeof g.measureText === 'function' ? g.measureText(str) : null;
     const w = m && Number.isFinite(m.width) ? m.width : str.length * 6.1;
     const left = g.textAlign === 'center' ? x - w / 2 : (g.textAlign === 'right' || g.textAlign === 'end') ? x - w : x;
-    if (this._boxes) this._boxes.push({ text: str, x: left, y: y - 9, w, h: 12 });
+    if (this._boxes) this._boxes.push({ text: str, x: left, y: y - 0.9 * px, w, h: 1.2 * px });
     g.fillText(str, x, y);
   }
 

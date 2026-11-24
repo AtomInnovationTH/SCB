@@ -133,32 +133,35 @@ export function sideOffset(side, w, h, ringPx, gap, out = { x: 0, y: 0 }) {
 }
 
 const _off = { x: 0, y: 0 };
+/** The one side a name sits on: the left of its ring (`sideOffset` side 1). */
+export const SIDE_LEFT = 1;
 
 /** Scratch for `placeNames`: each placed box's smooth (unsnapped) left / top, which every test uses; grown only when `n` exceeds the length. */
 let rawX = new Float64Array(64), rawY = new Float64Array(64);
 
 /**
- * Place name boxes beside their rings, greedily in the order given (the order is the priority). A name tries right, left, above, below
- * of its ring; the first spot that stays on screen and clear of the keep-out rectangle, of every box already placed and of every
- * ring already placed (and does not cover its own ring's neighbours' boxes) wins. A name with no spot is skipped; placing stops at
- * `max`. No allocation: the results go into the arrays given. `o.snap` (device px per CSS px, default 1) is the grid the results (`outX`, `outY`) are rounded to; every test uses the smooth positions, so
+ * Place name boxes to the LEFT of their rings (owner 2026-11-24, DECISIONS §102 row 6: "stay on left"; vertically centred on the ring),
+ * greedily in the order given (the order is the priority). A name whose left box stays on screen and clear of the keep-out rectangles,
+ * of every box already placed and of every ring already placed is placed; any other name is skipped (it never moves to another side);
+ * placing stops at `max`. No allocation: the results go into the arrays given. `o.snap` (device px per CSS px, default 1) is the grid the results (`outX`, `outY`) are rounded to; every test uses the smooth positions, so
  * a box edge does not step 1 px at a time against a moving ring, and two drawn boxes may touch by under 1 / snap px.
- * `o.side` (one per candidate, -1 = none) is the side each name used last time: it is tried first, so a name keeps its side unless that spot
- * is lost; on return it holds the side used (0 right, 1 left, 2 above, 3 below) or -1 when not placed.
+ * `o.keepOut` (the side panel) and `o.keepOut2` (the time buttons) are rectangles {x0, y0, x1, y1} a box never enters.
+ * `o.side` (one per candidate), if given, gets SIDE_LEFT (1) for a placed name and -1 otherwise.
  * `o.hold` (one byte per candidate, 1 = shown last frame and appeared under HL_HOLD_MS ago) puts those names first in the cap: they are placed
- * in the order given before the rest, so a young name is not pushed out by a higher-priority one that turned up later. A held name with no
- * spot is still skipped. Without `o.hold` the result is the plain greedy pass.
+ * in the order given before the rest, so a young name is not pushed out by a higher-priority one that turned up later, and a held name
+ * keeps its place even where it brushes another name or ring (it must still be on screen and out of the keep-outs). Without `o.hold`
+ * the result is the plain greedy pass.
  * @param {number} n candidates
  * @param {ArrayLike<number>} sx ring centres, CSS px (NaN = not visible, skipped)
  * @param {ArrayLike<number>} sy
  * @param {ArrayLike<number>} wid box widths, CSS px
- * @param {{max:number, boxH?:number, ringPx:number, gap?:number, vw:number, vh:number, keepOut?:({x0:number,y0:number,x1:number,y1:number}|null), snap?:number, side?:Int8Array, hold?:Uint8Array}} o
+ * @param {{max:number, boxH?:number, ringPx:number, gap?:number, vw:number, vh:number, keepOut?:({x0:number,y0:number,x1:number,y1:number}|null), keepOut2?:({x0:number,y0:number,x1:number,y1:number}|null), snap?:number, side?:Int8Array, hold?:Uint8Array}} o
  * @param {Float32Array|number[]} outX box left @param {Float32Array|number[]} outY box top @param {Uint8Array|number[]} outOk 1 = placed
  * @returns {number} how many were placed
  */
 export function placeNames(n, sx, sy, wid, o, outX, outY, outOk) {
   const h = o.boxH || NAME_BOX_H, gap = o.gap === undefined ? NAME_GAP : o.gap, r = o.ringPx / 2;
-  const ko = o.keepOut || null, snap = o.snap > 0 ? o.snap : 1, side = o.side || null;
+  const ko = o.keepOut || null, ko2 = o.keepOut2 || null, snap = o.snap > 0 ? o.snap : 1, side = o.side || null;
   if (rawX.length < n) { rawX = new Float64Array(n); rawY = new Float64Array(n); }   // grows only when the list is longer than ever before
   const hold = o.hold || null;
   let placed = 0;
@@ -167,36 +170,35 @@ export function placeNames(n, sx, sy, wid, o, outX, outY, outOk) {
   for (let pass = hold ? 0 : 1; pass < 2; pass++) {
     for (let i = 0; i < n && placed < o.max; i++) {
       if (hold && (hold[i] === 1) !== (pass === 0)) continue;
-      const pref = side ? side[i] : -1;   // last time's side; this slot's answer replaces it
       if (side) side[i] = -1;
       const cx = sx[i], cy = sy[i];
       if (!(cx === cx) || !(cy === cy)) continue;
       const w = wid[i];
+      // a name shown less than the hold ago keeps its place even where it brushes another name or ring (owner 2026-11-24, §102 row 6)
+      const held = hold !== null && hold[i] === 1;
       // the ring itself must not sit under a box already placed (every test below meets every box and ring placed so far, in either pass)
       let ringFree = true;
-      for (let j = 0; j < n && ringFree; j++) {
+      for (let j = 0; j < n && ringFree && !held; j++) {
         if (outOk[j] === 1 && boxesOverlap(cx - r, cy - r, o.ringPx, o.ringPx, rawX[j], rawY[j], wid[j], h)) ringFree = false;
       }
       if (!ringFree) continue;
-      for (let t = 0; t < 4; t++) {
-        const s = pref < 0 || pref > 3 ? t : t === 0 ? pref : (t - 1 >= pref ? t : t - 1);   // the kept side, then the rest in the usual order
-        sideOffset(s, w, h, o.ringPx, gap, _off);
-        const bx = cx + _off.x, by = cy + _off.y;
-        // every test uses the smooth position; only the output is snapped (a snapped edge steps 1 px and flipped a name on and off)
-        if (bx < 4 || by < 4 || bx + w > o.vw - 4 || by + h > o.vh - 4) continue;
-        if (ko && boxesOverlap(bx, by, w, h, ko.x0, ko.y0, ko.x1 - ko.x0, ko.y1 - ko.y0)) continue;
-        let free = true;
-        for (let j = 0; j < n && free; j++) {
-          if (outOk[j] !== 1) continue;
-          if (boxesOverlap(bx, by, w, h, rawX[j], rawY[j], wid[j], h)) free = false;
-          else if (boxesOverlap(bx, by, w, h, sx[j] - r, sy[j] - r, o.ringPx, o.ringPx)) free = false;
-        }
-        if (!free) continue;
-        rawX[i] = bx; rawY[i] = by;
-        outX[i] = Math.round(bx * snap) / snap; outY[i] = Math.round(by * snap) / snap; outOk[i] = 1; placed++;
-        if (side) side[i] = s;
-        break;
+      // the LEFT of the ring only, never another side: no spot there = the name is not shown (it does not jump to the other side)
+      sideOffset(SIDE_LEFT, w, h, o.ringPx, gap, _off);
+      const bx = cx + _off.x, by = cy + _off.y;
+      // every test uses the smooth position; only the output is snapped (a snapped edge steps 1 px and flipped a name on and off)
+      if (bx < 4 || by < 4 || bx + w > o.vw - 4 || by + h > o.vh - 4) continue;
+      if (ko && boxesOverlap(bx, by, w, h, ko.x0, ko.y0, ko.x1 - ko.x0, ko.y1 - ko.y0)) continue;
+      if (ko2 && boxesOverlap(bx, by, w, h, ko2.x0, ko2.y0, ko2.x1 - ko2.x0, ko2.y1 - ko2.y0)) continue;
+      let free = true;
+      for (let j = 0; j < n && free && !held; j++) {
+        if (outOk[j] !== 1) continue;
+        if (boxesOverlap(bx, by, w, h, rawX[j], rawY[j], wid[j], h)) free = false;
+        else if (boxesOverlap(bx, by, w, h, sx[j] - r, sy[j] - r, o.ringPx, o.ringPx)) free = false;
       }
+      if (!free) continue;
+      rawX[i] = bx; rawY[i] = by;
+      outX[i] = Math.round(bx * snap) / snap; outY[i] = Math.round(by * snap) / snap; outOk[i] = 1; placed++;
+      if (side) side[i] = SIDE_LEFT;
     }
   }
   if (side) for (let i = 0; i < n; i++) if (outOk[i] !== 1) side[i] = -1;   // not placed (no spot, or past the cap)

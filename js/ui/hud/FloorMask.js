@@ -151,7 +151,8 @@ export const ALWAYS_ON = Object.freeze([
  *       tall, both where the mid-height rails land; the orb was off in the shipped cockpit too).
  *       owner 2026-09-06: gone by default on F2, from the first screen look.
  *   F3 approach view (insertion): corner orb + daughters; lists go.
- *   F4 route planning (transfer): the score only; the meters, the autopilot strip, the daughter rows and the radio box
+ *   F4 route planning (transfer): nothing but the rails and the game message line (the score bar left the default view,
+ *       Sky 30, DECISIONS §102 row 1: `+` adds it); the meters, the autopilot strip, the daughter rows and the radio box
  *       are 'gone' by default (owner 2026-11-17: DECISIONS §74 rows 1-2); the strip still shows while flying a leg and the
  *       radio box shows a new message for a few seconds. NEXT is 'gone' too (owner 2026-11-19, DECISIONS §78 row 11).
  *   F5 whole-Earth chart (survey): chart + score + alerts only.
@@ -200,14 +201,16 @@ export const DEFAULT_ROOMS = Object.freeze({
   4: Object.freeze({
     // owner 2026-11-17 (DECISIONS §74 row 1): floor 4 hides the meters (vitals), the autopilot strip (copilot) and the
     // daughter rows (arms) by default, as floor 5 does. The strip shows only while the autopilot flies a leg
-    // (FmaStrip `data-ap-flying`); `+` brings all three back. The gas budget stays in the REACH line.
+    // (FmaStrip `data-ap-flying`); `+` brings all three back. The gas budget shows in the card under `You` (Sky 30: no REACH pill).
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
     // The radio box (comms) is 'gone' here too (DECISIONS §74 row 2): CommsPanel shows it for a few seconds when a NEW
     // message arrives (its own `data-comms-flash` attribute, never the density bit); `+` shows the full box.
     // NEXT is 'gone' here too (owner 2026-11-19, DECISIONS §78 row 11): the map is the subject; floor 3 keeps it.
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone', f1bar: 'gone',
-    score: 'shown',
+    // Sky 30 (owner 2026-11-24, DECISIONS §102 row 1): the globe opens without the score bar; the first `+` from the
+    // arrival view adds it (GlobeSteps, `setAttributePane`).
+    score: 'gone',
     vitals: 'gone',
   }),
   5: Object.freeze({
@@ -349,6 +352,58 @@ export class FloorMask {
   }
 
   getCurrentFloor() { return this._floor; }
+
+  /**
+   * Sky 30 (DECISIONS §102 rows 1, 3): the player's own show/hide of one ATTRIBUTE pane (`rung: null`, today the score bar)
+   * on the applied floor, for the globe's `+`/`-` steps. Writes the mask's own `data-floor-gone` bit, so the next room
+   * apply (a floor change) puts the pane back to its room default (memory: false panes are table-driven). Rung panes are
+   * refused (their one writer is the rung). Returns true when the bit was written.
+   * @param {string} id - a MASK_PANES key
+   * @param {boolean} visible
+   * @returns {boolean}
+   */
+  setAttributePane(id, visible) {
+    if (this._disposed || !this._enabled) return false;
+    const pane = MASK_PANES[id];
+    if (!pane || pane.rung) return false;
+    if (!this._els(pane).length) return false;
+    this._setVisible(id, pane, !!visible);
+    return true;
+  }
+
+  /** Whether an attribute pane's mask bit reads shown (null = unknowable: no such pane / no element). Read-only. */
+  attributePaneShown(id) {
+    const pane = MASK_PANES[id];
+    if (!pane || pane.rung) return null;
+    return this._isVisible(id, pane);
+  }
+
+  /**
+   * The rung panes of the APPLIED floor's room that the player has shown past the room (the room row says 'gone', the pane's intent bit
+   * says shown), grouped by the ladder step that holds them and listed from the highest step down (the order `+` brought them in, reversed).
+   * Each group is the rung ids to hide for one `-` press (the mother box is one step: meters and mother pane together). The globe's `-` walks
+   * these first, back to the arrival view (Sky 30, DECISIONS §102 row 3). Read-only; empty with no mask applied.
+   * @returns {string[][]}
+   */
+  extraRungGroups() {
+    if (this._disposed || !this._enabled || this._appliedFloor == null || !this._resolve()) return [];
+    const room = this._rooms[this._appliedFloor];
+    const tops = this._hud && this._hud.paneDensity && Array.isArray(this._hud.paneDensity.rungs) ? this._hud.paneDensity.rungs : [];
+    if (!room) return [];
+    const holds = (top, id) => (top.id === id) || (Array.isArray(top.members) && top.members.some((m) => m && m.id === id));
+    const groups = [];
+    for (let i = tops.length - 1; i >= 0; i--) {
+      const top = tops[i];
+      if (!top) continue;
+      const ids = [];
+      for (const [id, pane] of Object.entries(MASK_PANES)) {
+        if (!pane.rung || room[id] !== 'gone' || !holds(top, pane.rung)) continue;
+        if (this._isVisible(id, pane) === true) ids.push(pane.rung);
+      }
+      if (ids.length) groups.push(ids);
+    }
+    return groups;
+  }
 
   /**
    * True when a pane the APPLIED floor's DEFAULT_ROOMS row marks 'gone' is visible now (the intent bit `_isVisible`):

@@ -137,6 +137,13 @@ export class PaneDensity {
      * @type {(() => boolean)|null}
      */
     this.keyLock = null;
+    /**
+     * Step hook (Sky 30, owner 2026-11-24, DECISIONS §102 rows 1 and 3): on the globe the bus `-` / `+` run this stack instead of down() / up(),
+     * and the rails stay at every step. `{ active(): boolean, down(): void, up(): void }`; main.js sets it inside the LADDER gate. While
+     * `active()` is false the keys do what they always did. Only the bus keys read it (setLevel / down / up called directly are not hooked).
+     * @type {{active: () => boolean, down: () => void, up: () => void}|null}
+     */
+    this.stepHook = null;
     /** @private the rung ids a clearAll() hid — what `+` brings back; null = none */
     this._stash = null;
   }
@@ -290,6 +297,28 @@ export class PaneDensity {
     this._log(text);
   }
 
+  /**
+   * Hide ONE rung by id (searched top-level and inside composites), with the same edge a `-` press gives: the flip event, the followers and
+   * the notice. The globe's `-` steps use it to take back the panes `+` brought in (GlobeSteps, Sky 30, DECISIONS §102 row 3). No-op (null)
+   * for an unknown id or a rung that is already hidden.
+   * @param {string} id
+   * @param {{force?: boolean}} [opts] force: hide even when the rung reads not visible on screen (its intent bit is what the caller read)
+   * @returns {DensityRung|null} the rung hidden
+   */
+  hideRung(id, { force = false } = {}) {
+    const rung = this.find(id);
+    if (!rung || (!force && !this._safeVisible(rung))) return null;
+    rung.setVisible(false);
+    if (this._onFlip) this._onFlip(rung.id, false);
+    this._syncFollowers();
+    if (!this._silent) {
+      const text = `HUD \u2212 \u00b7 ${rung.label} hidden \u00b7 + restores`;
+      this._notify(text, 'confirm');
+      this._log(text);
+    }
+    return rung;
+  }
+
   /** `-` — hide the lowest-priority currently-visible rung. No-op (with a notice) when the HUD is already pure scenery. */
   down() {
     const rung = this.rungs.find(r => this._safeVisible(r));
@@ -357,9 +386,15 @@ export class PaneDensity {
   attach(bus, events) {
     if (!bus || !events) return;
     const locked = () => { try { return !!(this.keyLock && this.keyLock()); } catch (_) { return false; } };
-    bus.on(events.HUD_DENSITY_DOWN, () => { if (!locked()) (this.clearOnDown ? this.clearAll() : this.down()); });
+    const hooked = () => { try { return !!(this.stepHook && this.stepHook.active()); } catch (_) { return false; } };
+    bus.on(events.HUD_DENSITY_DOWN, () => {
+      if (locked()) return;
+      if (hooked()) { this.stepHook.down(); return; }
+      if (this.clearOnDown) this.clearAll(); else this.down();
+    });
     bus.on(events.HUD_DENSITY_UP, () => {
       if (locked()) return;
+      if (hooked()) { this.stepHook.up(); return; }
       if (this.clearOnDown && this._stash && this.visibleCount() === 0) this.restore(); else this.up();
     });
   }

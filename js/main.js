@@ -109,7 +109,7 @@ import { guidanceTelemetry } from './systems/GuidanceTelemetry.js';
 import { navRecoveryAdvisor } from './systems/NavRecoveryAdvisor.js';
 import { targetAcquisition } from './systems/TargetAcquisition.js';
 import { missionMilestones } from './systems/MissionMilestones.js';
-import { cityLabels } from './scene/CityLabels.js';
+import { cityLabels, makeCityCalm } from './scene/CityLabels.js';
 import { launchCameo } from './scene/LaunchCameo.js';
 import { menuOrbitPreview } from './systems/MenuOrbitPreview.js';
 import { ambientLaunchScheduler } from './systems/AmbientLaunchScheduler.js';
@@ -127,6 +127,7 @@ import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController, INTRO_RIDE_MS, INTRO_DIVE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { FloorMask } from './ui/hud/FloorMask.js';
+import { GlobeSteps } from './ui/hud/GlobeSteps.js';
 import { setChipsUnderDrawer } from './ui/hud/FooterChip.js';
 import { LadderViewStore } from './systems/LadderViewStore.js';
 import { LadderSfx } from './systems/LadderSfx.js';
@@ -852,6 +853,10 @@ let timeAuthority;
 // term in the warp target below; every hold still wins when lower.
 const mapClock = new MapClock();
 let mapClockSlider = null;
+// The globe's `-` / `+` steps (Sky 30, DECISIONS §102 rows 1 and 3): the stack, and the one flag it keeps for the time buttons (the panel and
+// the kind boxes keep theirs in RealSkyCard / RealSkyLayer).
+let globeSteps = null;
+let _globeClockHidden = false;
 // Reused per-frame arg object for timeAuthority.update: it runs on the flag-off path too, so no per-frame
 // allocation; update destructures synchronously and retains nothing.
 const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false, daughterOut: false };
@@ -906,6 +911,7 @@ let pageRow = null;
 let pageRowLastT = 0;   // the frame time the row last ticked (ms)
 // The real catalogue as dots on floors 4-5 (ui/RealSkyLayer.js, plan sky-1116). Built in the ladder block; its clock is ticked from gameLoop.
 let realSkyLayer = null;
+let realSkyPanel = null;   // its object panel (RealSkyCard), for the frame loop: the time buttons tell it whether they are on screen (Sky 30 F)
 let hullcamFloor;
 // The F1 REFIT section engine (RefitPane: the seven-subsystem index, the ranked fits, BUY, the wallet). A HOSTED
 // section engine: renders into the slot the WorkbenchPane shell mounts it in; owns no root / tab / slide.
@@ -1941,6 +1947,16 @@ async function init() {
       discFlipFrom: Constants.EARTH_RADIUS * 1.5,
       // Hide a dot inside the ship's screen circle (live position; radius covers every radiator pose).
       occluders: cityLabels.shipOccluders(() => player && player.position),
+      // A city name that would touch a lit object's name box or ring gives way (Sky 30 F: names show with any Highlight list on).
+      blockers: () => (realSkyLayer && realSkyLayer.litBoxes ? realSkyLayer.litBoxes() : null),
+      // Globe only: names fade out ~10 s after she arrives or last grab-drags Earth; a drag brings them back (§102 row 5).
+      calmFade: makeCityCalm(
+        () => {
+          if (!(ladderController && ladderController.isActive())) return null;
+          const l = ladderController.ladder;   // allocation-free floor read (currentFloor() builds an object)
+          return (l && l.floorId) ? l.floorId() : ladderController.currentFloor();
+        },
+        () => (cameraSystem && cameraSystem.ladderGrabMs ? cameraSystem.ladderGrabMs() : -Infinity)),
     });
 
     // Launch cameo: one plume from the home spaceport, same Earth group + mirrorLon as the city labels;
@@ -2083,6 +2099,7 @@ async function init() {
     hideWhileActive: activeSatellites ? [activeSatellites.group] : [],
   });
   realSkyCard.attachLayer(realSkyLayer);   // the Highlight menu calls the layer (setHighlight, flyTo, select, setKeepOut)
+  realSkyPanel = realSkyCard;
   // The real Moon on floors 4-5 (owner 2026-11-21): SunLight places it from the ephemeris at the dots' own sky time.
   if (sunLight && typeof sunLight.setSkyClock === 'function') sunLight.setSkyClock(() => realSkyLayer.skyDateMs());
   navcomFloor = new NavcomFloor({
@@ -2876,10 +2893,33 @@ async function init() {
     // Floor 5 (both side pages) shows only its own things (Sky 20): the pane-step keys do nothing there (floors 1-4 unchanged).
     const _sidePageKeysLocked = () => !!(ladderController && ladderController.isActive() && ladderController.currentFloor() === 5);
     if (hud && hud.paneDensity) hud.paneDensity.keyLock = _sidePageKeysLocked;
+    // The globe (floor 4) runs its own step stack on `-` / `+` (Sky 30, owner 2026-11-24, DECISIONS §102 rows 1 and 3): the score bar is the first `+`,
+    // then the ladder; below the arrival view each `-` hides the object panel, the time buttons, then one ticked box at a time from the bottom of
+    // the list up. The rails stay at every step. Floors 1-3 keep the one-rung walk above. The iPad has no touch control that sends these keys (its
+    // slider calls PaneDensity.setLevel directly and is not hooked).
+    globeSteps = new GlobeSteps({
+      isGlobe: () => !!(ladderController && ladderController.isActive() && ladderController.currentFloor() === 4),
+      paneDensity: () => (hud ? hud.paneDensity : null),
+      mask: () => ladderFloorMask,
+      panel: {
+        isShown: () => realSkyCard.isShown() && !realSkyCard.panelHidden(),
+        setHidden: (h) => realSkyCard.setPanelHidden(h),
+      },
+      clock: {
+        isHidden: () => _globeClockHidden,
+        setHidden: (h) => { _globeClockHidden = h === true; },
+      },
+      kinds: {
+        ticked: () => realSkyCard.legendDrawOrder().filter((n) => !realSkyLayer.isKindHidden(n)),
+        setTicked: (n, on) => { realSkyLayer.setKindHidden(n, !on); },
+      },
+    });
+    if (hud && hud.paneDensity) hud.paneDensity.stepHook = globeSteps;
     eventBus.on(Events.HUD_DENSITY_DOWN, () => {
       const pd = hud && hud.paneDensity;
       if (!ladderController || !pd || typeof pd.visibleCount !== 'function') return;
       if (typeof pd.keyLock === 'function' && pd.keyLock()) return;   // a side page: the key does nothing (the rails stay too)
+      if (globeSteps && globeSteps.active()) return;                 // the globe's steps keep the rails at every step
       if (pd.visibleCount() === 0) ladderController.setRailsShy(true);
     });
     eventBus.on(Events.HUD_DENSITY_UP, () => {
@@ -6647,7 +6687,11 @@ function gameLoop(timestamp) {
     const _page1 = _mapFloor === 5 && !!(sdaFloor && sdaFloor.isActive());
     const _mapShow = _mapFloor != null && FloorContract.TIME_RULES.MAP_CLOCK_FLOORS.includes(_mapFloor)
       && (_mapFloor !== 5 || _page1);
-    mapClockSlider.setShown(_mapShow);
+    if (globeSteps) globeSteps.sync(!(_mapFloor != null && _mapFloor <= 3));   // leaving the globe for floor 3 or below gives the panel and the time buttons back (GlobeSteps); a pause or a side page keeps the steps
+    // The globe's `-` steps hide the time buttons (DECISIONS §102 row 3): the row is only not shown, its state and the game clock are untouched.
+    const _clockUp = _mapShow && !(_mapFloor === 4 && _globeClockHidden);
+    mapClockSlider.setShown(_clockUp);
+    if (realSkyPanel) realSkyPanel.setClockShown(_clockUp);   // the object panel stands under the buttons, the radio box under the panel (Sky 30 F)
     if (_mapShow) {
       const _tripBurn = !!(gameFlowManager.isTripRunning && gameFlowManager.isTripRunning());
       mapClockSlider.setState(mapClock.step(), _tripBurn, _tripBurn ? mapClockSpeedText(timeAuthority.rate, TimeAuthority.BASE_SCALE) : '', _daughterOut, _daughterNear);

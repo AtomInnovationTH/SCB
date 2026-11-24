@@ -18,6 +18,8 @@
 
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
+import { Constants } from '../core/Constants.js';
+import { ReachOrb } from './ReachOrb.js';
 import { catchableCount, heldBackCount, heldBackNote } from '../core/missionProgress.js';
 
 /** The FieldRegistry (or a getter) `ClusterIcons.nameLine` names her field from; set by `setFieldRegistry`. */
@@ -54,6 +56,11 @@ export const SHIP_LABEL_DROP_PX = 17;
 export const EDGE_ARROW_INSET_PX = 28;
 /** The ship marker's plain label (also on its edge arrow). */
 export const SHIP_LABEL = 'You';
+/** The card a click on `You` opens: its width and its gap to the marker (px). */
+export const SHIP_CARD_W_PX = 360;
+export const SHIP_CARD_GAP_PX = 22;
+/** The invisible tap target round the chevron (px): the 18 px chevron alone is too small a target. */
+export const SHIP_HIT_PX = 36;
 /** Mono glyph width as a fraction of the font size (for the `footprint` estimate). */
 const MONO_EM = 0.62;
 /** A name block changes side only once its ring is this far past Earth's centre on screen (px). */
@@ -73,6 +80,92 @@ export class ClusterIcons {
     this._built = false;
     this._visible = false;
     this._onSelect = null;    // click-to-select sink: (clusterId) => void
+    this._shipInfo = null;    // () => the reach envelope (or null) the card under `You` reads; NavcomFloor wires it
+    this._shipCardEl = null;  // the small card a click on `You` opens
+    this._shipCardOpen = false;
+    this._shipAnchor = null;  // {x, y}: where the marker (or its edge arrow) is now, px
+    this._shipCardOff = null; // removes the listeners that close the card while it is open
+  }
+
+  /** Wire the reach source for the card a click on `You` opens: () => {minAltKm, maxAltKm, budgetDvMs} | null (NavcomFloor's last envelope). */
+  setShipInfo(fn) { this._shipInfo = (typeof fn === 'function') ? fn : null; }
+
+  /** True while the card under `You` is open. */
+  isShipCardOpen() { return this._shipCardOpen; }
+
+  /**
+   * Open the card beside `You` (field, debris, reach: three plain lines), or close it when it is open (a second click or tap on `You`). Public so
+   * headless tests and the browser probe reach it. The lines are filled here; `renderShip` keeps the card beside the marker each frame.
+   * @param {boolean} [open] force open (true) or closed (false); absent toggles
+   * @returns {boolean} open now
+   */
+  toggleShipCard(open) {
+    const want = open === undefined ? !this._shipCardOpen : !!open;
+    if (want && !this._visible) return false;   // off the globe `You` is not on screen: no card nobody can see (it would eat the next Esc)
+    if (want === this._shipCardOpen) return want;
+    if (!want) { this._closeShipCard(); return false; }
+    if (typeof document === 'undefined' || !this._root) return false;
+    if (!this._shipCardEl) {
+      const card = document.createElement('div');
+      card.id = 'ladder-ship-card';
+      card.setAttribute('role', 'dialog');
+      card.setAttribute('aria-label', 'Your field, the debris there and your reach');
+      card.style.cssText = [
+        'position:absolute', 'display:none', 'pointer-events:auto', 'box-sizing:border-box', `width:${SHIP_CARD_W_PX}px`,
+        'padding:8px 10px', 'border-radius:6px', 'background:rgba(8,12,22,0.9)', 'border:1px solid rgba(160,180,220,0.35)',
+        `font-size:${MARKER_LABEL_PX}px`, 'line-height:1.35', 'text-transform:none', 'white-space:normal', 'user-select:none', '-webkit-user-select:none',
+        `color:${VisualLaw.COLORS.PLAYER}`,
+      ].join(';');
+      this._root.appendChild(card);
+      this._shipCardEl = card;
+    }
+    let env = null;
+    try { env = this._shipInfo ? this._shipInfo() : null; } catch (_e) { env = null; }
+    const lines = ClusterIcons.shipInfoLines(env);
+    const card = this._shipCardEl;
+    while (card.firstChild) card.removeChild(card.firstChild);
+    for (const t of lines) {
+      const row = document.createElement('div');
+      row.textContent = t;
+      card.appendChild(row);
+    }
+    card.style.display = 'block';
+    this._shipCardOpen = true;
+    this._shipCardH = (typeof card.offsetHeight === 'number' && card.offsetHeight > 0) ? card.offsetHeight : 76;
+    this._shipCardL = undefined; this._shipCardT = undefined;
+    this._placeShipCard();
+    // Closes on a click or tap elsewhere and on Esc (Esc closes only this: it is stopped before the pause menu sees it).
+    const inside = (t) => { for (let n = t; n; n = n.parentNode) if (n === card || n === this._shipHit || n === this._shipEl || n === this._shipLabelEl || n === this._shipArrowEl) return true; return false; };
+    const onDown = (e) => { if (!inside(e && e.target)) this._closeShipCard(); };
+    const onKey = (e) => { if (e && (e.key === 'Escape' || e.code === 'Escape')) { this._closeShipCard(); if (e.stopPropagation) e.stopPropagation(); if (e.preventDefault) e.preventDefault(); } };
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('pointerdown', onDown, true);
+      window.addEventListener('keydown', onKey, true);
+      this._shipCardOff = () => { window.removeEventListener('pointerdown', onDown, true); window.removeEventListener('keydown', onKey, true); };
+    }
+    return true;
+  }
+
+  /** @private */
+  _closeShipCard() {
+    if (this._shipCardOff) { this._shipCardOff(); this._shipCardOff = null; }
+    this._shipCardOpen = false;
+    if (this._shipCardEl) this._shipCardEl.style.display = 'none';
+  }
+
+  /** @private Put the card beside the marker (right of it, left when it would leave the screen), kept inside the view. */
+  _placeShipCard() {
+    const card = this._shipCardEl, a = this._shipAnchor;
+    if (!this._shipCardOpen || !card || !a) return;
+    const W = typeof window !== 'undefined' ? window.innerWidth : NaN;
+    const H = typeof window !== 'undefined' ? window.innerHeight : NaN;
+    let left = a.x + SHIP_CARD_GAP_PX;
+    if (Number.isFinite(W) && left + SHIP_CARD_W_PX > W - 8) left = a.x - SHIP_CARD_GAP_PX - SHIP_CARD_W_PX;
+    let top = a.y - this._shipCardH / 2;
+    if (Number.isFinite(H)) top = Math.max(8, Math.min(H - 8 - this._shipCardH, top));
+    left = Math.max(8, left);
+    if (left !== this._shipCardL) { card.style.left = `${left}px`; this._shipCardL = left; }
+    if (top !== this._shipCardT) { card.style.top = `${top}px`; this._shipCardT = top; }
   }
 
   /** Wire the click-to-select sink: icon hitboxes dispatch the cluster id here (NavcomFloor → focusById()). */
@@ -117,8 +210,28 @@ export class ClusterIcons {
 
   /** The line beside the focused ring: plain name and piece count ('ISS Band · 7 pieces'); plain words at every level. */
   static nameLine(c) {
-    let n = (c && c.count > 0) ? c.count : 0;
-    const pieces = (k) => `${k} ${k === 1 ? 'piece' : 'pieces'}`;
+    const own = ClusterIcons.ownFieldLine(c);
+    if (own != null) return own;
+    return ClusterIcons._plainLine(c);
+  }
+
+  /** @private the cluster's own plain-name line ('ISS Band · 7 pieces') */
+  static _plainLine(c) {
+    const n = (c && c.count > 0) ? c.count : 0;
+    return `${ClusterIcons.plainName(c)} \u00b7 ${ClusterIcons._pieces(n)}`;
+  }
+
+  /** @private '7 pieces' / '1 piece' */
+  static _pieces(k) { return `${k} ${k === 1 ? 'piece' : 'pieces'}`; }
+
+  /**
+   * The field she is at, named by the registry ('Field at 350 km · 7 pieces'), or null when the registry does not name her field (flag off, none
+   * set, or no field found: `nameLine` then falls back to the cluster's plain name). '' while she is berthed at a satellite or at the free
+   * place of a push-down (no field is hers). Since Sky 30 (DECISIONS §102 row 2) this text is not drawn beside her ring: a click on `You` shows it.
+   * @param {object} [c] the cluster, whose count stands in when the registry cannot count the field's pieces
+   * @returns {string|null}
+   */
+  static ownFieldLine(c) {
     // FIELDS_BY_HEIGHT: a field is named by its height ('Field at 350 km') from the registry's field she is at;
     // berthed at a satellite no field is out, so no field line. Flag off: the plain-name text.
     const reg = _fieldRegistry();
@@ -128,18 +241,56 @@ export class ClusterIcons {
       const f = typeof reg.currentField === 'function' ? reg.currentField()
         : (typeof reg.fields === 'function' && typeof reg.currentId === 'function' ? reg.fields().find((x) => x.id === reg.currentId()) : null);
       if (f && Number.isFinite(f.altKm)) {
+        let n = (c && c.count > 0) ? c.count : 0;
         // The cluster snapshot is only re-polled on activate/plan; the height column and list read the registry live.
         if (typeof reg.remainingCount === 'function') {
           // DECISIONS §64 row 1: the pieces she can catch now; the ones the training rule holds back are named after them
           const live = catchableCount(reg, f.id);
           if (Number.isFinite(live)) n = Math.max(0, live);
           const held = heldBackCount(reg, f.id);
-          if (held > 0) return `Field at ${Math.round(f.altKm)} km \u00b7 ${pieces(n)} \u00b7 ${heldBackNote(held)}`;
+          if (held > 0) return `Field at ${Math.round(f.altKm)} km \u00b7 ${ClusterIcons._pieces(n)} \u00b7 ${heldBackNote(held)}`;
         }
-        return `Field at ${Math.round(f.altKm)} km \u00b7 ${pieces(n)}`;
+        return `Field at ${Math.round(f.altKm)} km \u00b7 ${ClusterIcons._pieces(n)}`;
       }
     }
-    return `${ClusterIcons.plainName(c)} \u00b7 ${pieces(n)}`;
+    return null;
+  }
+
+  /**
+   * The three plain lines the card under `You` shows (Sky 30, DECISIONS §102 row 2): her field (height, pieces), the debris there (count and
+   * kinds, from the registry's rows for the field), and her reach. Pure + static; reads the registry set by `setFieldRegistry`.
+   * @param {{minAltKm:number, maxAltKm:number, budgetDvMs:number}|null} env the reach envelope (ReachOrb), or null while there is none
+   * @returns {string[]} always three lines
+   */
+  static shipInfoLines(env) {
+    const reg = _fieldRegistry();
+    let field = 'Field: not known';
+    let debris = 'Debris here: not known';
+    if (reg) {
+      const berthed = typeof reg.isBerthed === 'function' ? reg.isBerthed() : !!(reg.berthedSatellite && reg.berthedSatellite());
+      const free = typeof reg.isFree === 'function' && reg.isFree();
+      const f = typeof reg.currentField === 'function' ? reg.currentField() : null;
+      const km = f && Number.isFinite(f.altKm) ? `${Math.round(f.altKm)} km` : '';
+      if (berthed) { field = 'At a resupply satellite, no field here'; debris = 'Debris here: none'; }
+      else if (free) { field = km ? `Between fields, at ${km}` : 'Between fields'; debris = 'Debris here: none'; }
+      else if (f && km) {
+        const own = ClusterIcons.ownFieldLine();
+        field = own != null ? own : `Field at ${km}`;
+        if (typeof reg.remainingRows === 'function') {
+          const rows = reg.remainingRows(f.id);
+          const catchable = typeof reg.remainingCount === 'function' ? Math.max(0, catchableCount(reg, f.id)) : rows.length;
+          // kinds the rows tell: the extra satellite's row is a dead satellite, every other row is a loose piece
+          const sats = rows.filter((r) => r === Constants.SMALL_GROUP.SAT_ROW).length;
+          const pieces = Math.max(0, catchable - sats);
+          const parts = [];
+          if (pieces > 0 || sats === 0) parts.push(ClusterIcons._pieces(pieces));
+          if (sats > 0) parts.push(`${sats} dead ${sats === 1 ? 'satellite' : 'satellites'}`);
+          debris = catchable > 0 ? `Debris here: ${parts.join(' and ')}` : 'Debris here: none left to catch';
+        }
+      }
+    }
+    const reach = env ? ReachOrb.plainReach(env) : '';
+    return [field, debris, reach || 'Reach: not known yet'];
   }
 
   /**
@@ -244,12 +395,18 @@ export class ClusterIcons {
     this._root = root;
   }
 
-  show() { this._build(); this._visible = true; if (this._root) this._root.style.opacity = '1'; }
+  show() { this._build(); this._visible = true; if (this._root) { this._root.style.transition = 'opacity 0.3s'; this._root.style.visibility = 'visible'; this._root.style.opacity = '1'; } }
 
   hide() {
     this._visible = false;
-    if (this._root) this._root.style.opacity = '0';
-    // The DOM stays in place (opacity 0): re-show is cheap, positions refresh on the next render().
+    this._closeShipCard();   // leaving the globe closes the card under `You`
+    if (this._root) {
+      // Fade out, then hidden: hidden boxes take no clicks, so the `You` tap target and the rings cannot catch a click on floors 1-3 (Sky 30 review).
+      this._root.style.transition = 'opacity 0.3s, visibility 0s linear 0.3s';
+      this._root.style.visibility = 'hidden';
+      this._root.style.opacity = '0';
+    }
+    // The DOM stays in place: re-show is cheap, positions refresh on the next render().
   }
 
   /**
@@ -369,7 +526,7 @@ export class ClusterIcons {
         el, ring, label, name, nameLine, est: null,
         _display: null, _dim: null, _focused: null, _color: null, _count: null,
         _dimmed: false, _dashed: false, _estText: null,
-        _hover: false, _nameText: null, _nameShown: null, _labelShown: null, _side: null,
+        _hover: false, _nameText: null, _nameShown: null, _labelShown: null, _side: null, _ownHidden: null,
       };
       this._icons.set(cluster.id, rec);
     }
@@ -422,16 +579,23 @@ export class ClusterIcons {
       rec.label.textContent = String(cluster.count);
       rec._count = cluster.count;
     }
-    // The focused field carries its count in the name line, not under the ring.
-    const labelShown = !focused;
+    // The focused field carries its count in the name line, not under the ring. When the name line is the registry's text for the field she
+    // is at, it is not drawn beside her ring any more (Sky 30, DECISIONS §102 row 2: a click on `You` shows it), so the count stays under the ring.
+    const own = ClusterIcons.ownFieldLine(cluster);
+    const ownHidden = focused && own != null;
+    const labelShown = !focused || ownHidden;
     if (rec._labelShown !== labelShown) {
       rec.label.style.display = labelShown ? 'block' : 'none';
       rec._labelShown = labelShown;
     }
-    const nameText = ClusterIcons.nameLine(cluster);
+    const nameText = own != null ? own : ClusterIcons._plainLine(cluster);
     if (rec._nameText !== nameText) {
       rec.nameLine.textContent = nameText;
       rec._nameText = nameText;
+    }
+    if (rec._ownHidden !== ownHidden) {
+      rec.nameLine.style.display = ownHidden ? 'none' : '';
+      rec._ownHidden = ownHidden;
     }
     if (rec._estText !== estimate) {
       if (estimate) {
@@ -452,9 +616,9 @@ export class ClusterIcons {
     this._paintName(rec);
   }
 
-  /** @private Show the name block for the focused field, or while hovered. */
+  /** @private Show the name block for the focused field, or while hovered. Her own field's block shows only for an estimate line (its text is hidden). */
   _paintName(rec) {
-    const shown = !!(rec._focused || rec._hover);
+    const shown = rec._focused ? (!rec._ownHidden || !!rec._estText) : !!rec._hover;
     if (rec._nameShown !== shown) {
       rec.name.style.display = shown ? 'block' : 'none';
       rec._nameShown = shown;
@@ -490,9 +654,17 @@ export class ClusterIcons {
       ].join(';');
       this._root.appendChild(el);
       this._shipEl = el;
+      // `You` is a button (Sky 30, DECISIONS §102 row 2): a click or tap on the chevron, its tap target or the word opens the card with her
+      // field, the debris there and her reach; a second one closes it. The root stays pointer-events:none: only these small boxes take the pointer.
+      const hit = document.createElement('div');
+      hit.style.cssText = `position:absolute;width:${SHIP_HIT_PX}px;height:${SHIP_HIT_PX}px;transform:translate(-50%,-50%);border-radius:50%;pointer-events:auto;cursor:pointer;`;
+      hit.setAttribute('role', 'button');
+      hit.setAttribute('aria-label', 'You: your field, the debris there and your reach');
+      this._root.appendChild(hit);
+      this._shipHit = hit;
       const lab = document.createElement('div');
       lab.style.cssText = [
-        'position:absolute', 'pointer-events:none', 'transform:translateX(-50%)', 'white-space:nowrap',
+        'position:absolute', 'pointer-events:auto', 'cursor:pointer', 'transform:translateX(-50%)', 'white-space:nowrap',
         `font-size:${MARKER_LABEL_PX}px`, 'line-height:1', 'text-transform:none', 'background:rgba(0,0,0,0.78)', 'padding:1px 4px', 'border-radius:3px',
         `color:${VisualLaw.COLORS.PLAYER}`, 'text-shadow:0 0 3px rgba(0,0,0,0.9),0 0 2px rgba(0,0,0,0.9)',
       ].join(';');
@@ -503,11 +675,11 @@ export class ClusterIcons {
       arrow.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none;display:none;';
       const tri = document.createElement('div');
       // A solid triangle pointing along +x before the rotation (border trick).
-      tri.style.cssText = `position:absolute;left:-8px;top:-9px;width:0;height:0;border-top:9px solid transparent;border-bottom:9px solid transparent;border-left:16px solid ${VisualLaw.COLORS.PLAYER};filter:drop-shadow(0 0 2px rgba(0,0,0,0.9));transform-origin:8px 9px;`;
+      tri.style.cssText = `position:absolute;left:-8px;top:-9px;width:0;height:0;border-top:9px solid transparent;border-bottom:9px solid transparent;border-left:16px solid ${VisualLaw.COLORS.PLAYER};filter:drop-shadow(0 0 2px rgba(0,0,0,0.9));transform-origin:8px 9px;pointer-events:auto;cursor:pointer;`;
       const alab = document.createElement('div');
       alab.style.cssText = [
         'position:absolute', 'white-space:nowrap', `font-size:${MARKER_LABEL_PX}px`, 'line-height:1', 'text-transform:none', 'background:rgba(0,0,0,0.78)', 'padding:1px 4px', 'border-radius:3px',
-        `color:${VisualLaw.COLORS.PLAYER}`, 'text-shadow:0 0 3px rgba(0,0,0,0.9),0 0 2px rgba(0,0,0,0.9)',
+        `color:${VisualLaw.COLORS.PLAYER}`, 'text-shadow:0 0 3px rgba(0,0,0,0.9),0 0 2px rgba(0,0,0,0.9)', 'pointer-events:auto', 'cursor:pointer',
       ].join(';');
       alab.textContent = SHIP_LABEL;
       arrow.appendChild(tri);
@@ -516,17 +688,22 @@ export class ClusterIcons {
       this._shipArrowEl = arrow;
       this._shipArrowTri = tri;
       this._shipArrowLabel = alab;
+      const onShipClick = (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); this.toggleShipCard(); };
+      for (const t of [hit, lab, tri, alab]) t.addEventListener('click', onShipClick);
     }
     const display = out.onScreen || (out.visible && !(W > 0 && H > 0)) ? 'block' : 'none';
     if (this._shipDisplay !== display) {
       this._shipEl.style.display = display;
       this._shipLabelEl.style.display = display;
+      this._shipHit.style.display = display;
       this._shipDisplay = display;
     }
     if (display === 'block') {
       this._shipEl.style.left = `${out.x}px`;
       this._shipEl.style.top = `${out.y}px`;
       this._shipEl.style.transform = `translate(-50%,-50%) rotate(${angleRad + Math.PI / 4}rad)`;
+      this._shipHit.style.left = `${out.x}px`;
+      this._shipHit.style.top = `${out.y}px`;
       this._shipLabelEl.style.left = `${out.x}px`;
       this._shipLabelEl.style.top = `${out.y + SHIP_LABEL_DROP_PX}px`;
     }
@@ -543,14 +720,24 @@ export class ClusterIcons {
       this._shipArrowLabel.style.top = `${ly}px`;
       this._shipArrowLabel.style.transform = 'translate(-50%,-50%)';
     }
+    // The card follows the marker (or its edge arrow); with neither on screen it closes.
+    if (display === 'block') this._shipAnchor = { x: out.x, y: out.y };
+    else if (out.edge) this._shipAnchor = { x: out.edge.x, y: out.edge.y };
+    if (this._shipCardOpen) {
+      if (display !== 'block' && !out.edge) { this._closeShipCard(); return out; }
+      this._placeShipCard();
+    }
     return out;
   }
 
   /** Remove the whole layer. */
   dispose() {
+    this._closeShipCard();
     if (this._root && this._root.remove) this._root.remove();
     this._root = null;
     this._shipEl = null;
+    this._shipHit = null;
+    this._shipCardEl = null;
     this._shipLabelEl = null;
     this._shipArrowEl = null;
     this._shipDisplay = undefined;

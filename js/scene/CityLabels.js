@@ -309,6 +309,52 @@ export function farLabelFade(dist, near, far) {
   return 1 - t * t * (3 - 2 * t);
 }
 
+/** City names on the globe (floor 4) go quiet this long after she arrives or her last grab-drag of Earth (owner 2026-11-24, §102 row 5). */
+export const CITY_CALM_IDLE_MS = 10000;
+/** The fade out once that time is up, and the fade back in when she drags Earth again. */
+export const CITY_CALM_OUT_MS = 1000;
+export const CITY_CALM_IN_MS = 300;
+
+/**
+ * One step of the globe's calm fade for city names: 1 = fully shown, 0 = gone. Idle for CITY_CALM_IDLE_MS or more → falls to 0
+ * over CITY_CALM_OUT_MS; any less idle time (a drag) → rises to 1 over CITY_CALM_IN_MS.
+ * @param {number} level current level, 0..1
+ * @param {number} dtMs wall time since the last step (ms, >= 0)
+ * @param {number} idleMs wall time since arrival or the last grab-drag (ms)
+ * @returns {number} new level, 0..1
+ */
+export function calmFadeStep(level, dtMs, idleMs) {
+  const dt = Number.isFinite(dtMs) && dtMs > 0 ? dtMs : 0;
+  const lv = Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 1;
+  return idleMs >= CITY_CALM_IDLE_MS
+    ? Math.max(0, lv - dt / CITY_CALM_OUT_MS)
+    : Math.min(1, lv + dt / CITY_CALM_IN_MS);
+}
+
+/**
+ * The calm fade for the `calmFade` option: floor 4 only (every other floor reads 1). The clock starts when she arrives on the
+ * globe (the floor changed, or the layer was not asked for over half a second, e.g. while the Highlight hid the names) and
+ * restarts at her last grab-drag of Earth (getGrabMs). Wheel zoom and time speed never touch it.
+ * @param {() => (number|null)} getFloor current floor id, or null off the ladder
+ * @param {() => number} getGrabMs wall time (ms) of her last grab-drag, -Infinity if none; the held drag counts as now
+ * @returns {(nowMs:number) => number} 0..1
+ */
+export function makeCityCalm(getFloor, getGrabMs) {
+  let level = 1, prevMs = null, floor = null, arriveMs = 0;
+  return (nowMs) => {
+    const f = getFloor();
+    const gap = prevMs === null ? Infinity : nowMs - prevMs;
+    const dt = prevMs === null ? 0 : gap;
+    prevMs = nowMs;
+    if (f !== floor || gap > 500) { floor = f; arriveMs = nowMs; level = 1; }
+    if (f !== 4) { level = 1; return 1; }
+    const grab = getGrabMs();
+    const idleMs = nowMs - Math.max(arriveMs, Number.isFinite(grab) ? grab : -Infinity);
+    level = calmFadeStep(level, dt, idleMs);
+    return level;
+  };
+}
+
 /**
  * The text-pill collision box for a label whose dot is at screen (sx, sy), in a
  * slot. CSS px, origin top-left. Pass `out` to reuse an object (hot loop).
@@ -392,6 +438,38 @@ export function labelFitsViewport(sx, sy, textW, W, H, offX = 0, offY = 0) {
     if (boxInViewport(_fitBox, W, H)) return true;
   }
   return false;
+}
+
+/**
+ * Lit objects' name boxes and rings on the globe (Sky 30 F, owner 2026-11-24 14:45Z: city names show with any Highlight list on, and give way where they
+ * would touch a lit object's name or ring). The boxes come from `RealSkyLayer.litBoxes()` as `{ n, a }`: `a` is a Float32Array, four numbers
+ * (x, y, w, h; CSS px, top-left origin) per box, `n` boxes in use.
+ * Does the box (x, y, w, h) come within `pad` px of any of them? Pure, allocation-free.
+ * @param {number} x @param {number} y @param {number} w @param {number} h
+ * @param {{n:number, a:Float32Array}|null|undefined} lit @param {number} [pad=2]
+ * @returns {boolean}
+ */
+export function touchesLitBox(x, y, w, h, lit, pad = 2) {
+  if (!lit || !(lit.n > 0)) return false;
+  const a = lit.a;
+  for (let i = 0, n = lit.n * 4; i < n; i += 4) {
+    if (x < a[i] + a[i + 2] + pad && x + w > a[i] - pad && y < a[i + 1] + a[i + 3] + pad && y + h > a[i + 1] - pad) return true;
+  }
+  return false;
+}
+
+/** A city name that would touch a lit object's name or ring fades out over this long (and back in over the same once clear), ms. */
+export const CITY_YIELD_MS = 300;
+
+/**
+ * One step of a city name's give-way level: 1 = fully shown, 0 = gone. Blocked → falls to 0 over CITY_YIELD_MS; clear → rises to 1.
+ * @param {number} level 0..1 @param {number} dtMs wall time since the last step @param {boolean} blocked
+ * @returns {number} 0..1
+ */
+export function yieldStep(level, dtMs, blocked) {
+  const dt = Number.isFinite(dtMs) && dtMs > 0 ? dtMs : 0;
+  const lv = Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 1;
+  return blocked ? Math.max(0, lv - dt / CITY_YIELD_MS) : Math.min(1, lv + dt / CITY_YIELD_MS);
 }
 
 /** Axis-aligned box overlap. */
@@ -670,6 +748,10 @@ export class CityLabels {
    * @param {number} [opts.fadeNear=radius*2] @param {number} [opts.fadeFar=radius*18]
    * @param {number} [opts.farFadeNear] @param {number} [opts.farFadeEnd] — the whole label (pinned too) fades out between
    *   these camera distances (farLabelFade); both absent = no far fade
+   * @param {Function} [opts.calmFade] — (nowMs) => 0..1, a whole-layer multiplier asked once per frame (the globe's
+   *   10 s calm, calmFadeStep); 0 hides every label; absent = 1
+   * @param {Function} [opts.blockers] — () => ({n, a}) | null, asked once per frame: the lit objects' name boxes and rings (see
+   *   `touchesLitBox`). A name whose pill or dot would touch one fades out over CITY_YIELD_MS and stays gone while it does; absent = none
    * @param {number} [opts.discFlipFrom] — from this camera distance outward a pill that would cross Earth's screen-disc
    *   edge goes to the inward slot, or fades when none fits (pickSlotOnDisc); absent = rule off. Below it (the orbit
    *   floors, camera within ~1.1 radii) the horizon is not a disc edge and labels behave as before.
@@ -684,7 +766,7 @@ export class CityLabels {
    */
   attach({ parent, radius, camera, container, isActive = null,
            lonOffsetDeg = 0, mirrorLon = false,
-           fadeNear, fadeFar, lodNear, lodFar, farFadeNear, farFadeEnd, discFlipFrom,
+           fadeNear, fadeFar, lodNear, lodFar, farFadeNear, farFadeEnd, discFlipFrom, calmFade = null, blockers = null,
            maxVisible = Infinity, maxVisibleLaunch = Infinity,
            occluders = null }) {
     if (!parent || !camera || !this._cities.length) return null;
@@ -723,6 +805,8 @@ export class CityLabels {
         _slot: null,
         // Disc rule fade (pickSlotOnDisc): 1 = pill lies on the disc.
         _discFade: 1,
+        // Give-way level (yieldStep): 1 = clear of every lit object's name and ring, 0 = gone for touching one.
+        _yl: 1,
         // ms timestamp this shown label lost its pill slot (-1 = not losing); dot drawn with no pill.
         _lostAt: -1, _dotOnly: false,
         // Tier 1 full strength, 2/3 dimmer.
@@ -749,6 +833,8 @@ export class CityLabels {
       farFadeNear: Number.isFinite(farFadeNear) ? farFadeNear : null,
       farFadeEnd: Number.isFinite(farFadeEnd) ? farFadeEnd : null,
       discFlipFrom: Number.isFinite(discFlipFrom) ? discFlipFrom : null,
+      calmFade: typeof calmFade === 'function' ? calmFade : null,
+      blockers: typeof blockers === 'function' ? blockers : null, _yPrev: null,
       radius, disc: makeDisc(), _pick: { fade: 1, hide: false },
       maxVisible, maxVisibleLaunch,
     };
@@ -792,7 +878,8 @@ export class CityLabels {
 
       const maxTier = lodMaxTier(_cam.distanceTo(_center), layer.lodNear, layer.lodFar);
       // Far camera (floor 4 out to 1300 u): the whole label fades out between farFadeNear and farFadeEnd.
-      const farFade = farLabelFade(_cam.distanceTo(_center), layer.farFadeNear, layer.farFadeEnd);
+      const farFade = farLabelFade(_cam.distanceTo(_center), layer.farFadeNear, layer.farFadeEnd) *
+        (layer.calmFade ? Math.max(0, Math.min(1, layer.calmFade(now))) : 1);
       if (farFade <= 0) {
         for (const item of layer.items) this._hide(item);
         continue;
@@ -800,6 +887,10 @@ export class CityLabels {
 
       // Earth's screen disc for the keep-on-disc rule (floor 4 mid zoom); off below discFlipFrom and for a layer without it.
       const disc = layer.disc;
+      // The lit objects' name boxes and rings (null = none): a city name touching one gives way (yieldStep).
+      const lit = layer.blockers ? layer.blockers() : null;
+      const yDt = layer._yPrev === null ? 0 : Math.min(250, Math.max(0, now - layer._yPrev));
+      layer._yPrev = now;
       if (layer.discFlipFrom !== null && _cam.distanceTo(_center) >= layer.discFlipFrom) {
         _discV.copy(_center).applyMatrix4(camera.matrixWorldInverse);
         const pe = camera.projectionMatrix.elements;
@@ -892,7 +983,7 @@ export class CityLabels {
           item.textEl.style.transform = slotTransform(slot, item.w, item.offX, item.offY);
           item._slot = slot;
         }
-        item.el.style.opacity = (item._op * item._opScale * item._discFade).toFixed(3);
+        item.el.style.opacity = (item._op * item._opScale * item._discFade * item._yl).toFixed(3);
         if (!item.shown) { item.el.style.display = 'flex'; item.shown = true; }
 
         // Cameo pulse: the fired pad's pill breathes cyan until _pulseEnd (one label at a time).
@@ -923,6 +1014,22 @@ export class CityLabels {
         }
       };
 
+      // Give way to the lit objects' name boxes and rings (Sky 30 F): steps the item's level (down while its pill, if any, or its dot
+      // touches one; up when clear) and returns true when it is gone (level 0 while blocked): hidden, nothing reserved.
+      const giveWay = (item, slot, withPill) => {
+        let blocked = false;
+        if (lit) {
+          blocked = touchesLitBox(item._sx - DOT_PX / 2, item._sy - DOT_PX / 2, DOT_PX, DOT_PX, lit);
+          if (!blocked && withPill) {
+            slotBox(item._sx, item._sy, item.w, slot, _scanBox, item.offX, item.offY);
+            blocked = touchesLitBox(_scanBox.x, _scanBox.y, _scanBox.w, _scanBox.h, lit);
+          }
+        }
+        if (item._yl < 1 || blocked) item._yl = yieldStep(item._yl, yDt, blocked);
+        if (blocked && item._yl <= 0) { this._hide(item); return true; }
+        return false;
+      };
+
       // Place one candidate: free slot (with hysteresis), reserve pill box AND dot
       // square, position the DOM. Returns true if placed (counts toward the caps).
       const place = (item) => {
@@ -943,6 +1050,8 @@ export class CityLabels {
         }
         item._discFade = disc.on ? layer._pick.fade : 1;
         if (slot) {
+          // Gives way to a lit object's name or ring it would touch: fades out (yieldStep), then not drawn at all.
+          if (giveWay(item, slot, true)) return false;
           // Pill box, then dot square (no pill may cover another entry's dot).
           slotBox(item._sx, item._sy, item.w, slot, kept[keptCount++], item.offX, item.offY);
           const d = kept[keptCount++];
@@ -956,6 +1065,7 @@ export class CityLabels {
         // the grace first; a never-pilled label shows at once.
         if (item.tier === 1 && dotFree(item)
             && (item._dotOnly || !item.shown || !holdAfterLoss(true, item._lostAt, now))) {
+          if (giveWay(item, null, false)) return false;
           const d = kept[keptCount++];
           d.x = item._sx - DOT_PX / 2; d.y = item._sy - DOT_PX / 2; d.w = DOT_PX; d.h = DOT_PX;
           item._lostAt = -1;

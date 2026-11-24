@@ -19,7 +19,6 @@
  */
 
 import { MAP_CLOCK_TEXT, mapClockTextFor, NO_SPACING_LANGS } from './mapClockText.js';
-import { SKY_PANEL_LIFT_VAR } from './RealSkyCard.js';
 
 export const MAP_CLOCK_SLIDER_ID = 'map-clock-slider';
 /** Hit-box minimum in CSS px (DECISIONS §32: touch targets at least 44 px). */
@@ -49,31 +48,27 @@ export function speedText(rate, baseScale = 10) {
   return `${Math.round(v).toLocaleString('en-US')}\u00d7`;
 }
 
-/** The bottom-right corner's inset from the window edge (px), the real-sky panel's own. */
+/** The left-edge spot's inset from the window edge (px; floor 5 elsewhere). The top-right corner has none: see `sliderPlacement`. */
 export const EDGE_PX = 12;
+/** The least width of the box in the top-right corner (px; the English row is about 281 wide): the object panel under it is exactly as wide (RealSkyCard SKY_COLUMN_MIN_W_PX, the same number). */
+export const CORNER_MIN_W_PX = 284;
 
 /**
- * Where the row sits (owner 2026-11-19, DECISIONS §78 row 12). Floor 4: the bottom-right corner (12 px in; the bottom-centre holds REACH and
- * the FLY THERE button, the left the hint box). On touch the real-sky panel holds that corner (his 11-17 pick), so the row stands directly
- * above it, right edges aligned, its bottom edge = 12 px + the panel's live height (`--sky-panel-lift`, set by RealSkyCard, so a tapped dot's
- * taller card pushes it up). Floor 5 page 1 (the debris chart, Sky 20, owner 2026-11-23: "time slider in same position as Floor 4 top")
- * takes floor 4's places; on touch the lift is the globe's panel height with no card open (RealSkyCard SKY_PANEL_GLOBE_LIFT_PX: the control stands in the
- * globe's spot) and the card's own height once a dot's card is open. Floor 5 elsewhere (page 2 hides the
- * control; the old left-edge spot, top 800 px or 230 px above the bottom, stays for any other caller). Pure.
+ * Where the row sits. Sky 30 (owner 2026-11-24, DECISIONS §102 row 7: "consider moving time buttons to top right on all 3 screens. consistent"): the globe (floor 4)
+ * and page 1 (floor 5's debris chart) put it at the TOP-RIGHT corner, on the Mac and the iPad alike. Sky 30 F (owner 2026-11-24 14:45Z: "comms pane is really top
+ * right. all the way top, all the way right"): flush in that corner, exactly where the radio box (`#hud-comms-panel`) sits on floor 2 (measured top 0, right 0 on
+ * both screens; only the safe-area insets keep it off a notch), with no border or round corner on the sides that touch the screen. The object panel stands
+ * directly under it on both screens (RealSkyCard `panelPlacement`, top = the row's height less the shared 1 px border), and the radio box and right column dodge
+ * under that (RealSkyCard `_syncDodge`). Until Sky 30 the row was at the bottom right (on touch lifted over the panel by `--sky-panel-lift`; gone). Page 2 hides
+ * the control (main.js). Floor 5 elsewhere: the old left-edge spot, top 800 px or 230 px above the bottom, stays for any other caller. Pure.
  * @param {{floor:number|null, glass:boolean, page1?:boolean}} p `page1`: floor 5 shows the debris page
- * @returns {{left:string, top:string, right:string, bottom:string}}
+ * @returns {{left:string, top:string, right:string, bottom:string, corner:boolean}} `corner`: the flush top-right form
  */
 export function sliderPlacement(p) {
   const p0 = p || {};
-  const right = `calc(${EDGE_PX}px + env(safe-area-inset-right, 0px))`;
-  const bottom = `calc(${EDGE_PX}px + env(safe-area-inset-bottom, 0px))`;
   const globeSpot = p0.floor === 4 || (p0.floor === 5 && p0.page1 === true);
-  if (globeSpot && p0.glass) {
-    // iPad: the real-sky panel holds the corner (right 12 px, bottom 12 px + safe area); stand directly above it, right edges aligned, and follow its height (a tapped dot's card makes it taller)
-    return { left: 'auto', top: 'auto', right: `${EDGE_PX}px`, bottom: `calc(${EDGE_PX}px + env(safe-area-inset-bottom, 0px) + var(${SKY_PANEL_LIFT_VAR}, 0px))` };
-  }
-  if (globeSpot) return { left: 'auto', top: 'auto', right, bottom };
-  return { left: `${EDGE_PX}px`, top: 'min(800px, calc(100vh - 230px))', right: 'auto', bottom: 'auto' };
+  if (globeSpot) return { left: 'auto', top: 'env(safe-area-inset-top, 0px)', right: 'env(safe-area-inset-right, 0px)', bottom: 'auto', corner: true };
+  return { left: `${EDGE_PX}px`, top: 'min(800px, calc(100vh - 230px))', right: 'auto', bottom: 'auto', corner: false };
 }
 
 export class MapClockSlider {
@@ -160,6 +155,14 @@ export class MapClockSlider {
     this._root.style.top = pl.top;
     this._root.style.right = pl.right;
     this._root.style.bottom = pl.bottom;
+    // The corner form touches two screen edges: no border or round corner there (the radio box does the same); the 1 px of top border comes back as padding,
+    // so the row stays as tall as before (RealSkyCard SKY_CLOCK_H_PX). It is never narrower than the panel under it.
+    const s = this._root.style;
+    s.borderTopWidth = pl.corner ? '0' : '1px';
+    s.borderRightWidth = pl.corner ? '0' : '1px';
+    s.paddingTop = pl.corner ? '5px' : '4px';
+    s.borderRadius = pl.corner ? '0' : '8px';
+    s.minWidth = pl.corner ? `${CORNER_MIN_W_PX}px` : '';
   }
 
   /** Language read again (the menu's picker can change it between games). */
