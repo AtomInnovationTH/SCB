@@ -117,53 +117,66 @@ function boxesOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
   return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
 }
 
+/** Scratch for `placeNames`: each placed box's smooth (unsnapped) left / top, which every test uses; grown only when `n` exceeds the length. */
+let rawX = new Float64Array(64), rawY = new Float64Array(64);
+
 /**
  * Place name boxes beside their rings, greedily in the order given (the order is the priority). A name tries right, left, above, below
  * of its ring; the first spot that stays on screen and clear of the keep-out rectangle, of every box already placed and of every
  * ring already placed (and does not cover its own ring's neighbours' boxes) wins. A name with no spot is skipped; placing stops at
- * `max`. No allocation: the results go into the arrays given.
+ * `max`. No allocation: the results go into the arrays given. `o.snap` (device px per CSS px, default 1) is the grid the results (`outX`, `outY`) are rounded to; every test uses the smooth positions, so
+ * a box edge does not step 1 px at a time against a moving ring, and two drawn boxes may touch by under 1 / snap px.
+ * `o.side` (one per candidate, -1 = none) is the side each name used last time: it is tried first, so a name keeps its side unless that spot
+ * is lost; on return it holds the side used (0 right, 1 left, 2 above, 3 below) or -1 when not placed.
  * @param {number} n candidates
  * @param {ArrayLike<number>} sx ring centres, CSS px (NaN = not visible, skipped)
  * @param {ArrayLike<number>} sy
  * @param {ArrayLike<number>} wid box widths, CSS px
- * @param {{max:number, boxH?:number, ringPx:number, gap?:number, vw:number, vh:number, keepOut?:({x0:number,y0:number,x1:number,y1:number}|null)}} o
+ * @param {{max:number, boxH?:number, ringPx:number, gap?:number, vw:number, vh:number, keepOut?:({x0:number,y0:number,x1:number,y1:number}|null), snap?:number, side?:Int8Array}} o
  * @param {Float32Array|number[]} outX box left @param {Float32Array|number[]} outY box top @param {Uint8Array|number[]} outOk 1 = placed
  * @returns {number} how many were placed
  */
 export function placeNames(n, sx, sy, wid, o, outX, outY, outOk) {
   const h = o.boxH || NAME_BOX_H, gap = o.gap === undefined ? NAME_GAP : o.gap, r = o.ringPx / 2;
-  const ko = o.keepOut || null;
-  let placed = 0;
-  for (let i = 0; i < n; i++) outOk[i] = 0;
-  for (let i = 0; i < n && placed < o.max; i++) {
+  const ko = o.keepOut || null, snap = o.snap > 0 ? o.snap : 1, side = o.side || null;
+  if (rawX.length < n) { rawX = new Float64Array(n); rawY = new Float64Array(n); }   // grows only when the list is longer than ever before
+  let placed = 0, i = 0;
+  for (let j = 0; j < n; j++) outOk[j] = 0;
+  for (; i < n && placed < o.max; i++) {
+    const pref = side ? side[i] : -1;   // last time's side; this slot's answer replaces it
+    if (side) side[i] = -1;
     const cx = sx[i], cy = sy[i];
     if (!(cx === cx) || !(cy === cy)) continue;
     const w = wid[i];
     // the ring itself must not sit under a box already placed
     let ringFree = true;
     for (let j = 0; j < i && ringFree; j++) {
-      if (outOk[j] === 1 && boxesOverlap(cx - r, cy - r, o.ringPx, o.ringPx, outX[j], outY[j], wid[j], h)) ringFree = false;
+      if (outOk[j] === 1 && boxesOverlap(cx - r, cy - r, o.ringPx, o.ringPx, rawX[j], rawY[j], wid[j], h)) ringFree = false;
     }
     if (!ringFree) continue;
-    for (let s = 0; s < 4; s++) {
+    for (let t = 0; t < 4; t++) {
+      const s = pref < 0 || pref > 3 ? t : t === 0 ? pref : (t - 1 >= pref ? t : t - 1);   // the kept side, then the rest in the usual order
       let bx, by;
       if (s === 0) { bx = cx + r + gap; by = cy - h / 2; }
       else if (s === 1) { bx = cx - r - gap - w; by = cy - h / 2; }
       else if (s === 2) { bx = cx - w / 2; by = cy - r - gap - h; }
       else { bx = cx - w / 2; by = cy + r + gap; }
-      bx = Math.round(bx); by = Math.round(by);
+      // every test uses the smooth position; only the output is snapped (a snapped edge steps 1 px and flipped a name on and off)
       if (bx < 4 || by < 4 || bx + w > o.vw - 4 || by + h > o.vh - 4) continue;
       if (ko && boxesOverlap(bx, by, w, h, ko.x0, ko.y0, ko.x1 - ko.x0, ko.y1 - ko.y0)) continue;
       let free = true;
       for (let j = 0; j < i && free; j++) {
         if (outOk[j] !== 1) continue;
-        if (boxesOverlap(bx, by, w, h, outX[j], outY[j], wid[j], h)) free = false;
+        if (boxesOverlap(bx, by, w, h, rawX[j], rawY[j], wid[j], h)) free = false;
         else if (boxesOverlap(bx, by, w, h, sx[j] - r, sy[j] - r, o.ringPx, o.ringPx)) free = false;
       }
       if (!free) continue;
-      outX[i] = bx; outY[i] = by; outOk[i] = 1; placed++;
+      rawX[i] = bx; rawY[i] = by;
+      outX[i] = Math.round(bx * snap) / snap; outY[i] = Math.round(by * snap) / snap; outOk[i] = 1; placed++;
+      if (side) side[i] = s;
       break;
     }
   }
+  if (side) for (; i < n; i++) side[i] = -1;   // past the cap: not placed
   return placed;
 }

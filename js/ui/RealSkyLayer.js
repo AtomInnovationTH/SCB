@@ -57,6 +57,14 @@ export const PICK_PX_GLASS = 24;
 export const HOVER_MIN_MS = 100;
 /** The hover ring's diameter, CSS px (the selected dot's mark is 9 px on floor 4, a 14 px ring on floor 5). */
 export const HOVER_RING_PX = 24;
+/** A Highlight ring or name box fades in or out over this many ms (Sky 25; it used to pop). */
+export const HL_FADE_MS = 150;
+/** Show a Highlight element: visible at once, opacity up over HL_FADE_MS. @param {HTMLElement} el */
+function hlShow(el) { el.style.opacity = '1'; el.style.visibility = 'visible'; el.style.transition = `opacity ${HL_FADE_MS}ms linear, visibility 0s`; }
+/** Hide a Highlight element: opacity down over HL_FADE_MS, then hidden (which also stops clicks) when the fade ends. @param {HTMLElement} el */
+function hlHide(el) { el.style.opacity = '0'; el.style.visibility = 'hidden'; el.style.transition = `opacity ${HL_FADE_MS}ms linear, visibility 0s linear ${HL_FADE_MS}ms`; }
+/** Hide a Highlight element at once (another floor, page 1, Off). @param {HTMLElement} el */
+function hlHideNow(el) { el.style.opacity = '0'; el.style.visibility = 'hidden'; el.style.transition = 'none'; }
 /* Floor 5 repaints its chart every drawn frame (sky-smooth-1118: one repaint measured 2.6 ms median, 32.6k fillRects, 1728x1117); it skips a frame only while nothing moved. */
 /** The picked object's orbit ring on floor 4: this many segments (129 points), redrawn this often (ms). */
 export const ORBIT_SEGMENTS = 128;
@@ -269,6 +277,7 @@ export class RealSkyLayer {
     this._hlNameRows = new Int32Array(0); this._hlNameText = [];
     this._hlSx = new Float32Array(0); this._hlSy = new Float32Array(0); this._hlWid = new Float32Array(0);
     this._hlBoxX = new Float32Array(0); this._hlBoxY = new Float32Array(0); this._hlBoxOk = new Uint8Array(0);
+    this._hlSide = new Int8Array(0);    // the side each name's box used last frame (-1 none): it is tried first, so a box does not flip
     this._hlRingSx = new Float32Array(RING_CAP); this._hlRingSy = new Float32Array(RING_CAP);
     this._hlRingEls = []; this._hlRingShown = [];     // pooled DOM rings and what each last showed {on, x, y, row}
     this._hlNameEls = []; this._hlNameShown = [];
@@ -1080,14 +1089,17 @@ export class RealSkyLayer {
     return true;
   }
 
+  /** Device pixels per CSS pixel (at least 1): rings and boxes step by 1/this so they move in whole device pixels. */
+  _snap() { const q = this._pixelRatio(); return q >= 1 ? q : 1; }
+
   /** Put the ring on the hovered dot and the label beside the pointer (kept inside the viewport). A style is written only when its value changed. */
   _placeHover() {
     if (!this._hoverRing) return;
     const c = this._hoverShown, ring = this._hoverRing, p = this._hoverPtr;
-    const v = this._getViewport();
+    const v = this._getViewport(), q = this._snap();
     if (this._screenOf(this._hover)) {
       const s = this._hoverScr;
-      const rx = Math.round(s.x - HOVER_RING_PX / 2), ry = Math.round(s.y - HOVER_RING_PX / 2);
+      const rx = Math.round((s.x - HOVER_RING_PX / 2) * q) / q, ry = Math.round((s.y - HOVER_RING_PX / 2) * q) / q;
       if (!c.ring) { ring.style.display = 'block'; c.ring = true; }
       if (rx !== c.rx) { ring.style.left = `${rx}px`; c.rx = rx; }
       if (ry !== c.ry) { ring.style.top = `${ry}px`; c.ry = ry; }
@@ -1096,8 +1108,8 @@ export class RealSkyLayer {
       const lab = this._hoverLabel;
       if (!c.label) { lab.style.display = 'block'; c.label = true; }
       const w = Math.min(260, 14 + this._hoverText.length * 7.5);
-      const lx = Math.round(Math.max(4, p.x + 16 + w > v.w - 4 ? p.x - 16 - w : p.x + 16));
-      const ly = Math.round(Math.max(4, p.y + 22 + 24 > v.h ? p.y - 30 : p.y + 18));
+      const lx = Math.round(Math.max(4, p.x + 16 + w > v.w - 4 ? p.x - 16 - w : p.x + 16) * q) / q;
+      const ly = Math.round(Math.max(4, p.y + 22 + 24 > v.h ? p.y - 30 : p.y + 18) * q) / q;
       if (lx !== c.lx) { lab.style.left = `${lx}px`; c.lx = lx; }
       if (ly !== c.ly) { lab.style.top = `${ly}px`; c.ly = ly; }
     }
@@ -1449,6 +1461,7 @@ export class RealSkyLayer {
     const nn = rowsOf.length;
     this._hlSx = new Float32Array(nn); this._hlSy = new Float32Array(nn); this._hlWid = new Float32Array(nn);
     this._hlBoxX = new Float32Array(nn); this._hlBoxY = new Float32Array(nn); this._hlBoxOk = new Uint8Array(nn);
+    this._hlSide = new Int8Array(nn).fill(-1);
     for (let k = 0; k < nn; k++) this._hlWid[k] = nameWidthPx(text[k]);
     // (the slot arrays fill by index as slots first show, so they have holes: `for...of` yields undefined there; Sky 23 H3 found this on the second highlight)
     this._hlNameShown.forEach((s) => { s.row = -1; });
@@ -1536,8 +1549,9 @@ export class RealSkyLayer {
       if (this._hlProject(this._hlNameRows[k], m, cp, W, H)) { nsx[k] = this._hlScr.x; nsy[k] = this._hlScr.y; } else { nsx[k] = NaN; nsy[k] = NaN; }
     }
     let po = this._hlPlace;
-    if (!po) po = this._hlPlace = { max: 0, boxH: NAME_BOX_H, ringPx: 0, vw: 0, vh: 0, keepOut: null };
+    if (!po) po = this._hlPlace = { max: 0, boxH: NAME_BOX_H, ringPx: 0, vw: 0, vh: 0, keepOut: null, snap: 1, side: null };
     po.max = glass ? NAMES_MAX_GLASS : NAMES_MAX; po.ringPx = ringPx; po.vw = W; po.vh = H; po.keepOut = this._keepOut;
+    const snap = po.snap = this._snap(); po.side = this._hlSide;
     placeNames(nn, nsx, nsy, this._hlWid, po, this._hlBoxX, this._hlBoxY, this._hlBoxOk);
     // rings
     const lit = this._hlLit, all = lit.length <= RING_CAP;
@@ -1550,9 +1564,9 @@ export class RealSkyLayer {
     for (let k = 0; k < rn; k++) {
       const row = all ? lit[k] : this._hlNameRows[k];
       const on = rsx[k] === rsx[k] && (all || this._hlBoxOk[k] === 1);
-      this._hlRingAt(k, on, row, rsx[k], rsy[k], ringPx);
+      this._hlRingAt(k, on, row, rsx[k], rsy[k], ringPx, snap);
     }
-    for (let k = rn; k < this._hlRingShown.length; k++) this._hlRingAt(k, false, -1, NaN, NaN, ringPx);
+    for (let k = rn; k < this._hlRingShown.length; k++) this._hlRingAt(k, false, -1, NaN, NaN, ringPx, snap);
     for (let k = 0; k < nn; k++) this._hlNameAt(k, this._hlBoxOk[k] === 1, this._hlBoxX[k], this._hlBoxY[k]);
     for (let k = nn; k < this._hlNameEls.length; k++) this._hlNameAt(k, false, 0, 0);   // boxes left over from a longer list
   }
@@ -1564,13 +1578,13 @@ export class RealSkyLayer {
     return CLASS_COLORS[this._cls[row]] || '#ffffff';
   }
 
-  /** Slot k's ring: shown at (x, y) with the row's colour, or hidden. A style is written only when its value changed. */
-  _hlRingAt(k, on, row, x, y, ringPx) {
+  /** Slot k's ring: shown at (x, y) (on the device-pixel grid `snap`) with the row's colour, or hidden. Shows and hides fade (HL_FADE_MS). A style is written only when its value changed. */
+  _hlRingAt(k, on, row, x, y, ringPx, snap) {
     let el = this._hlRingEls[k];
     if (!el) {
       if (!on) return;
       el = this._doc.createElement('div');
-      el.style.cssText = ['position:fixed', 'display:none', 'pointer-events:none', 'z-index:35', 'box-sizing:border-box', 'border-radius:50%',
+      el.style.cssText = ['position:fixed', 'display:block', 'visibility:hidden', 'opacity:0', 'pointer-events:none', 'z-index:35', 'box-sizing:border-box', 'border-radius:50%',
         'box-shadow:0 0 0 1px rgba(0,0,0,0.75), inset 0 0 0 1px rgba(0,0,0,0.75)'].join(';');
       el.id = `real-sky-hl-ring-${k}`;
       this._doc.body.appendChild(el);
@@ -1578,22 +1592,23 @@ export class RealSkyLayer {
       this._hlRingShown[k] = { on: false, x: NaN, y: NaN, row: -1, px: 0 };
     }
     const s = this._hlRingShown[k] || (this._hlRingShown[k] = { on: false, x: NaN, y: NaN, row: -1, px: 0 });   // a hole: a fresh record
-    if (!on) { if (s.on) { el.style.display = 'none'; s.on = false; this._hlDomOn = this._hlAnyOn(); } return; }
+    if (!on) { if (s.on) { hlHide(el); s.on = false; this._hlDomOn = this._hlAnyOn(); } return; }
     if (s.px !== ringPx) { el.style.width = `${ringPx}px`; el.style.height = `${ringPx}px`; s.px = ringPx; }
     if (s.row !== row) { el.style.border = `2px solid ${this._hlRingColour(row)}`; s.row = row; }
-    const rx = Math.round(x - ringPx / 2), ry = Math.round(y - ringPx / 2);
-    if (!s.on) { el.style.display = 'block'; s.on = true; this._hlDomOn = true; }
+    const q = snap > 0 ? snap : 1;
+    const rx = Math.round((x - ringPx / 2) * q) / q, ry = Math.round((y - ringPx / 2) * q) / q;
     if (rx !== s.x) { el.style.left = `${rx}px`; s.x = rx; }
     if (ry !== s.y) { el.style.top = `${ry}px`; s.y = ry; }
+    if (!s.on) { hlShow(el); s.on = true; this._hlDomOn = true; }
   }
 
-  /** Slot k's name box: shown with its top-left at (x, y), or hidden. Tapping it selects the object and turns the globe to it. */
+  /** Slot k's name box: shown with its top-left at (x, y), or hidden. Shows and hides fade (HL_FADE_MS). Tapping it selects the object and turns the globe to it. */
   _hlNameAt(k, on, x, y) {
     let el = this._hlNameEls[k];
     if (!el) {
       if (!on) return;
       el = this._doc.createElement('div');
-      el.style.cssText = ['position:fixed', 'display:none', 'pointer-events:auto', 'cursor:pointer', 'z-index:35', 'max-width:260px', 'box-sizing:border-box', 'padding:3px 7px',
+      el.style.cssText = ['position:fixed', 'display:block', 'visibility:hidden', 'opacity:0', 'pointer-events:auto', 'cursor:pointer', 'z-index:35', 'max-width:260px', 'box-sizing:border-box', 'padding:3px 7px',
         'border-radius:4px', 'border-left:3px solid #ffffff', 'background:rgba(8,12,22,0.88)', 'color:#e8eefc', 'font-family:var(--font-mono)', 'font-size:12px',
         'line-height:1.3', 'white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis', 'user-select:none', '-webkit-user-select:none'].join(';');
       el.id = `real-sky-hl-name-${k}`;
@@ -1610,12 +1625,12 @@ export class RealSkyLayer {
       this._hlNameShown[k] = { on: false, x: NaN, y: NaN, row: -1 };
     }
     const s = this._hlNameShown[k] || (this._hlNameShown[k] = { on: false, x: NaN, y: NaN, row: -1 });   // a hole: a fresh record
-    if (!on) { if (s.on) { el.style.display = 'none'; s.on = false; this._hlDomOn = this._hlAnyOn(); } return; }
+    if (!on) { if (s.on) { hlHide(el); s.on = false; this._hlDomOn = this._hlAnyOn(); } return; }
     const row = this._hlNameRows[k];
     if (s.row !== row) { el.textContent = this._hlNameText[k]; el.style.borderLeftColor = this._hlRingColour(row); s.row = row; }
-    if (!s.on) { el.style.display = 'block'; s.on = true; this._hlDomOn = true; }
     if (x !== s.x) { el.style.left = `${x}px`; s.x = x; }
     if (y !== s.y) { el.style.top = `${y}px`; s.y = y; }
+    if (!s.on) { hlShow(el); s.on = true; this._hlDomOn = true; }
   }
 
   _hlAnyOn() {
@@ -1627,8 +1642,8 @@ export class RealSkyLayer {
   /** Hide every ring and name box (another floor, page 1, Off). */
   _hlDomHide() {
     if (!this._hlDomOn) return;
-    for (let k = 0; k < this._hlRingEls.length; k++) { const s = this._hlRingShown[k]; if (s && s.on) { this._hlRingEls[k].style.display = 'none'; s.on = false; } }
-    for (let k = 0; k < this._hlNameEls.length; k++) { const s = this._hlNameShown[k]; if (s && s.on) { this._hlNameEls[k].style.display = 'none'; s.on = false; } }
+    for (let k = 0; k < this._hlRingEls.length; k++) { const s = this._hlRingShown[k]; if (s && s.on) { hlHideNow(this._hlRingEls[k]); s.on = false; } }
+    for (let k = 0; k < this._hlNameEls.length; k++) { const s = this._hlNameShown[k]; if (s && s.on) { hlHideNow(this._hlNameEls[k]); s.on = false; } }
     this._hlDomOn = false;
   }
 
