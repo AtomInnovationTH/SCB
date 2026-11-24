@@ -196,6 +196,7 @@ export class RealSkyCard {
    * @param {function} [deps.getFlag] () => the menu language's flag code ('USA', 'THA' ...): "Your country" in the Highlight menu (main.js passes the settings' language)
    * @param {function} [deps.onLanguage] (fn) => unsubscribe: fn runs when the menu language changes
    * @param {function} [deps.now] () => monotonic ms
+   * @param {string} [deps.defaultHighlight] the Highlight menu item that is on when the globe opens (main.js: Famous; owner 2026-11-24); none without it
    */
   constructor(deps = {}) {
     this._doc = deps.document !== undefined ? deps.document : (typeof document !== 'undefined' ? document : null);
@@ -210,6 +211,9 @@ export class RealSkyCard {
     this._hlStrip = '';                             // the line under the header: the last tapped row's note
     this._hlHover = '';                             // the note of the row under the pointer (Mac): shown on that line while it is there
     this._hlTickMs = -Infinity;
+    this._hlDefault = typeof deps.defaultHighlight === 'string' ? deps.defaultHighlight : null;   // then the last item the player turned on
+    this._hlDefaultArmed = false;                   // the globe was entered; the default goes on once the catalogue is in
+    this._hlUserOff = false;                        // the player turned a highlight off (Off or Esc): no default until the game reloads
     this._offLanguage = null;
     this._offHl = null;
     if (typeof deps.onLanguage === 'function') this._offLanguage = deps.onLanguage(() => this._hlLanguageChanged());
@@ -365,11 +369,28 @@ export class RealSkyCard {
   setLayout(glass, floor) {
     this._hlTick();                                 // the list's "behind Earth" tags follow the camera (a few times a second)
     const g = glass === true, f = floor === FLOOR_GLOBE ? FLOOR_GLOBE : (floor === FLOOR_CHART ? FLOOR_CHART : null);
-    if (g === this._glass && f === this._floor && this._placed) return;
-    this._glass = g;
-    this._floor = f;
-    this._place();
-    this._renderLegend();                           // the chips are taller on glass
+    const arrived = f === FLOOR_GLOBE && this._floor === null;   // the globe entered from a floor without the layer (page 1 -> globe is not)
+    if (g !== this._glass || f !== this._floor || !this._placed) {
+      this._glass = g;
+      this._floor = f;
+      this._place();
+      this._renderLegend();                         // the chips are taller on glass
+    }
+    if (this._hlDefault) this._hlDefaultStep(f, arrived);
+  }
+
+  /**
+   * The default highlight (owner 2026-11-24, "turn it on by default"): on each arrival at the globe the default item (Famous, then the last
+   * item the player turned on) goes on once the catalogue is in, unless one is on already or the player turned one off since the game loaded.
+   */
+  _hlDefaultStep(f, arrived) {
+    if (f !== FLOOR_GLOBE) { this._hlDefaultArmed = false; return; }
+    if (arrived && !this._hlUserOff) this._hlDefaultArmed = true;
+    if (!this._hlDefaultArmed) return;
+    const L = this._layer;
+    if (!L || typeof L.catalogue !== 'function' || !L.catalogue()) return;   // the data is still loading
+    this._hlDefaultArmed = false;
+    if (!(typeof L.highlight === 'function' && L.highlight())) this.hlPick(this._hlDefault);
   }
 
   /** Applies panelPlacement(glass, floor) to the panel (no-op before the panel is built). */
@@ -650,6 +671,8 @@ export class RealSkyCard {
 
   /** The highlight changed in the layer (set, swapped, cleared, or cleared by leaving the floors). */
   _hlOnLayer(h) {
+    // cleared while floor 4 or page 1 still has the layer: Off or Esc (leaving the floors clears it with no floor)
+    if (!h && this._layer && typeof this._layer.isActive === 'function' && this._layer.isActive()) this._hlUserOff = true;
     if (!h) { this._hlView = 'closed'; this._hlStrip = ''; this._hlExtras = { stages: false, debris: false }; }
     else if (this._hlView === 'closed') this._hlView = 'list';
     this._hlRender();
@@ -675,6 +698,8 @@ export class RealSkyCard {
     if (!it) return false;
     this._hlView = 'list';
     this._hlStrip = '';
+    if (this._hlDefault) this._hlDefault = id;      // the next arrival at the globe brings back the item last turned on
+    this._hlUserOff = false;                        // a pick after an Off: the default is back
     L.setHighlight(toHighlight(it));
     this._hlRender();
     return true;

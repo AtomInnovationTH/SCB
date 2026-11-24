@@ -140,6 +140,7 @@ import { AirPage } from './systems/AirPage.js';
 import { RealSkyLayer } from './ui/RealSkyLayer.js';
 import { OpeningDive, diveOn, diveVeil } from './ui/OpeningDive.js';
 import { RealSkyCard } from './ui/RealSkyCard.js';
+import { ID_FAMOUS } from './ui/HighlightItems.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
 import { LibraryPane } from './ui/LibraryPane.js';
@@ -2050,9 +2051,11 @@ async function init() {
   // The real catalogue (data/sky.json, fetched on the first entry to floor 4 or 5) as dots; both floors show/hide it from their
   // activate()/deactivate(). ActiveSatellites' hand-placed template orbits are hidden while it shows (nothing invented on 4-5).
   // The Highlight menu's "Your country" follows the menu language (its flag), and rebuilds when the language changes (Sky 23 H3).
+  // Famous is on when the globe opens (owner 2026-11-24, "turn it on by default"; Off or Esc keeps it off until the game reloads).
   const realSkyCard = new RealSkyCard({
     getFlag: () => settingsManager.getLanguageEntry().flag,
     onLanguage: (fn) => eventBus.on(Events.LANGUAGE_CHANGED, fn),
+    defaultHighlight: ID_FAMOUS,
   });
   realSkyLayer = new RealSkyLayer({
     scene,
