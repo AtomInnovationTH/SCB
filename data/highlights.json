@@ -3,9 +3,11 @@
     {
       "id": "iss",
       "label": "International Space Station",
+      "short": "ISS",
       "norads": [25544, 25575, 26400, 26700, 36086, 49044],
-      "line": "The first piece, Zarya, was launched on 20 November 1998.",
-      "source": "https://www.nasa.gov/international-space-station/zarya-module"
+      "line": "Run by the space agencies of the US, Russia, Europe, Japan and Canada; the first piece, Zarya, was launched on 20 November 1998.",
+      "source": "https://www.nasa.gov/international-space-station/zarya-module",
+      "source2": "https://www.nasa.gov/reference/international-space-station"
     },
     {
       "id": "tiangong",
@@ -17,9 +19,17 @@
     {
       "id": "hubble",
       "label": "Hubble Space Telescope",
+      "short": "Hubble",
       "norads": [20580],
       "line": "Launched 24 April 1990.",
       "source": "https://science.nasa.gov/mission/hubble/"
+    },
+    {
+      "id": "gps",
+      "label": "GPS",
+      "norads": [24876, 25933, 26407, 26605, 27663, 27704, 28129, 28190, 28361, 28474, 28874, 29486, 29601, 32260, 32384, 32711, 34661, 35752, 36585, 37753, 38833, 39166, 39533, 39741, 40105, 40294, 40534, 40730, 41019, 41328, 43873, 44506, 45854, 46826, 48859, 55268, 62339, 64202, 67588, 68791],
+      "line": "America's navigation satellites, about 20,200 km up.",
+      "source": "https://www.gps.gov/space-segment"
     },
     {
       "id": "vanguard-1",
@@ -29,55 +39,11 @@
       "source": "https://www.navy.mil/Press-Office/Press-Releases/display-pressreleases/Article/2247504/"
     },
     {
-      "id": "tiros-1",
-      "label": "TIROS 1",
-      "norads": [29],
-      "line": "April 1960: the first weather satellite.",
-      "source": "https://science.nasa.gov/mission/tiros",
-      "source2": "https://www.nesdis.noaa.gov/news/celebrating-65-years-of-the-worlds-first-weather-satellite"
-    },
-    {
       "id": "telstar-1",
       "label": "Telstar 1",
       "norads": [340],
       "line": "July 1962: carried the first live television across the Atlantic.",
       "source": "https://www.nasa.gov/history/telstar-opened-era-of-global-satellite-television"
-    },
-    {
-      "id": "syncom-2",
-      "label": "Syncom 2",
-      "norads": [634],
-      "line": "July 1963: the first satellite to circle Earth once a day, in step with its turn.",
-      "source": "https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1963-031A"
-    },
-    {
-      "id": "lageos-1",
-      "label": "LAGEOS 1",
-      "norads": [8820],
-      "line": "A mirror ball launched 4 May 1976; lasers from the ground measure how the Earth moves.",
-      "source": "https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1976-039A"
-    },
-    {
-      "id": "terra",
-      "label": "Terra",
-      "norads": [25994],
-      "line": "Launched 18 December 1999; its MODIS camera sees every point on Earth every 1-2 days.",
-      "source": "https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=1999-068A",
-      "source2": "https://terra.nasa.gov/about/terra-instruments/modis"
-    },
-    {
-      "id": "fermi",
-      "label": "Fermi (listed as GLAST)",
-      "norads": [33053],
-      "line": "NASA's gamma-ray telescope, launched 11 June 2008.",
-      "source": "https://nssdc.gsfc.nasa.gov/nmc/spacecraft/display.action?id=2008-029A"
-    },
-    {
-      "id": "landsat-9",
-      "label": "Landsat 9",
-      "norads": [49260],
-      "line": "Launched 27 September 2021.",
-      "source": "https://www.nasa.gov/news-release/nasa-launches-new-mission-to-monitor-earths-landscapes/"
     },
     {
       "id": "envisat",
@@ -105,21 +71,15 @@
       "id": "cosmos-2251",
       "label": "Cosmos 2251",
       "norads": [22675],
-      "line": "The other satellite in that crash.",
-      "source": "https://www.orbitaldebris.jsc.nasa.gov/newsletter/pdfs/ODQNv13i2.pdf"
-    },
-    {
-      "id": "zenit-stages",
-      "label": "Zenit stages (22)",
-      "norads": [16182, 17590, 17974, 19120, 19650, 20625, 22220, 22285, 22566, 22803, 23088, 23343, 23405, 23705, 24298, 25400, 25407, 25861, 26070, 27006, 28353, 31793],
-      "line": "22 Zenit second stages, 9,000 kg each (one 8,300).",
-      "source": "http://www.astronautix.com/z/zenit-2.html"
+      "line": "Hit by Iridium 33 on 10 February 2009: the first crash of two whole satellites.",
+      "source": "https://www.orbitaldebris.jsc.nasa.gov/newsletter/pdfs/ODQNv13i2.pdf",
+      "source2": "https://ntrs.nasa.gov/api/citations/20090017680/downloads/20090017680.pdf"
     },
     {
       "id": "starlink-pioneer",
       "label": "Oldest Starlinks",
       "norads": [44714, 44718, 44723, 44725, 44744, 44747, 44748, 44751, 44752, 44753, 44768],
-      "line": "Launched 11 Nov 2019: the oldest Starlinks still up, 11 from that launch.",
+      "line": "Launched 11 Nov 2019; the oldest still up, 11 from that launch.",
       "source": "https://www.space-track.org"
     }
   ],
@@ -130,5 +90,8 @@
     "ESP": { "code": "E", "name": "Spain" },
     "BRA": { "code": "BR", "name": "Brazil" },
     "IND": { "code": "IN", "name": "India" }
+  },
+  "names": {
+    "58016": { "name": "THEOS-2", "source": "https://gistda.or.th/news_view.php?n_id=8552&lang=EN" }
   }
 }

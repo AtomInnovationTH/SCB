@@ -62,10 +62,42 @@ function byNorad(cat) {
 /** The credit line of every list: "catalogue 17 Nov 2026". */
 export const creditLine = (cat) => { const d = snapshotDate(cat && cat.snapshotUtc); return d ? `catalogue ${d}` : 'catalogue'; };
 
-/** The short name a globe label uses for a Famous row: up to a comma or a bracket ("Tiangong, China's station" -> "Tiangong"); the one long name has its usual short form. */
-export function shortName(id, label) {
+/**
+ * The short name a globe label uses for a Famous row: the entry's own `short` (data/highlights.json) when it has one, else up to a comma or a
+ * bracket ("Tiangong, China's station" -> "Tiangong"); the ISS has its usual short form either way.
+ * @param {string} id @param {string} label @param {string} [short] the entry's `short` field
+ */
+export function shortName(id, label, short) {
+  if (typeof short === 'string' && short.trim()) return short.trim();
   if (id === 'iss') return 'ISS';
   return String(label).split(/,| \(/)[0].trim();
+}
+
+/** Lower-case letters and digits only ("ISS (ZARYA)" -> "isszarya"), to ask whether a catalogue name already says a short name. */
+const normName = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+/** The Famous entry that lists a NORAD number, or null. @param {{famous?:Array}|null} hl */
+export function famousEntryOf(hl, norad) {
+  if (!hl || !Array.isArray(hl.famous)) return null;
+  return hl.famous.find((f) => Array.isArray(f.norads) && f.norads.includes(norad)) || null;
+}
+
+/**
+ * The story line for the tap card: the Famous entry's `line`, with the entry's short name and ": " before it unless the catalogue name already
+ * contains that short name ("HST" -> "Hubble: Launched ..."; "ISS (ZARYA)" -> the line alone). '' when the object is not in the Famous list.
+ * @param {{famous?:Array}|null} hl @param {number} norad @param {string} catName the name the card shows
+ */
+export function famousStory(hl, norad, catName) {
+  const f = famousEntryOf(hl, norad);
+  if (!f || !f.line) return '';
+  const short = shortName(f.id, f.label, f.short);
+  return normName(catName).includes(normName(short)) ? f.line : `${short}: ${f.line}`;
+}
+
+/** The name the Highlight lists and the tap card give a catalogue row: data/highlights.json `names` (e.g. 58016 "T2V" -> "THEOS-2"), else the catalogue's own. */
+export function displayName(hl, norad, name) {
+  const n = hl && hl.names && hl.names[String(norad)];
+  return n && typeof n.name === 'string' && n.name ? n.name : String(name);
 }
 
 /** The first of `norads` that the catalogue has, or null. */
@@ -86,7 +118,7 @@ export function buildFamous(cat, hl) {
     const ns = (f.norads || []).filter((n) => byNorad(cat).has(n));
     if (ns.length === 0) continue;
     for (const n of ns) norads.add(n);
-    names.set(ns[0], shortName(f.id, f.label));
+    names.set(ns[0], shortName(f.id, f.label, f.short));
     rows.push({ key: f.id, label: f.label, sub: f.line || '', norads: ns, first: ns[0], count: ns.length });
   }
   if (rows.length === 0) return null;
@@ -155,13 +187,13 @@ export function buildCountry(cat, hl, flag, extras = {}) {
   for (const { list } of groups) for (const x of list) norads.add(x[c.norad]);
   // names: the biggest of each kind first, then the second of each, so a few names cover every kind (the layer shows 8 on a mouse, 6 on touch)
   for (let rank = 0; names.size < COUNTRY_NAMES_MAX && groups.some((g) => g.list.length > rank); rank++) {
-    for (const g of groups) if (rank < g.list.length && names.size < COUNTRY_NAMES_MAX) names.set(g.list[rank][c.norad], String(g.list[rank][c.name]));
+    for (const g of groups) if (rank < g.list.length && names.size < COUNTRY_NAMES_MAX) names.set(g.list[rank][c.norad], displayName(hl, g.list[rank][c.norad], g.list[rank][c.name]));
   }
   for (const g of groups) {
     const big = g.list[0];
     const kg = big[c.massKg] != null ? ` (${fmtInt(big[c.massKg])} kg)` : '';
     rows.push({
-      key: `kind-${g.k.cls}`, label: `${fmtInt(g.list.length)} ${g.list.length === 1 ? g.k.one : g.k.many}`, sub: `biggest: ${big[c.name]}${kg}`,
+      key: `kind-${g.k.cls}`, label: `${fmtInt(g.list.length)} ${g.list.length === 1 ? g.k.one : g.k.many}`, sub: `biggest: ${displayName(hl, big[c.norad], big[c.name])}${kg}`,
       norads: g.list.map((x) => x[c.norad]), first: big[c.norad], count: g.list.length,
     });
   }

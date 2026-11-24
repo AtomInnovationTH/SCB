@@ -212,6 +212,7 @@ export class RealSkyCard {
     this._hlHover = '';                             // the note of the row under the pointer (Mac): shown on that line while it is there
     this._hlTickMs = -Infinity;
     this._hlDefault = typeof deps.defaultHighlight === 'string' ? deps.defaultHighlight : null;   // then the last item the player turned on
+    this._hlPicked = false;                         // the player has picked an item this session: his pick, not the language's country, is the default
     this._hlDefaultArmed = false;                   // the globe was entered; the default goes on once the catalogue is in
     this._hlUserOff = false;                        // the player turned a highlight off (Off or Esc): no default until the game reloads
     this._offLanguage = null;
@@ -380,8 +381,10 @@ export class RealSkyCard {
   }
 
   /**
-   * The default highlight (owner 2026-11-24, "turn it on by default"): on each arrival at the globe the default item (Famous, then the last
-   * item the player turned on) goes on once the catalogue is in, unless one is on already or the player turned one off since the game loaded.
+   * The default highlight (owner 2026-11-24, "turn it on by default"): on each arrival at the globe the default item goes on once the catalogue is
+   * in, unless one is on already or the player turned one off since the game loaded. Until the player has picked an item, the default is Your
+   * country when the menu language (read now, it can change in the menu) is not USA and that item exists, else Famous; after a pick it is the
+   * item last turned on.
    */
   _hlDefaultStep(f, arrived) {
     if (f !== FLOOR_GLOBE) { this._hlDefaultArmed = false; return; }
@@ -390,7 +393,13 @@ export class RealSkyCard {
     const L = this._layer;
     if (!L || typeof L.catalogue !== 'function' || !L.catalogue()) return;   // the data is still loading
     this._hlDefaultArmed = false;
-    if (!(typeof L.highlight === 'function' && L.highlight())) this.hlPick(this._hlDefault);
+    if (typeof L.highlight === 'function' && L.highlight()) return;
+    let id = this._hlDefault;
+    if (!this._hlPicked) {
+      const flag = this._getFlag ? this._getFlag() : null;
+      if (flag && flag !== 'USA' && this._hlItemList(L.catalogue()).some((it) => it.id === ID_COUNTRY)) id = ID_COUNTRY;
+    }
+    this.hlPick(id, true);
   }
 
   /** Applies panelPlacement(glass, floor) to the panel (no-op before the panel is built). */
@@ -686,19 +695,19 @@ export class RealSkyCard {
     this._hlRender();
   }
 
-  /** Turn an item on (replacing the one that is on). @param {string} id @returns {boolean} */
-  hlPick(id) {
+  /** Turn an item on (replacing the one that is on). @param {string} id @param {boolean} [auto] the default step, not the player: it does not count as a pick @returns {boolean} */
+  hlPick(id, auto = false) {
     const L = this._layer;
     const cat = L && L.catalogue ? L.catalogue() : null;
     if (!cat) return false;
     const cur = L.highlight ? L.highlight() : null;
-    if (cur && cur.id === id) { this._hlView = 'list'; this._hlRender(); return true; }
+    if (cur && cur.id === id) { if (this._hlDefault && !auto) { this._hlDefault = id; this._hlPicked = true; } this._hlView = 'list'; this._hlRender(); return true; }
     if (id !== ID_COUNTRY || !cur || cur.id !== ID_COUNTRY) this._hlExtras = { stages: false, debris: false };
     const it = this._hlItemList(cat).find((i) => i.id === id);
     if (!it) return false;
     this._hlView = 'list';
     this._hlStrip = '';
-    if (this._hlDefault) this._hlDefault = id;      // the next arrival at the globe brings back the item last turned on
+    if (this._hlDefault && !auto) { this._hlDefault = id; this._hlPicked = true; }   // the next arrival at the globe brings back the item the player last turned on
     this._hlUserOff = false;                        // a pick after an Off: the default is back
     L.setHighlight(toHighlight(it));
     this._hlRender();
@@ -927,14 +936,15 @@ export class RealSkyCard {
     e.dot.style.background = CLASS_COLORS[i.cls] || CLASS_COLORS[5];
     e.nameEl.textContent = i.name;
     const rows = [
+      i.story ? [null, i.story, true] : null,          // a Famous object's line (HighlightItems.famousStory), full width, quiet
       ['number', i.norad], ['kind', i.kind], i.sizeNote ? [null, i.sizeNote] : null, ['size', i.size], i.mass ? ['mass', i.mass] : null,
       i.launched ? ['launched', i.launched] : null, ['height', i.height], ['tilt', i.tilt],
     ].filter(Boolean);
     e.body.textContent = '';
-    for (const [k, v] of rows) {
+    for (const [k, v, quiet] of rows) {
       const line = this._doc.createElement('div');
-      if (k === null) {                                // a note line (whose size and mass these are), full width
-        line.style.cssText = 'margin-top:2px;color:#ffb06b;font-size:10px';
+      if (k === null) {                                // a note line (whose size and mass these are; or the story), full width
+        line.style.cssText = quiet ? 'margin-top:1px;margin-bottom:3px;color:#c9d6ef;font-size:10px;line-height:1.3' : 'margin-top:2px;color:#ffb06b;font-size:10px';
         line.textContent = v;
         e.body.append(line);
         continue;
