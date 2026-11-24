@@ -7499,18 +7499,18 @@ function updateCamera(dt, timestamp) {
       z: shipPos.z + (vel.z / vmag) * eps,
     });
     const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
-    // owner 2026-10-25, wait 15 s since 2026-11-18 14:12Z: 15 s after his last mouse, wheel or touch activity on floor 4 the camera asks for the view back. Answer it with the
-    // same framing turn the arrival uses, direction only (no frameZoomTo: the zoom stays where he put it).
+    // owner 2026-10-25, wait 60 s since 2026-11-24 09:54Z (15 s from 11-18): 60 s after his last mouse, wheel or touch activity on floor 4 the camera asks for the view back. Answer it with a
+    // gentle turn (3-6 s, owner 2026-11-24 "more gentle, less jarring") to the framing the arrival uses, direction only (no frameZoomTo: the zoom stays where he put it).
     if (cameraSystem.ladderViewReturnDue()) {
       const back = navcomFloor.framing({ shipPos, shipVel: vel, project: navcomProject, fovDeg: cameraSystem.camera.fov });
-      if (back) cameraSystem.ladderTurnEarthDir(back.dir);
+      if (back) cameraSystem.ladderTurnEarthDir(back.dir, { gentle: true });
     }
     navcomFloor.update({ project: navcomProject, shipPos, shipAngleRad });
     // On floor 4 the camera re-frames (about 1 s): once each time a ride into floor 4 ends,
     // and each time the focus changes while there (Tab, a click on an icon).
     // It turns to where your ship AND the field are both in view, and glides out until the whole
     // low-orbit shell they move in fits clear of the panels (EarthTurn.earthFrame); the field wins when
-    // both cannot. A drag stops it (the 15 s view return then restores it); the wheel/pinch only ends the zoom glide.
+    // both cannot. A drag stops it (the 60 s view return then restores it); the wheel/pinch only ends the zoom glide.
     const f4Focus = navcomFloor.getFocusedCluster();
     // Coming back from a page lands on the globe exactly where she left it: the arrival re-frame does not run (plan sky-top-1121).
     const f4PageBack = !!(ladderController.pageReturnPending && ladderController.pageReturnPending());

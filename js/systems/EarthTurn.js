@@ -185,16 +185,56 @@ export const EARTH_FRAME_TURN_MAX_S = 1.5;
  * @returns {number} seconds in [EARTH_TURN_S, EARTH_FRAME_TURN_MAX_S]
  */
 export function earthFrameTurnS(start, target) {
+  return turnSecondsFor(start, target, earthFrameEase, EARTH_FRAME_MAX_DEG_S, EARTH_TURN_S, EARTH_FRAME_TURN_MAX_S);
+}
+
+/**
+ * The floor-4 view return (the turn back to the default view after the wait with no activity) is slower and softer
+ * than a re-frame: owner 2026-11-24 09:54Z, "more gentle, less jarring change back to default view" (it was the
+ * 1-1.5 s re-frame turn, up to 120 deg/s). Plain sine in-out: it starts and stops from rest and peaks at pi/2 = 1.57x
+ * its average speed. Its fastest moment stays at or under EARTH_RETURN_MAX_DEG_S where it can, in EARTH_RETURN_MIN_S
+ * to EARTH_RETURN_MAX_S (design numbers, not measured on his Mac yet).
+ */
+export const EARTH_RETURN_MAX_DEG_S = 40;
+/** The shortest view return (s). */
+export const EARTH_RETURN_MIN_S = 3;
+/** The longest view return (s). */
+export const EARTH_RETURN_MAX_S = 6;
+
+/**
+ * The view return's easing: (1 - cos(pi u)) / 2.
+ * @returns {number} 0..1 (monotone; e(0) = 0, e(0.5) = 0.5, e(1) = 1)
+ */
+export function earthReturnEase(u) {
+  return (1 - Math.cos(Math.PI * clamp01(u))) / 2;
+}
+
+/**
+ * How long (s) the view return from `start` to `target` takes: EARTH_RETURN_MIN_S, stretched up to EARTH_RETURN_MAX_S
+ * when the path eased by earthReturnEase would pass EARTH_RETURN_MAX_DEG_S at its fastest. Pure.
+ * @param {{x,y,z}} start   unit vector
+ * @param {{x,y,z}} target  unit vector
+ * @returns {number} seconds in [EARTH_RETURN_MIN_S, EARTH_RETURN_MAX_S]
+ */
+export function earthReturnTurnS(start, target) {
+  return turnSecondsFor(start, target, earthReturnEase, EARTH_RETURN_MAX_DEG_S, EARTH_RETURN_MIN_S, EARTH_RETURN_MAX_S);
+}
+
+/**
+ * Shared by earthFrameTurnS and earthReturnTurnS: the path earthTurnDirAt(start, target, u, ease) sampled at 240 steps;
+ * its fastest angle per unit of progress over `maxDegS` gives the seconds, clamped to [minS, maxS].
+ */
+function turnSecondsFor(start, target, ease, maxDegS, minS, maxS) {
   const N = 240;
-  let prev = earthTurnDirAt(start, target, 0, earthFrameEase), peak = 0;   // fastest angle per unit of progress (rad)
+  let prev = earthTurnDirAt(start, target, 0, ease), peak = 0;   // fastest angle per unit of progress (rad)
   for (let k = 1; k <= N; k++) {
-    const d = earthTurnDirAt(start, target, k / N, earthFrameEase);
+    const d = earthTurnDirAt(start, target, k / N, ease);
     const a = prev.angleTo(d) * N;
     if (a > peak) peak = a;
     prev = d;
   }
-  const need = (radToDeg(peak)) / EARTH_FRAME_MAX_DEG_S;
-  return Math.min(EARTH_FRAME_TURN_MAX_S, Math.max(EARTH_TURN_S, Number.isFinite(need) ? need : EARTH_TURN_S));
+  const need = (radToDeg(peak)) / maxDegS;
+  return Math.min(maxS, Math.max(minS, Number.isFinite(need) ? need : minS));
 }
 
 const _len = (v) => (v ? Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) : NaN);

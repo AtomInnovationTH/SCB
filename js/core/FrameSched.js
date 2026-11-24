@@ -76,7 +76,7 @@ export class FrameSched {
   /**
    * Is the engaged floor a map floor (4-5) whose picture is calm enough for the lower rest rate? True only on a map floor
    * (`perf.MAP_FLOORS`) with the map clock below `perf.MAP_FULL_RATE_STEP` (x100: a dot would jump about a pixel per frame at
-   * 30 fps), no fly-to / trip burn, and no view motion of the camera's own (the 15 s view return gliding, a floor-4 framing
+   * 30 fps), no fly-to / trip burn, and no view motion of the camera's own (floors 1-3's view return gliding, a floor-4 framing
    * turn). Input and rides are NOT read here: plan() boosts those to native whatever this says. A drag's coast is not read
    * here either, and plan() reads `dragLive` only under a held world (cover 'partial'): on a map floor a turntable coast
    * drops to MAP_REST_FPS once BOOST_MS has passed since the last input (owner approved that look 2026-11-19).
@@ -94,7 +94,7 @@ export class FrameSched {
    * object, so nothing allocates). Fills `out` {floor, clockStep, trip, viewMotion, perf} and returns mapRest(out).
    * floor: the settled ladder floor (null when the ladder is off, inactive, or a ride is in flight); clockStep: the map
    * clock's step index; trip: a trip burn is running; viewMotion: the ladder camera's own motion (a floor-4 framing turn
-   * `earthTurn` / `leveling`, or the 15 s view return gliding: `viewReturn.glide`; a camera fly-to to a dot (RealSkyLayer.flyTo → CameraSystem.ladderTurnEarthDir → earthTurn) is `viewMotion` too).
+   * `earthTurn` / `leveling` (the floor-4 view return is one too), or floors 1-3's view return gliding: `viewReturn.glide`; a camera fly-to to a dot (RealSkyLayer.flyTo → CameraSystem.ladderTurnEarthDir → earthTurn) is `viewMotion` too).
    * @param {object} out reused args object
    * @param {{ladderController:object, riding:boolean, mapClock:{step:()=>number}, gameFlowManager:object, cameraSystem:object, perf:object}} src
    * @returns {boolean} the calm-map-floor answer

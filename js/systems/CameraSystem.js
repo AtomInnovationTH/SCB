@@ -15,7 +15,7 @@ import { persistenceManager } from './PersistenceManager.js';
 import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
-import { earthTurnTarget, earthTurnDirAt, EARTH_TURN_S, EARTH_TURN_MIN_GAP_U, earthFrameTurnS, earthFrameEase } from './EarthTurn.js';
+import { earthTurnTarget, earthTurnDirAt, EARTH_TURN_S, EARTH_TURN_MIN_GAP_U, earthFrameTurnS, earthFrameEase, earthReturnTurnS, earthReturnEase } from './EarthTurn.js';
 import { testsRequestedHere } from '../ui/hud/TestsSwitch.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { degToRad, clamp01, clamp, lerp, smoothstep01 } from '../core/MathUtil.js';
@@ -92,19 +92,21 @@ function coastStepS(prevMs, nowMs) {
  *  - IDLE_S: the wait after the LAST view input (mouse or finger drag, held arrows, wheel or pinch zoom) once the drag's
  *    coast has stopped. Any view input restarts it. Real seconds, the same clock as the coast (a hitch counts at most
  *    COAST_STEP_MAX_S, so a pause or a hidden tab never ends the wait).
- *  - IDLE_S_F4: the same wait on floor 4 only: 15 s (owner 2026-11-18 14:12Z, "view should reset after no mouse activity
- *    for 15 seconds"; was 10 s earlier that day, DECISIONS §75 row 3; §59 row 1). Floors 1-3 keep IDLE_S. On floor 4 the
+ *  - IDLE_S_F4: the same wait on floor 4 only: 60 s (owner 2026-11-24 09:54Z, "change the time out to 60s"; 15 s from
+ *    2026-11-18 14:12Z, "view should reset after no mouse activity for 15 seconds"; 10 s before that, DECISIONS §75
+ *    row 3; §59 row 1). Floors 1-3 keep IDLE_S. On floor 4 the
  *    wait also restarts on mouse activity that turns nothing: a pointer move over the canvas, a button down or up, a
  *    wheel event, any touch event (`ladderNoteActivity`). Floors 1-3 count only view input. Floor 5 has no mouse or touch
  *    drag (`_ladderDragEnabledFor`), so it never owes a return.
  *  - GLIDE_S: floors 1-3 (ship anchor): smoothstep along the great circle from the view to the chase direction
  *    (`_ladderChaseLocal`; over a pole of the floor, the same smoothstep over azimuth and polar angle instead, so the
  *    horizon never flips); the zoom distance does not change. Floor 4 (Earth anchor): CameraSystem only raises
- *    `ladderViewReturnDue()`; main.js's floor-4 block answers with the same framing turn the arrival uses
- *    (`ladderTurnEarthDir`). Floor 5 never moves.
+ *    `ladderViewReturnDue()`; main.js's floor-4 block answers with a turn to the framing the arrival uses
+ *    (`ladderTurnEarthDir(dir, { gentle: true })`: 3-6 s, sine in-out, at most 40°/s where it can, EarthTurn
+ *    `earthReturnTurnS`; owner 2026-11-24 "more gentle, less jarring change back to default view"). Floor 5 never moves.
  * No return while a drawer is open, a ride runs, or the catch focus or reel view holds the camera.
  */
-export const LADDER_VIEW_RETURN = Object.freeze({ IDLE_S: 4.0, IDLE_S_F4: 15.0, GLIDE_S: 2.0 });
+export const LADDER_VIEW_RETURN = Object.freeze({ IDLE_S: 4.0, IDLE_S_F4: 60.0, GLIDE_S: 2.0 });
 
 /** Window events that count as player activity for the floor-4 view-return wait (the wheel goes through WheelRouter, touch through TouchControls). */
 const ACTIVITY_WINDOW_EVENTS = Object.freeze(['wheel', 'touchstart', 'touchmove', 'touchend', 'touchcancel']);
@@ -4143,6 +4145,8 @@ export class CameraSystem {
    * @param {{owesReturn?: boolean}} [opts]  `owesReturn`: the turn is HER move (a fly-to a dot, sky-trio-1118): the view counts
    *   as off the floor's default, so after the floor-4 wait with no activity (LADDER_VIEW_RETURN.IDLE_S_F4) it turns back. The
    *   framing turns (arrival, focus change, the return itself) leave it off, or the view would turn back forever.
+   *   `gentle`: the view return after the floor-4 wait: slower and softer (EarthTurn `earthReturnTurnS`, 3-6 s, sine in-out;
+   *   owner 2026-11-24 "more gentle, less jarring change back to default view").
    */
   ladderTurnEarthDir(dir, opts) {
     const lc = this._ladderCam;
@@ -4153,8 +4157,11 @@ export class CameraSystem {
     const k = 200 / n;   // a point 200 u out on that ray: beyond Earth's surface (63.71 u), as earthTurnTarget needs
     const target = earthTurnTarget({ x: dir.x * k, y: dir.y * k, z: dir.z * k });
     if (!target) return false;
-    // Smoothness: sine in-out, stretched (≤ 1.5 s) when the path would pass 120°/s at its fastest.
-    lc.earthTurn = { start: lc.dir.clone(), target, t: 0, s: earthFrameTurnS(lc.dir, target), ease: earthFrameEase, owes: !!(opts && opts.owesReturn) };
+    // Smoothness: sine in-out, stretched (≤ 1.5 s) when the path would pass 120°/s at its fastest; the gentle view return
+    // takes 3-6 s and stays under 40°/s where it can.
+    const gentle = !!(opts && opts.gentle);
+    const s = gentle ? earthReturnTurnS(lc.dir, target) : earthFrameTurnS(lc.dir, target);
+    lc.earthTurn = { start: lc.dir.clone(), target, t: 0, s, ease: gentle ? earthReturnEase : earthFrameEase, owes: !!(opts && opts.owesReturn) };
     return true;
   }
 
@@ -4169,7 +4176,7 @@ export class CameraSystem {
    * mouse drag, a touch drag, a ride, a disengage, an anchor change) also counts once in `ladderEarthFrameCancels()`,
    * which ends LadderController's framing glide. The wheel no longer calls it (a trackpad tail after arrival cancelled the
    * turn to the lifted default view, owner 2026-10-31); should a USER-input cause ('wheel', 'mouse drag', 'touch drag') stop
-   * a running turn on floor 4, the view is marked off default (`viewReturn.dirty`) so the 15 s return restores it.
+   * a running turn on floor 4, the view is marked off default (`viewReturn.dirty`) so the 60 s return restores it.
    * @param {string} [cause] which call site; the three user-input causes above also owe the view return
    */
   ladderCancelEarthTurn(cause = 'camera input') {
