@@ -99,7 +99,7 @@ const _centre = new THREE.Vector3();
 export class AmbientLaunchScheduler {
   constructor() {
     this._layer = null;
-    this._pads = [];          // [{name, lat, lon, world, fd, prevFd, firedThisPass}]
+    this._pads = [];          // [{name, lat, lon, local, world, fd, prevFd, firedThisPass}]
     this._accum = 0;
     this._clock = 0;          // game-time seconds (dt-accumulated; pause/slow-mo safe)
     this._lastFireAt = -Infinity;
@@ -182,11 +182,14 @@ export class AmbientLaunchScheduler {
     parent.getWorldPosition(_centre);
     camera.getWorldPosition(_cam);
     for (const p of this._pads) {
+      // The pad rides the TURNING globe (Reality 7: GMST of the game date): its world place is read from the group's matrix every tick,
+      // not cached once. A world a caller set by hand (no `local`, tests) is left as it is.
       if (!p.world) {
         const s = latLonToPosition(p.lat, mirrorLon ? -p.lon : p.lon, radius);
-        p.world = new THREE.Vector3(s.x, s.y, s.z);
-        parent.localToWorld(p.world);
+        p.local = new THREE.Vector3(s.x, s.y, s.z);
+        p.world = new THREE.Vector3();
       }
+      if (p.local) { p.world.copy(p.local); parent.localToWorld(p.world); }
       p.fd = launchVisible(p.world, _centre, _cam, camera)
         ? cityFacingDot(p.world, _centre, _cam)
         : -1;

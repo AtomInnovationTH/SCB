@@ -24,7 +24,7 @@
  * @module entities/pieceDeltaV
  */
 import { Constants } from '../core/Constants.js';
-import { orbitToSceneCartesian, keplerianToCartesian } from './OrbitalMechanics.js';
+import { orbitToSceneCartesian, keplerianToCartesian, sceneToEci } from './OrbitalMechanics.js';
 
 /** A pushed piece may not leave this eccentricity (the co-orbital field band `reseatOrbitFromScene` clamps to). */
 export const MAX_PUSHED_ECCENTRICITY = 0.1;
@@ -35,6 +35,8 @@ const POSITION_TOL_M = 1;
 const E_CIRCULAR = 1e-13;
 /** Below this |n|/|h| (= sin i) the line of nodes is undefined: refused (an equatorial orbit; see the header). */
 const SIN_I_MIN = 1e-9;
+/** Scratch for the scene -> ECI maps in `stateToElementsAtan2` (it runs per frame: no allocation). */
+const _eciP = { x: 0, y: 0, z: 0 }, _eciV = { x: 0, y: 0, z: 0 };
 
 /** Angle in [0, 2π) from its sine and cosine parts. */
 function angle(sin, cos) {
@@ -47,14 +49,16 @@ function angle(sin, cos) {
  * `cartesianToKeplerian` (OrbitalMechanics.js, shared, left alone) recovers Ω, ω and ν with `acos`, which near 0 and π cannot
  * resolve below about 1e-8 rad (the slope of acos there is infinite); a per-frame push of 1e-6 m/s moves an angle only ~1e-10
  * rad, so at ω = 0 (the mother's own value, copied by welcome and training pieces) it was mostly rounded away. `atan2` keeps
- * full resolution at every angle. Same frame as `cartesianToKeplerian`: scene Y-up, y and z swapped to the textbook Z-up ECI inside.
+ * full resolution at every angle. Same frame as `cartesianToKeplerian`: scene Y-up, mapped to the textbook Z-up ECI inside by the frame
+ * law's inverse (px = x, py = -z, pz = y; `OrbitalMechanics.sceneToEci`).
  *
  * @returns {object|null} elements in the shape `cartesianToKeplerian` returns (a in km), or null for a degenerate state or an
  *   undefined node (sin i below {@link SIN_I_MIN})
  */
 export function stateToElementsAtan2(position, velocity, mu = Constants.MU_EARTH) {
-  const px = position.x, py = position.z, pz = position.y;
-  const vx = velocity.x, vy = velocity.z, vz = velocity.y;
+  const pe = sceneToEci(position, _eciP), ve = sceneToEci(velocity, _eciV);
+  const px = pe.x, py = pe.y, pz = pe.z;
+  const vx = ve.x, vy = ve.y, vz = ve.z;
   const r = Math.hypot(px, py, pz), v2 = vx * vx + vy * vy + vz * vz;
   const hx = py * vz - pz * vy, hy = pz * vx - px * vz, hz = px * vy - py * vx;
   const h = Math.hypot(hx, hy, hz);

@@ -38,10 +38,13 @@ import { DragSailSet } from './DragSailMesh.js';
 import { degToRad, radToDeg, clamp01, clamp, smoothstep01 } from '../core/MathUtil.js';
 import { gameState } from '../core/GameState.js';
 import { tauDays as spinTauDays, decayedRate as spinDecayedRate, kitAgedRate, kitSlowedRate } from '../systems/SpinDecay.js';
+import { validSeat } from '../systems/BigPieces.js';
 
 // Honour Constants.DEBRIS.INTERACTIVE_COUNT/BACKGROUND_COUNT so hybrid-mode tests can inject.
 const INTERACTIVE_COUNT = (Constants.DEBRIS && Constants.DEBRIS.INTERACTIVE_COUNT) || 800;
 const BACKGROUND_COUNT  = (Constants.DEBRIS && Constants.DEBRIS.BACKGROUND_COUNT)  || 5000;
+const _seatRestoreQ = new THREE.Quaternion();      // restoreHeldPiece: the saved seat, then her attitude times it
+const _seatRestoreShip = new THREE.Quaternion();
 
 // `aspect` = length:width ratio (1.0 = symmetric). lengthM/widthM are derived per piece in _createDebrisData and
 // re-derived on every resize by setDebrisSize. Keep in sync with Constants.ASPECT_CAPTURE.ASPECT_BY_TYPE
@@ -854,6 +857,16 @@ export class DebrisField {
     d.discovered = true;
     d.tracked = true;
     d.alive = true;
+    // A saved seat (`BigPieces.seatAgainstShip`: the attitude against her ship) puts the piece back as it sat. Without it the parked spare's own
+    // world tumble stands (older saves; a fresh draw from the spare's stream), and the collar or rack seat is read from that.
+    if (validSeat(spec.seat) && opts.shipQuat && d.tumbleAxis) {
+      const s = spec.seat;
+      const q = _seatRestoreQ.set(s[0], s[1], s[2], s[3]).normalize();
+      q.premultiply(_seatRestoreShip.set(opts.shipQuat.x, opts.shipQuat.y, opts.shipQuat.z, opts.shipQuat.w));
+      const w = clamp(q.w, -1, 1), sn = Math.sqrt(Math.max(0, 1 - w * w));
+      if (sn > 1e-6) d.tumbleAxis.set(q.x / sn, q.y / sn, q.z / sn);
+      d.tumbleAngle = 2 * Math.acos(w);
+    }
     return d;
   }
 
@@ -3571,7 +3584,9 @@ export class DebrisField {
     // right: plane tilt (Δi, ΔΩ) about the mother's argument of latitude.
     const incM = playerOrbit.inclination;
     const u0 = playerOrbit.argPerigee + playerOrbit.trueAnomaly;
-    const L = latM * radPerM;
+    // R7F (Reality 7 frame law, scene = (x, z, -y)): a positive tilt used to move the piece toward -ĥ = -(r×v) in the old mirrored
+    // scene and moves it toward +ĥ now; the sign is flipped so +latM stays on the same side of her ship (right = fwd × up).
+    const L = -latM * radPerM;
     const sinI = Math.sin(incM);
     const dInc = L * Math.sin(u0);
     const dRaan = (Math.abs(sinI) < 0.01) ? 0 : -L * Math.cos(u0) / sinI;

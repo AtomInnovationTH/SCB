@@ -507,7 +507,9 @@ export const Constants = {
 
   // === EARTH RENDERING (ST-5.3) ===
   EARTH: {
-    CLOUD_ROTATION_RATE: 0.00007,   // rad/s — sidereal-ish, visible drift over a game hour
+    CLOUD_ROTATION_RATE: 0.0000035, // rad/s — the clouds' own drift RELATIVE to the turning globe (Earth.setTurn turns the whole group by
+                                    // GMST of the game date, ~7.29e-5 rad/s per WORLD second; this drift is per real second): 4.8 % of
+                                    // Earth's rate at 1 world s per real s, 0.48 % at the usual 10 (Earth.js setTurn comment)
     LOD_16K_THRESHOLD: 16384,       // renderer.capabilities.maxTextureSize >= → 16k textures
     LOD_8K_THRESHOLD: 8192,         //                                    >= → 8k textures
     // Menu→sim handoff intro (deep-polish-4). Replaces the legacy VLEO

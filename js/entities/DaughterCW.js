@@ -16,8 +16,10 @@
  *
  * FRAMES AND UNITS. Everything here is SI (metres, seconds of WORLD time, m/s of TRUE relative speed) in the scene's own axes. The
  * caller converts: a daughter's speed in her units is the true speed times `TimeAuthority.armScale()` (1 under the one clock, 10 off). The LVLH triple is x = radial out,
- * y = along the track (the velocity), z = x cross y (the orbit normal); the scene's axes are a reflection of the usual ones, which
- * changes nothing here (gravity is central and the triple is built from cross products inside the scene). Rotation rate is that of
+ * y = along the track (the velocity), z = x cross y (the orbit normal); the scene's axes are a proper rotation of the textbook ECI since Reality 7 (a reflection of
+ * it before), which changes nothing here (gravity is central and the triple is built from cross products inside the scene, so Hill's equations hold in either
+ * handedness; measured 2026-11-24, `tmp/r7f/cw.mjs`: a daughter 50 m off with a 0.1 m/s kick, half an orbit, the closed form against `propagateOrbit` of both orbits, 0.053 m
+ * off in 1,008 m on the base and on the new frame alike). Rotation rate is that of
  * the mother's circular orbit.
  *
  * Pure: this file imports only `Constants`.

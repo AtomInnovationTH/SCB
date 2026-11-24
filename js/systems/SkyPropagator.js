@@ -170,7 +170,8 @@ export class SkyPropagator {
     const m1 = sO * cw + cO * sw * ci, m2 = -sO * sw + cO * cw * ci;
     pOut[po] = l1 * xP + l2 * yP;
     pOut[po + 1] = sw * si * xP + cw * si * yP;
-    pOut[po + 2] = m1 * xP + m2 * yP;
+    // scene = (x, z, -y) of the ECI matrix result: the frame law (OrbitalMechanics.eciToScene)
+    pOut[po + 2] = -(m1 * xP + m2 * yP);
     // d(matrix)/d(node) and d(matrix)/d(perigee), times the rates, applied to the perifocal position; plus the matrix on the perifocal velocity
     const dO = this.dRaan[i], dW = this.dArgp[i];
     const dl1 = (-sO * cw - cO * sw * ci) * dO + l2 * dW;
@@ -179,7 +180,7 @@ export class SkyPropagator {
     const dm2 = l2 * dO - m1 * dW;
     vOut[vo] = l1 * xV + l2 * yV + dl1 * xP + dl2 * yP;
     vOut[vo + 1] = si * (sw * xV + cw * yV) + si * dW * (cw * xP - sw * yP);
-    vOut[vo + 2] = m1 * xV + m2 * yV + dm1 * xP + dm2 * yP;
+    vOut[vo + 2] = -(m1 * xV + m2 * yV + dm1 * xP + dm2 * yP);
   }
 
   /** Radius (km from Earth's centre) of row i at `tSec` (cheap: no rotation). */
@@ -217,7 +218,7 @@ export class SkyPropagator {
   }
 }
 
-/** Perifocal (xP, yP) → the game's scene frame (the same matrix as OrbitalMechanics.keplerianToCartesianInto). */
+/** Perifocal (xP, yP) → the game's scene frame (the same matrix as OrbitalMechanics.keplerianToCartesianInto, scene z = -ECI y). */
 function rotateInto(xP, yP, raan, argp, cosI, sinI, out, o) {
   const cO = Math.cos(raan), sO = Math.sin(raan);
   const cw = Math.cos(argp), sw = Math.sin(argp);
@@ -227,5 +228,5 @@ function rotateInto(xP, yP, raan, argp, cosI, sinI, out, o) {
   const m2 = -sO * sw + cO * cw * cosI;
   out[o] = l1 * xP + l2 * yP;
   out[o + 1] = sw * sinI * xP + cw * sinI * yP;
-  out[o + 2] = m1 * xP + m2 * yP;
+  out[o + 2] = -(m1 * xP + m2 * yP);
 }

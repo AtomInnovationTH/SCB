@@ -28,6 +28,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { Constants } from '../core/Constants.js';
 import { fetchData } from '../core/dataUrl.js';
 import { SkyPropagator, WGS72 } from '../systems/SkyPropagator.js';
+import { GameClock } from '../systems/GameDate.js';
 import { meoRadialMap, radiusPxForAltKm, chartTextBoxes, chartTextVersion } from './SdaChart.js';
 import { cardFields, CLASS_COLORS, CLASS_NAMES, CLS_STARLINK, isStarlinkRow } from './RealSkyCard.js';
 import { StorageKeys } from '../core/StorageKeys.js';
@@ -119,6 +120,7 @@ export class RealSkyLayer {
    * @param {function} [deps.getViewport] () => {w, h} CSS px of the game canvas
    * @param {function} [deps.fetchJson] (url) => Promise<object>; default: fetchData(url).json()
    * @param {function} [deps.dateMs] () => game date ms (SunStorms.dateMs); NaN before the first start
+   * @param {object} [deps.clock] the game's shared GameClock (systems/GameDate.js); default: one of its own that reads `dateMs`
    * @param {function} [deps.isGlass] () => true on touch (bigger dots, bigger tap radius)
    * @param {function} [deps.pixelRatio] () => device pixel ratio
    * @param {function} [deps.now] () => monotonic ms
@@ -135,6 +137,10 @@ export class RealSkyLayer {
     // (it answers every url with the sky) gets no highlights unless it also injects `fetchHighlights`; a failed or missing file is null.
     this._fetchHighlights = deps.fetchHighlights || (deps.fetchJson ? null : defaultFetchJson);
     this._dateMs = deps.dateMs || (() => NaN);
+    // The sky's clock is the game's ONE clock (systems/GameDate.js): main.js hands in the shared one, so the globe, the dots and the
+    // readouts read the same date; headless tests get their own from `dateMs`.
+    this._sharedClock = !!deps.clock;
+    this._clock = deps.clock || new GameClock({ source: this._dateMs });
     this._isGlass = deps.isGlass || (() => false);
     this._pixelRatio = deps.pixelRatio || (() => (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
@@ -220,8 +226,7 @@ export class RealSkyLayer {
     this._tmpV = new Float64Array(3);
 
     // the clock
-    this._sumS = 0;
-    this._lastDate = undefined;
+    // the clock lives in `this._clock` (the game's shared GameClock)
 
     // floor 5
     this._canvas = null;
@@ -507,21 +512,15 @@ export class RealSkyLayer {
 
   /* ---------------------------------------------------------------- the clock */
 
-  _syncDate() {
-    const d = this._dateMs();
-    const same = Object.is(d, this._lastDate) || (Number.isNaN(d) && Number.isNaN(this._lastDate));
-    if (!same) { this._sumS = 0; this._lastDate = d; }
-  }
-
   /**
    * Game seconds that ran this frame (the world clock, held and warped as the game holds and warps it). Called every frame from the
-   * game loop, on every floor: a game date change (a trip landed) restarts the sum.
+   * game loop, on every floor. With the shared clock (main.js) the game loop ticks that clock itself (`gameClock.tick`), so here it
+   * only runs a highlight's own clock and the clear that hide() left pending; a headless layer with its own clock ticks it here.
    */
   tickClock(dtWorldS) {
-    this._syncDate();
+    if (!this._sharedClock) this._clock.tick(dtWorldS);
     this._hlRunPendingClear();
-    if (dtWorldS > 0 && Number.isFinite(dtWorldS)) this._sumS += dtWorldS;
-    // a highlight's own clock runs from its date, unless `clock.hold` froze it (the live sum above never stops)
+    // a highlight's own clock runs from its date, unless `clock.hold` froze it (the live clock never stops)
     const ov = this._hlClock;
     if (ov && !ov.hold && ov.skyMs !== undefined && dtWorldS > 0 && Number.isFinite(dtWorldS)) this._hlClockSumS += dtWorldS;
   }
@@ -533,34 +532,33 @@ export class RealSkyLayer {
     if (this._floor === null) this.clearHighlight();
   }
 
-  /** The sky clock without any highlight override: the game date (else the snapshot) + the game seconds since it moved, ms. */
+  /**
+   * The sky clock without any highlight override, ms. With the game's shared clock it is always the clock's `dateMs()` (in training
+   * 1-3, with no game date, the real time the clock stamped + the world seconds), the same value the globe turns to, so every dot sits
+   * over its own ground. Only a headless layer with its own clock and no date falls back to the snapshot + the seconds.
+   */
   _liveSkyMs() {
-    const d = this._dateMs();
-    return (Number.isFinite(d) ? d : this._snapshotMs) + this._sumS * 1000;
+    const d = this._clock.dateMs();
+    if (Number.isFinite(d) && (this._sharedClock || Number.isFinite(this._clock.baseMs()))) return d;
+    return this._snapshotMs + this._clock.sinceDateS() * 1000;
   }
 
   /** Game seconds since `dateMs()` last changed. */
-  sinceDateS() { this._syncDate(); return this._sumS; }
+  sinceDateS() { return this._clock.sinceDateS(); }
 
-  /** Sky time as seconds after the snapshot: the game date (else the snapshot itself) + the seconds since it last changed. */
+  /** Sky time as seconds after the snapshot: `skyDateMs()` counted from the snapshot. */
   skySeconds() {
-    this._syncDate();
-    if (this._hlClock && this._hlClock.skyMs !== undefined) return (this._hlClock.skyMs + this._hlClockSumS * 1000 - this._snapshotMs) / 1000;
-    const d = this._dateMs();
-    const base = Number.isFinite(d) ? d : this._snapshotMs;
-    return (base + this._sumS * 1000 - this._snapshotMs) / 1000;
+    return (this.skyDateMs() - this._snapshotMs) / 1000;
   }
 
   /**
-   * The sky's clock as a date, ms: exactly the moment `skySeconds()` counts from the snapshot (the game date + the game seconds since
-   * it last moved). The real Moon on floors 4-5 (SunLight) reads it so it is where the dots' own clock says. NaN while no date is known.
+   * The sky's clock as a date, ms: a highlight's own clock while one owns it, else the live clock (`_liveSkyMs`). The real Moon on
+   * floors 4-5 (SunLight) reads it so it is where the dots' own clock says. The globe turns on the game clock only: a highlight that
+   * sets its own date (none does yet; a crash replay would) moves the dots off their ground unless it also turns the globe or the dots.
    */
   skyDateMs() {
-    this._syncDate();
     if (this._hlClock && this._hlClock.skyMs !== undefined) return this._hlClock.skyMs + this._hlClockSumS * 1000;
-    const d = this._dateMs();
-    const base = Number.isFinite(d) ? d : this._snapshotMs;
-    return base + this._sumS * 1000;
+    return this._liveSkyMs();
   }
 
   /** The credit line; after a year the snapshot is called old. Without the CelesTrak status join it does not claim "Working / not working: CelesTrak." */
@@ -1394,7 +1392,7 @@ export class RealSkyLayer {
       const c = next.clock;
       let skyMs = c && Number.isFinite(c.skyMs) ? c.skyMs : undefined;
       const hold = !!(c && c.hold);
-      // hold freezes a sky value at set time (the live sum `_sumS` keeps running, so Off is "now"); an explicit skyMs held stays put too
+      // hold freezes a sky value at set time (the live clock keeps running, so Off is "now"); an explicit skyMs held stays put too
       if (hold && skyMs === undefined) { const live = this._liveSkyMs(); if (Number.isFinite(live)) skyMs = live; }
       this._hlClock = skyMs !== undefined || hold ? { hold, skyMs } : null;
       this._hlClockSumS = 0;
@@ -1579,7 +1577,7 @@ export class RealSkyLayer {
       this._hlRingEls[k] = el;
       this._hlRingShown[k] = { on: false, x: NaN, y: NaN, row: -1, px: 0 };
     }
-    const s = this._hlRingShown[k];
+    const s = this._hlRingShown[k] || (this._hlRingShown[k] = { on: false, x: NaN, y: NaN, row: -1, px: 0 });   // a hole: a fresh record
     if (!on) { if (s.on) { el.style.display = 'none'; s.on = false; this._hlDomOn = this._hlAnyOn(); } return; }
     if (s.px !== ringPx) { el.style.width = `${ringPx}px`; el.style.height = `${ringPx}px`; s.px = ringPx; }
     if (s.row !== row) { el.style.border = `2px solid ${this._hlRingColour(row)}`; s.row = row; }
@@ -1611,7 +1609,7 @@ export class RealSkyLayer {
       this._hlNameEls[k] = el;
       this._hlNameShown[k] = { on: false, x: NaN, y: NaN, row: -1 };
     }
-    const s = this._hlNameShown[k];
+    const s = this._hlNameShown[k] || (this._hlNameShown[k] = { on: false, x: NaN, y: NaN, row: -1 });   // a hole: a fresh record
     if (!on) { if (s.on) { el.style.display = 'none'; s.on = false; this._hlDomOn = this._hlAnyOn(); } return; }
     const row = this._hlNameRows[k];
     if (s.row !== row) { el.textContent = this._hlNameText[k]; el.style.borderLeftColor = this._hlRingColour(row); s.row = row; }
@@ -1637,8 +1635,8 @@ export class RealSkyLayer {
   /** The rings and name boxes now on screen: [{kind, row, x, y, w, h}] (probes and tests; allocates, not for the frame loop). */
   highlightMarks() {
     const out = [];
-    this._hlRingEls.forEach((el, k) => { const s = this._hlRingShown[k]; if (s.on) out.push({ kind: 'ring', row: s.row, x: s.x, y: s.y, w: s.px, h: s.px, el }); });
-    this._hlNameEls.forEach((el, k) => { const s = this._hlNameShown[k]; if (s.on) out.push({ kind: 'name', row: s.row, x: s.x, y: s.y, w: this._hlWid[k], h: NAME_BOX_H, text: this._hlNameText[k], el }); });
+    this._hlRingEls.forEach((el, k) => { const s = this._hlRingShown[k]; if (s && s.on) out.push({ kind: 'ring', row: s.row, x: s.x, y: s.y, w: s.px, h: s.px, el }); });
+    this._hlNameEls.forEach((el, k) => { const s = this._hlNameShown[k]; if (s && s.on) out.push({ kind: 'name', row: s.row, x: s.x, y: s.y, w: this._hlWid[k], h: NAME_BOX_H, text: this._hlNameText[k], el }); });
     return out;
   }
 

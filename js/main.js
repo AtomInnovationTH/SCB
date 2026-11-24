@@ -213,6 +213,11 @@ import { gameState as _gameStateRefForProfile } from './core/GameState.js';
 // face question is settled. OUTSIDE every ladder gate.
 import { loadFaces, fontEpoch } from './core/Typeface.js';
 import { degToRad, radToDeg, clamp01, clamp } from './core/MathUtil.js';
+import { gameClock, gameEarthAngleRad, SEEDED_RUN_DATE_MS } from './systems/GameDate.js';
+
+// The game's ONE date (Reality 7): the first-start real date + ship days (SunStorms.dateMs) + the world seconds since it moved. The globe
+// turns by GMST of it, the real-sky dots, her start orbit, the ground readers and the sun / Moon seed read the same clock.
+gameClock.setSource(() => sunStorms.dateMs());
 
 
 // ============================================================================
@@ -1438,6 +1443,14 @@ async function init() {
   }
   _bootMark('Starfield + SunLight + Player constructed');
 
+  // `?seed=N` (dev host only, like every debug switch): the same field again (orbits and the mover/group/high-field specs; scripts/play/drive-training.mjs).
+  // Without it, or on a public host: Date.now() exactly as before. It also pins the game date: Earth turns, so her start orbit and every
+  // piece's world-fixed tumble depend on the hour; the seeded run uses one fixed date (SEEDED_RUN_DATE_MS) wherever the game would stamp
+  // the real time at a fresh start (the game clock's no-date stamp in training 1-3, SunStorms' first start), set BEFORE the first read below.
+  const _seedQ = new URLSearchParams(devSearch(window.location)).get('seed');
+  const _fieldSeed = /^\d{1,10}$/.test(_seedQ || '') ? (Number(_seedQ) >>> 0) : (Date.now() >>> 0);
+  if (/^\d{1,10}$/.test(_seedQ || '')) { gameClock.setNow(() => SEEDED_RUN_DATE_MS); sunStorms.setNow(() => SEEDED_RUN_DATE_MS); }
+
   // The debris field is ONE orbital regime centred on the boot language's start orbit — the same computeStartOrbit
   // read that GameFlowManager's _applyStartLocation makes on every start path, so it is co-orbital with the player by
   // construction. A mid-menu language switch re-derives the regime (_applyStartLocation calls
@@ -1445,14 +1458,10 @@ async function init() {
   // reproducible.
   let _fieldRegime = null;
   try {
-    _fieldRegime = regimeFromStartOrbit(computeStartOrbit(settingsManager.getLanguageEntry()));
+    _fieldRegime = regimeFromStartOrbit(computeStartOrbit(settingsManager.getLanguageEntry(), gameEarthAngleRad()));
   } catch (e) {
     console.warn('[main] field regime derivation failed, DebrisField default applies:', e?.message);
   }
-  // `?seed=N` (dev host only, like every debug switch): the same field again (orbits and the mover/group/high-field specs; scripts/play/drive-training.mjs).
-  // Without it, or on a public host: Date.now() exactly as before.
-  const _seedQ = new URLSearchParams(devSearch(window.location)).get('seed');
-  const _fieldSeed = /^\d{1,10}$/.test(_seedQ || '') ? (Number(_seedQ) >>> 0) : (Date.now() >>> 0);
   debrisField = new DebrisField(scene, { catalogLoader, seed: _fieldSeed, fieldRegime: _fieldRegime });
   // A piece the ship holds is drawn in the near-field pass while it is near the ship (the hull cannot paint over
   // it). Guarded like registerNearFieldRoot above (a stale cached module just leaves the pieces in the far pass).
@@ -2062,6 +2071,7 @@ async function init() {
     getCamera: () => (cameraSystem ? cameraSystem.camera : null),
     getViewport: () => ({ w: window.innerWidth, h: window.innerHeight }),
     dateMs: () => sunStorms.dateMs(),
+    clock: gameClock,
     isGlass: () => GestureHints.isGlass(),
     card: realSkyCard,
     // Mouse hover on floors 4-5 (lane sky-look-1119): a pointer cursor over a dot that a click would open.
@@ -2900,6 +2910,7 @@ async function init() {
       sunDir: () => (sunLight ? sunLight.sunDirection : null),
       sunDirAt: (aheadS, out) => ((sunLight && sunLight.directionAt) ? sunLight.directionAt(aheadS, out) : null),
       clock: () => ({ rate: timeAuthority ? timeAuthority.rate : 1, baseScale: TimeAuthority.BASE_SCALE }),
+      earthAngle: gameEarthAngleRad,   // her ground point is read against the turning Earth
     });
     // The voice: SpeechSynthesis when the platform has it, armed by the first
     // pointer / key gesture (iPad Safari speaks only inside a gesture — the
@@ -2944,6 +2955,7 @@ async function init() {
       },
       eclipse: () => (orbitPane ? orbitPane.eclipse() : null),
       subPoint: subSatellitePoint,
+      earthAngle: gameEarthAngleRad,   // the angle Earth has turned to now; the pass sweep adds Earth's rate over the sweep
       stations: () => {
         const list = (catalogLoader && catalogLoader.getAllGroundStations) ? catalogLoader.getAllGroundStations() : null;
         if (!Array.isArray(list) || !list.length) return null;
@@ -6682,7 +6694,8 @@ function gameLoop(timestamp) {
   _simClock.update(realDt, _simWheelTurn, _simSig);
   _simClock.frame(dt, dtWorld);
   if (_playRecorder) _playRecorder.tick(_simClock.gameDt);   // the play log's game clock (read-only)
-  if (realSkyLayer) realSkyLayer.tickClock(_simClock.gameDtWorld);   // the real sky's clock: game seconds since the game date last moved
+  gameClock.tick(_simClock.gameDtWorld);   // the game's one clock (also the real sky's): game seconds since the game date last moved
+  if (realSkyLayer) realSkyLayer.tickClock(_simClock.gameDtWorld);   // the sky's highlight clock and pending clear (the shared clock is ticked above)
   const _simK = _simClock.k;
   const _simN = _simClock.n, _simStepDt = _simClock.stepDt, _simStepDw = _simClock.stepDtWorld;
   const _simGameDt = _simClock.gameDt, _simGameDw = _simClock.gameDtWorld;
@@ -6821,6 +6834,7 @@ function gameLoop(timestamp) {
   // Earth's clouds and the stars are scenery on the wall clock.
   const sunDir = sunLight.update(_worldHeld ? 0 : _simGameDt, player.getPosition(), _worldSlow);
   earth.setSunDirection(sunDir);
+  earth.setTurn(gameEarthAngleRad());   // the globe turns by GMST of the game date, every frame on every floor (Reality 7)
   earth.update(_worldHeld ? 0 : dt);
   // Bloom gate — skips the whole UnrealBloom mip chain on frames where nothing can cross the threshold. NOT
   // sun-only: Venus rides the brightness ladder at 2.74 (> Constants.BLOOM_THRESHOLD) and its visibility is

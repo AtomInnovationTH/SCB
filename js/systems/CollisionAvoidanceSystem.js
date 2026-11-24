@@ -813,7 +813,8 @@ export class CollisionAvoidanceSystem {
       return { x: ex / eLen, y: ey / eLen, z: ez / eLen };
     }
 
-    // Degenerate case: threat is perfectly radial → evade prograde
+    // Degenerate case: threat is perfectly radial → evade prograde (R7F: (r.z, 0, -r.x) is the prograde of an equatorial orbit in the
+    // scene frame law scene = (x, z, -y); it was retrograde under the old mirrored frame)
     return { x: radial.z, y: 0, z: -radial.x };
   }
 

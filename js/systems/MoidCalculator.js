@@ -39,7 +39,7 @@ function _normaliseToKm(orbit) {
 }
 
 /**
- * ECI position (km) at mean anomaly `M` (rad); the position-only part of keplerianToCartesian. `o` = { a (km), e, i, W, w }.
+ * Scene-frame position (km) at mean anomaly `M` (rad); the position-only part of keplerianToCartesian. `o` = { a (km), e, i, W, w }.
  */
 function _posAtM(o, M) {
   const { a, e, i, W, w } = o;
@@ -61,7 +61,7 @@ function _posAtM(o, M) {
   const xP = r * Math.cos(nu);
   const yP = r * Math.sin(nu);
 
-  // Perifocal → ECI rotation (same matrix as keplerianToCartesian)
+  // Perifocal → scene (same matrix and frame law as keplerianToCartesian: scene z = -ECI y; a distance is the same either way)
   const cW = Math.cos(W), sW = Math.sin(W);
   const cw = Math.cos(w), sw = Math.sin(w);
   const cI = Math.cos(i), sI = Math.sin(i);
@@ -76,7 +76,7 @@ function _posAtM(o, M) {
   return {
     x: l1 * xP + l2 * yP,
     y: n1 * xP + n2 * yP,
-    z: m1 * xP + m2 * yP,
+    z: -(m1 * xP + m2 * yP),
   };
 }
 

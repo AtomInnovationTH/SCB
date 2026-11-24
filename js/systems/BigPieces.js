@@ -15,8 +15,9 @@
  *
  * serialize() (the save form of every pending piece; one held by nothing saves `holder: null`; pendingAboard() lists
  * held ones only): `[{type, name, material, mass, size, owner, areaM2, fieldId, fieldRow, fate, holder, caughtAtMs,
- * members?, massAtCatch?, meltDoneKg?}]`. A bag lists its BIG members only (the small ones were paid at the catch and
- * carry no value); the last two only for a piece in the furnaces: `mass` is then what is left of it.
+ * members?, massAtCatch?, meltDoneKg?, seat?}]`. A bag lists its BIG members only (the small ones were paid at the catch and
+ * carry no value); the melt pair only for a piece in the furnaces: `mass` is then what is left of it. `seat` (a single piece on
+ * a holder, given her attitude to `serialize`) is its attitude against her ship, `[x, y, z, w]`: a reload sets the piece as it sat.
  *
  * Pure of the game's heavy modules: it imports Constants, the event bus and Events only. The holders are read through
  * `bind({nets, arms})` (GameFlowManager binds the capture system's `activeNets` and the arm manager's `arms`), so a rig
@@ -95,6 +96,40 @@ function bodySpec(p) {
     fieldRow: p.fieldRow ?? p._bagFieldRow ?? null,
   };
 }
+
+/**
+ * How a held piece sits against HER ship, as a unit quaternion `[x, y, z, w]` rounded to 1e-7 (w >= 0): `shipQuat⁻¹ × the piece's
+ * attitude now`. The collar and every daughter's rack write the piece's drawn attitude each frame from her attitude times a seat
+ * frozen in her frame, so this is that seat whichever holder has it. A reload restores it exactly (`DebrisField.restoreHeldPiece`)
+ * instead of drawing a fresh world tumble, which the satellite's attitude then turns against (Reality 8 F2 fix 1). Null for a piece
+ * with no attitude or no ship attitude.
+ * @param {{tumbleAxis?: {x: number, y: number, z: number}, tumbleAngle?: number}} d
+ * @param {{x: number, y: number, z: number, w: number}|null} shipQuat her world attitude
+ * @returns {number[]|null}
+ */
+export function seatAgainstShip(d, shipQuat) {
+  const ax = d && d.tumbleAxis;
+  if (!ax || !shipQuat || !Number.isFinite(shipQuat.w)) return null;
+  const len = Math.hypot(ax.x, ax.y, ax.z);
+  if (!(len > 1e-12)) return null;
+  const h = 0.5 * (d.tumbleAngle || 0), s = Math.sin(h) / len;
+  const cx = ax.x * s, cy = ax.y * s, cz = ax.z * s, cw = Math.cos(h);          // the piece's attitude
+  const sx = -shipQuat.x, sy = -shipQuat.y, sz = -shipQuat.z, sw = shipQuat.w;   // her attitude, inverted (unit quaternion)
+  let x = sw * cx + sx * cw + sy * cz - sz * cy;                                  // inverse(her) × piece, Hamilton product
+  let y = sw * cy - sx * cz + sy * cw + sz * cx;
+  let z = sw * cz + sx * cy - sy * cx + sz * cw;
+  let w = sw * cw - sx * cx - sy * cy - sz * cz;
+  const n = Math.hypot(x, y, z, w);
+  if (!(n > 1e-12)) return null;
+  const k = (w < 0 ? -1 : 1) / n;
+  const r = (v) => Math.round(v * k * 1e7) / 1e7 + 0;                             // + 0: no -0 in the save
+  x = r(x); y = r(y); z = r(z); w = r(w);
+  return [x, y, z, w];
+}
+
+/** A saved seat: four finite numbers of about unit length. */
+export const validSeat = (a) => Array.isArray(a) && a.length === 4 && a.every(Number.isFinite)
+  && Math.abs(Math.hypot(a[0], a[1], a[2], a[3]) - 1) < 1e-3;
 
 const validSpec = (s) => !!s && typeof s === 'object' && Constants.BIG_PIECES.TYPES.includes(s.type)
   && Number.isFinite(s.mass) && s.mass > 0 && !!s.owner && typeof s.owner === 'object'
@@ -217,8 +252,12 @@ export class BigPieceLedger {
     return out;
   }
 
-  /** The save form of `pendingAboard()` (see the file header). */
-  serialize() {
+  /**
+   * The save form of `pendingAboard()` (see the file header).
+   * @param {{x: number, y: number, z: number, w: number}|null} [shipQuat] her attitude: a piece on a holder then saves `seat`
+   *   (`seatAgainstShip`), so a reload sets it as it sat; without it (or an old reader) no `seat` is written
+   */
+  serialize(shipQuat = null) {
     // Every pending piece is saved; one held by nothing right now (on the retry list) saves `holder: null` and the
     // restore seats it by the normal fallbacks. Same order as pendingAboard(): oldest catch first.
     const all = [];
@@ -235,6 +274,10 @@ export class BigPieceLedger {
       if (Number.isFinite(d._disposal.massAtCatch)) {
         base.massAtCatch = d._disposal.massAtCatch;
         base.meltDoneKg = d._disposal.meltDoneKg || 0;
+      }
+      if (holder && d.isBag !== true) {
+        const seat = seatAgainstShip(d, shipQuat);
+        if (seat) base.seat = seat;
       }
       if (d.isBag === true) {
         base.type = 'bag';

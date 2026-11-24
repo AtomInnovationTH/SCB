@@ -365,6 +365,9 @@ export class SunStorms {
     this.installed = false;
   }
 
+  /** @param {function(): number} fn  () => real ms read at a fresh start (`?seed` pins it to one fixed date: main.js) */
+  setNow(fn) { this._now = typeof fn === 'function' ? fn : () => Date.now(); }
+
   /** Put the multiplier into the game's air (OrbitalMechanics.atmosphericDensity) and the real per-piece drag on. */
   install() { this.installed = true; setAirModel(this); }
 

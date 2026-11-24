@@ -30,13 +30,13 @@
  *
  * START-ORBIT MODEL: each language carries an `incDeg` from its nation's real launch geography
  * (Japan/Tanegashima ≈30°, Brazil/Alcântara ≈5°, India/Sriharikota Sun-synch 97.5° or low-LEO 18°). The opening pass is
- * aimed by subPointToOrbit(start.lat, start.lon, incDeg→rad), which sets RAAN + true anomaly so the ground track
- * crosses the anchor; altitude is fixed at 350 km. There is always debris to clear: the welcome field spawns in the
+ * aimed by subPointToOrbit(start.lat, start.lon, incDeg→rad, ascending, Earth angle), which sets RAAN + true anomaly so the ground track
+ * crosses the anchor at the game date (Reality 7: Earth turns, so RAAN carries GMST of the date); altitude is fixed at 350 km. There is always debris to clear: the welcome field spawns in the
  * player's own orbit (inherits incDeg) and the scattered cluster seeds ~5–85°
  * (GameFlowManager._applyStartLocation / OrbitalMechanics.subPointToOrbit / DebrisField).
  *
- * English: inclination 51.6° (ISS band). The anchor is NOT Gulf of Guinea 0/0: the Earth mesh does not rotate, so that
- * corridor was ~40 % empty Pacific, touching neither USA nor Europe. Corridor: ascending node 63.0°E, opening pass Nova
+ * English: inclination 51.6° (ISS band). The anchor is NOT Gulf of Guinea 0/0: that corridor was ~40 % empty Pacific, touching neither USA nor Europe
+ * (the track now shifts west of the start by Earth's turn each orbit, but the opening pass is still aimed there). Corridor: ascending node 63.0°E, opening pass Nova
  * Scotia → New York → Norfolk → New Orleans → Mexico City, later Suez/Nile → Athens → Rome → Paris → London.
  *
  * @type {LanguageEntry[]}

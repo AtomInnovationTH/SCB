@@ -165,6 +165,11 @@ export function heldInHandBookingMeters(arm, dp, alpha, playerSatellite, sizeMet
   if (hasQ) {
     _ihQInv.copy(q).invert();
     _ihUp.applyQuaternion(_ihQInv);       // world-up → body-up, on EVERY path
+    // Reality 7 frame flip: the old scene was a mirror of the new one, and a mirror reverses cross products, so her attitude (built by lookAt and
+    // cross products from her orbit) has its body-X axis flipped against the same world: the body-X part of world up changes sign for any such
+    // attitude (not only while she points prograde; measured over 2,000 random attitudes, equal to base within 1e-15). Negating it keeps the held
+    // catch booked on the same side of her as before the flip.
+    _ihUp.x = -_ihUp.x;
   }
   if (ld) {
     _ihDir.set(ld.x, ld.y, ld.z);

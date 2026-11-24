@@ -2532,7 +2532,7 @@ export class AutopilotSystem {
             const cosW = Math.cos(argP), sinW = Math.sin(argP);
             const cosI = Math.cos(inc),  sinI = Math.sin(inc);
 
-            // Perifocal → scene rotation (matches keplerianToCartesian)
+            // Perifocal → scene rotation (matches keplerianToCartesian: the ECI matrix, scene z = -ECI y)
             const l1 = cosO * cosW - sinO * sinW * cosI;
             const l2 = -cosO * sinW - sinO * cosW * cosI;
             const m1 = sinO * cosW + cosO * sinW * cosI;
@@ -2540,12 +2540,12 @@ export class AutopilotSystem {
             const n1 = sinW * sinI;
             const n2 = cosW * sinI;
 
-            // Inverse (scene → perifocal): xP = l1*x + n1*y + m1*z
+            // Inverse (scene → perifocal), through the frame law (scene z = -ECI y): xP = l1*x + n1*y - m1*z
             const sx = preSnap.position.x;
             const sy = preSnap.position.y;
             const sz = preSnap.position.z;
-            const xP = l1 * sx + n1 * sy + m1 * sz;
-            const yP = l2 * sx + n2 * sy + m2 * sz;
+            const xP = l1 * sx + n1 * sy - m1 * sz;
+            const yP = l2 * sx + n2 * sy - m2 * sz;
 
             let newTA = Math.atan2(yP, xP);
             if (newTA < 0) newTA += 2 * Math.PI;
@@ -2626,8 +2626,8 @@ export class AutopilotSystem {
             const n2 = cosW * sinI;
             const sx = preSnap.position.x, sy = preSnap.position.y, sz = preSnap.position.z;
             let newTA = Math.atan2(
-              l2 * sx + n2 * sy + m2 * sz,
-              l1 * sx + n1 * sy + m1 * sz
+              l2 * sx + n2 * sy - m2 * sz,
+              l1 * sx + n1 * sy - m1 * sz
             );
             if (newTA < 0) newTA += 2 * Math.PI;
             pOrb.trueAnomaly = newTA;

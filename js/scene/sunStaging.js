@@ -10,7 +10,7 @@
  * (high-latitude winter starts) the yaw clamps to the azimuth-aligned optimum
  * (worst case across the language table: dot ≈ 0.26, low warm dawn light).
  * The azimuth branch is chosen so the cycle's forward motion (azimuth
- * INCREASES with elapsed time, see _sunYaw0 in SunLight.update) carries the
+ * DECREASES with elapsed time, see `directionAt` in SunLight: +X toward -Z, the way she flies) carries the
  * sun toward the spawn meridian: the sunlit window opens after spawn.
  *
  * Pure + Node-safe: no THREE, no DOM, no singletons.
@@ -67,8 +67,9 @@ export function stagedSunYaw(sunDir, spawnPos, targetDot = OPENING_SUN_TARGET_DO
 
   const azSun = Math.atan2(sunDir.z, sunDir.x);
   const azSpawn = Math.atan2(spawnPos.z, spawnPos.x);
-  // Azimuth increases with time, so trail the spawn meridian by Δaz.
-  let yaw = (azSpawn - dAz) - azSun;
+  // Azimuth DEcreases with time (the sun sweeps +X toward -Z since Reality 7), so trail the spawn meridian by Δaz: stand Δaz BEHIND it in time,
+  // i.e. at azimuth + Δaz (the sun then reaches the spawn meridian after spawn: the lit window opens after spawn, as before the frame law).
+  let yaw = (azSpawn + dAz) - azSun;
   yaw = ((yaw % TWO_PI) + TWO_PI) % TWO_PI;
   if (yaw > Math.PI) yaw -= TWO_PI;
   return yaw;

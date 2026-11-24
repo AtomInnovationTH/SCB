@@ -6,8 +6,9 @@
  *  • init() snaps the player's orbit to the current language's start orbit.
  *  • Events.LANGUAGE_CHANGED (in MENU state) drives the orbit elements — RAAN swing, inclination roll (Sun-sync ↔
  *    equatorial), along-track slide — to the new homeland with a rate-capped RAMP UP / CRUISE / RAMP DOWN
- *    (trapezoidal velocity) profile. Duration falls out of the distance: short hops ~1 s, the longest traverse
- *    (es→pt, ~173° RAAN) ~5 s at a capped 40°/s.
+ *    (trapezoidal velocity) profile. Duration falls out of the distance: the nearest pair (ta→ja, ~27°) ~1.5 s, the longest
+ *    traverse (en→pt, ~162°, measured 2026-11-24 with the east frame) ~5 s at a capped 40°/s. Every orbit is aimed with the game
+ *    clock's Earth angle (Reality 7), so the backdrop shows the orbit she would start on now.
  *  • Retarget-safe mid-flight: the current sweep rate carries over to the new target (clamped to what is brakeable in
  *    the new distance), so clicking through several languages stays continuous.
  *  • On MENU_DEPARTURE_START an in-flight morph races an arrival deadline just inside the cinematic so the backdrop
@@ -23,6 +24,7 @@ import { Events } from '../core/Events.js';
 import { gameState, GameStates } from '../core/GameState.js';
 import { settingsManager } from './SettingsManager.js';
 import { computeStartOrbit } from './startOrbitMath.js';
+import { gameEarthAngleRad } from './GameDate.js';
 import { degToRad } from '../core/MathUtil.js';
 
 const TWO_PI = 2 * Math.PI;
@@ -87,7 +89,7 @@ export class MenuOrbitPreview {
 
   _snap(lang) {
     if (!this._player || !this._player.orbit) return;
-    const orbit = computeStartOrbit(lang);
+    const orbit = computeStartOrbit(lang, gameEarthAngleRad());   // over the city at the game date now (Earth turns, Reality 7)
     if (!orbit) return;
     this._player.orbit.inclination = orbit.inclination;
     this._player.orbit.raan = orbit.raan;
@@ -112,7 +114,7 @@ export class MenuOrbitPreview {
     if (!this._player || !this._player.orbit) return;
     // Only the menu backdrop is cosmetic — never touch a live flight.
     if (gameState.currentState !== GameStates.MENU) return;
-    const target = computeStartOrbit(lang);
+    const target = computeStartOrbit(lang, gameEarthAngleRad());
     if (!target) return;
     if (_prefersReducedMotion()) { this._snap(lang); return; }
     this._target = target;

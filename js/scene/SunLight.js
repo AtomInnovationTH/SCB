@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { createLabelTexture } from './labelTexture.js';
-import { sunEphemeris, moonEphemeris, latLonToUnitVec, raDecToDotFrame } from './Ephemeris.js';
+import { sunEphemeris, moonEphemeris, raDecToDotFrame } from './Ephemeris.js';
 import { stagedSunYaw, rotateAboutY, OPENING_SUN_TARGET_DOT } from './sunStaging.js';
 import { bodyByName, ladderBloomBodies } from './bodyCatalog.js';
 import {
@@ -939,13 +939,13 @@ export class SunLight {
   }
 
   /**
-   * Seed the stylized sky from the real one: the sun starts over the actual
-   * sub-solar point for `now`; the moon starts at its real elongation +
+   * Seed the stylized sky from the real one: the sun starts at its real RA/Dec for `now` (the sky-dot frame, inertial: the globe's GMST
+   * turn puts the sub-solar point under it); the moon starts at its real elongation +
    * declination (today's phase falls out of _updateMoon's dot product).
    * The per-frame model is unchanged (circle tilted SUN_CYCLE_TILT, ~92-min
    * period). Solves it for (a) the phase whose declination matches today's, on
    * the branch matching the seasonal trend, and (b) a fixed yaw about +Y to the
-   * real sub-solar longitude. A seed, not a live ephemeris: game and wall clock
+   * real sun's right ascension. A seed, not a live ephemeris: game and wall clock
    * diverge immediately (TIME_SCALE_GAMEPLAY).
    * Failure-safe: an exception leaves the fixed-sky defaults intact.
    * @param {Date} now — real wall-clock time (UTC-based internally)
@@ -954,7 +954,9 @@ export class SunLight {
     try {
       const sun = sunEphemeris(now);
       const moon = moonEphemeris(now);
-      const s = latLonToUnitVec(sun.declDeg, sun.subLonEastDeg);
+      // The scene is inertial and Earth turns under it (Reality 7): the Sun's direction is its RA/Dec in the sky-dot frame, not the
+      // sub-solar point of a still Earth (the globe's GMST turn then puts the day side under it).
+      const s = raDecToDotFrame(sun.raDeg, sun.declDeg);
 
       // (a) Real |declination| ≤ 23.44° < SUN_CYCLE_TILT (23.49°): the clamp never bites in practice.
       const ratio = clamp(s.y / Math.sin(SUN_CYCLE_TILT), -1, 1);
@@ -963,16 +965,17 @@ export class SunLight {
         sunEphemeris(new Date(now.getTime() + 86400000)).declDeg;
       if (declTomorrow < sun.declDeg) a0 = Math.PI - a0; // southbound branch
 
-      // (b) Azimuth is atan2(z, x) in the equatorial plane.
+      // (b) Azimuth is atan2(z, x) in the equatorial plane. The base circle turns +X toward -Z, the way she now flies (Reality 7,
+      // Decision 5: the made-up sun keeps its relation to her orbit); `directionAt` uses the same base vector.
       const bx = Math.cos(a0);
-      const bz = Math.sin(a0) * Math.cos(SUN_CYCLE_TILT);
+      const bz = -Math.sin(a0) * Math.cos(SUN_CYCLE_TILT);
       this._sunPhase0 = a0;
       this._sunYaw0 = Math.atan2(s.z, s.x) - Math.atan2(bz, bx);
       this.sunDirection.set(s.x, s.y, s.z).normalize();
 
       // Moon: azimuth offset from the sun + tan(declination) y-lift; _updateMoon()
       // keeps this offset, so today's phase persists all session.
-      const m = latLonToUnitVec(moon.declDeg, moon.subLonEastDeg);
+      const m = raDecToDotFrame(moon.raDeg, moon.declDeg);
       this._moonAzOffset =
         Math.atan2(m.z, m.x) - Math.atan2(s.z, s.x);
       this._moonTanDecl = Math.tan(degToRad(moon.declDeg));
@@ -1040,7 +1043,7 @@ export class SunLight {
 
     const bx = Math.cos(angle);
     const by = Math.sin(SUN_CYCLE_TILT) * Math.sin(angle);
-    const bz = Math.sin(angle) * Math.cos(SUN_CYCLE_TILT);
+    const bz = -Math.sin(angle) * Math.cos(SUN_CYCLE_TILT);   // +X toward -Z: the way she flies since Reality 7 (frame law)
     const cy = Math.cos(this._sunYaw0);
     const sy = Math.sin(this._sunYaw0);
     const x = bx * cy - bz * sy, y = by, z = bx * sy + bz * cy;

@@ -65,31 +65,58 @@ export function keplerianToCartesian(orbit, mu = Constants.MU_EARTH) {
   const n1 = sinω * sinI;
   const n2 = cosω * sinI;
 
+  // scene = (x_eci, z_eci, -y_eci): the frame law (see `eciToScene`).
   return {
     position: {
       x: l1 * xP + l2 * yP,
       y: n1 * xP + n2 * yP,
-      z: m1 * xP + m2 * yP,
+      z: -(m1 * xP + m2 * yP),
     },
     velocity: {
       x: l1 * vxP + l2 * vyP,
       y: n1 * vxP + n2 * vyP,
-      z: m1 * vxP + m2 * vyP,
+      z: -(m1 * vxP + m2 * vyP),
     },
   };
+}
+
+/**
+ * THE frame law (Reality 7, DECISIONS §94): scene = (x_eci, z_eci, −y_eci). ECI is the textbook frame (X to the vernal equinox, Z to the
+ * north pole); the scene is Y-up. This is a proper rotation (no mirror), so orbits run east over the continents: eastward longitude
+ * runs toward −Z (see `subSatellitePoint`). Every converter and hand copy uses this map.
+ * @param {{x:number,y:number,z:number}} v  ECI vector (any unit)
+ * @param {{x:number,y:number,z:number}} [out]  optional output (may be `v` itself)
+ * @returns {{x:number,y:number,z:number}} the scene vector (same unit)
+ */
+export function eciToScene(v, out = {}) {
+  const x = v.x, y = v.y, z = v.z;
+  out.x = x; out.y = z; out.z = -y;
+  return out;
+}
+
+/**
+ * Inverse of `eciToScene`: ECI = (x_scene, −z_scene, y_scene).
+ * @param {{x:number,y:number,z:number}} v  scene vector (any unit)
+ * @param {{x:number,y:number,z:number}} [out]  optional output (may be `v` itself)
+ * @returns {{x:number,y:number,z:number}} the ECI vector (same unit)
+ */
+export function sceneToEci(v, out = {}) {
+  const x = v.x, y = v.y, z = v.z;
+  out.x = x; out.y = -z; out.z = y;
+  return out;
 }
 
 /**
  * Cartesian state → Keplerian elements.
  *
  * **Frame convention:** input (position km, velocity km/s) is in the same Y-up scene frame produced by `keplerianToCartesian`, i.e.
- * Three.js coordinates where the orbital angular-momentum axis is Y. Internally `y ↔ z` are swapped to work in the textbook Z-up ECI
- * frame, so the round-trip `keplerianToCartesian(cartesianToKeplerian(r, v)) == (r, v)` holds.
+ * Three.js coordinates, the frame law `eciToScene` (scene = (x, z, −y) of the textbook ECI). Internally it is mapped back with
+ * `sceneToEci` (px = x, py = −z, pz = y), so the round-trip `keplerianToCartesian(cartesianToKeplerian(r, v)) == (r, v)` holds.
  */
 export function cartesianToKeplerian(position, velocity, mu = Constants.MU_EARTH) {
-  // --- Scene Y-up → standard Z-up (swap y and z) ---
-  const px = position.x, py = position.z, pz = position.y;
-  const vx = velocity.x, vy = velocity.z, vz = velocity.y;
+  // --- Scene Y-up → textbook Z-up ECI: the inverse of the frame law (px = x, py = −z, pz = y) ---
+  const px = position.x, py = -position.z, pz = position.y;
+  const vx = velocity.x, vy = -velocity.z, vz = velocity.y;
 
   const r = Math.sqrt(px * px + py * py + pz * pz);
   const v = Math.sqrt(vx * vx + vy * vy + vz * vz);
@@ -203,9 +230,11 @@ export function reseatOrbitFromScene(orbit, scenePos, velocityKmS) {
  * RAAN + true anomaly that put a satellite's sub-satellite point (ground track) directly over a geographic point at t=0.
  *
  * **Frame assumptions:**
- *  - Orbit frame is Y-up (Y = polar axis), see `keplerianToCartesian`.
- *  - The visual Earth mesh does NOT rotate (no GMST applied to geometry), so the ECI longitude equals the *negative* of the geographic
- *    east-longitude because the equirectangular Earth texture is longitude-mirrored (`mirrorLon` in main.js / CityLabels).
+ *  - Orbit frame is Y-up (Y = polar axis), the frame law `eciToScene` (scene = (x, z, −y) of the textbook ECI).
+ *  - Earth turns (Reality 7): the geographic east-longitude λ sits at ECI longitude λ + `earthAngleRad` (GMST of the game date,
+ *    `systems/GameDate.earthAngleRad`), so RAAN carries the angle. With the angle at 0 (Earth still, the default) the ECI longitude equals
+ *    the geographic east-longitude. East is +ECI longitude, which in the scene runs toward −Z, so a prograde orbit moves east over the
+ *    drawn continents.
  *  - Circular orbit with argPerigee = 0 (the player's default).
  *
  * Sub-point latitude is bounded by inclination; if `|lat| > inclination` it is clamped to the highest reachable parallel
@@ -215,9 +244,10 @@ export function reseatOrbitFromScene(orbit, scenePos, velocityKmS) {
  * @param {number} lonEastDeg    degrees east (negative = west)
  * @param {number} inclinationRad
  * @param {boolean} [ascending=true] place on the northbound (ascending) pass
+ * @param {number} [earthAngleRad=0] Earth's turn angle at the moment the point is meant to be under her (radians)
  * @returns {{ raan: number, trueAnomaly: number }} radians, both in [0, 2π)
  */
-export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = true) {
+export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = true, earthAngleRad = 0) {
   const TWO_PI = 2 * Math.PI;
   const norm = (a) => ((a % TWO_PI) + TWO_PI) % TWO_PI;
 
@@ -235,8 +265,8 @@ export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = 
   // the equatorial plane: u_proj = atan2(cosI·sinν, cosν).
   const uProj = Math.atan2(Math.cos(inc) * Math.sin(nu), Math.cos(nu));
 
-  // ECI longitude is the mirror of geographic east-longitude (fixed Earth mesh).
-  const lonEci = degToRad(-lonEastDeg);
+  // ECI longitude = geographic east-longitude + the Earth angle (0 while Earth is still).
+  const lonEci = degToRad(lonEastDeg) + (Number.isFinite(earthAngleRad) ? earthAngleRad : 0);
 
   return {
     raan: norm(lonEci - uProj),
@@ -247,22 +277,26 @@ export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = 
 /**
  * The sub-satellite point (geographic latitude / east longitude) under a position: the inverse of `latLonToUnitVec` (js/scene/Ephemeris.js)
  * and the other half of `subPointToOrbit`'s frame law: Y is the polar axis, (0°, 0°) is +X, and geographic EAST longitude runs toward −Z
- * because the equirectangular Earth texture is longitude-mirrored (the visual Earth does not rotate). Direction only: the position may be in
- * km or scene units, any length > 0.
+ * (the scene is a proper rotation of the textbook ECI, `eciToScene`; the globe's drawn east is the same direction). Direction only: the
+ * position may be in km or scene units, any length > 0. The position is inertial; Earth has turned `earthAngleRad` (GMST of the game
+ * date, `systems/GameDate`) so the geographic longitude is the inertial one minus that angle. With the angle at 0 (the default: Earth
+ * still) it is also the ECI longitude.
  *
  *   lat     = asin(y / r)
- *   lonEast = −atan2(z, x)            (in (−180, 180], degrees)
+ *   lonEast = −atan2(z, x) − earthAngle   (wrapped to (−180, 180], degrees)
  *
  * @param {{x:number, y:number, z:number}} pos  any unit; the zero vector → (0, 0)
+ * @param {number} [earthAngleRad=0] Earth's turn angle at the moment of `pos` (radians)
  * @returns {{ latDeg: number, lonEastDeg: number }}
  */
-export function subSatellitePoint(pos) {
+export function subSatellitePoint(pos, earthAngleRad = 0) {
   const x = Number(pos && pos.x), y = Number(pos && pos.y), z = Number(pos && pos.z);
   const r = Math.sqrt(x * x + y * y + z * z);
   if (!(r > 0) || !Number.isFinite(r)) return { latDeg: 0, lonEastDeg: 0 };
   const latDeg = radToDeg(Math.asin(clamp(y / r, -1, 1)));
-  let lonEastDeg = radToDeg(-Math.atan2(z, x));
-  if (lonEastDeg <= -180) lonEastDeg += 360;      // atan2 = π exactly → keep the +180 branch
+  let lonEastDeg = radToDeg(-Math.atan2(z, x) - (Number.isFinite(earthAngleRad) ? earthAngleRad : 0));
+  while (lonEastDeg <= -180) lonEastDeg += 360;     // (−180, 180]: atan2 = π exactly keeps the +180 branch
+  while (lonEastDeg > 180) lonEastDeg -= 360;
   return { latDeg, lonEastDeg };
 }
 
@@ -637,13 +671,14 @@ export function keplerianToCartesianInto(orbit, outPos, outVel, mu = Constants.M
   const n1 = sinω * sinI;
   const n2 = cosω * sinI;
 
+  // scene = (x_eci, z_eci, -y_eci): the frame law (see `eciToScene`).
   outPos.x = l1 * xP + l2 * yP;
   outPos.y = n1 * xP + n2 * yP;
-  outPos.z = m1 * xP + m2 * yP;
+  outPos.z = -(m1 * xP + m2 * yP);
 
   outVel.x = l1 * vxP + l2 * vyP;
   outVel.y = n1 * vxP + n2 * vyP;
-  outVel.z = m1 * vxP + m2 * vyP;
+  outVel.z = -(m1 * vxP + m2 * vyP);
 }
 
 /**

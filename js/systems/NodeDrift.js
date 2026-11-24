@@ -108,11 +108,29 @@ export function wrapDeg(deg) {
 function wrap360(deg) { return ((deg % 360) + 360) % 360; }
 
 /**
- * The gap at a new game: the station's node minus hers, wrapped (the English start: 123.4 - 293.0 = -169.6 deg, doc §4 line 108).
- * @param {number} herNodeDeg @returns {number}
+ * The station node gap at a new game for each start city (deg, wrapped): station's node minus hers. Reality 7 (DECISIONS §94 row 1,
+ * Decision 4): her orbit now runs east over the real map, which moved her start node; the line-up wait stays as it was, so each city
+ * keeps the gap the old frame gave (the old `stationOrbit().nodeDeg - herNodeDeg`, measured 11-23 on the base tree, English -169.598).
+ * The station's plane stays as invented as before (a real station plane is a later choice for the owner). Keyed by `startLang`.
  */
-export function initialGapDeg(herNodeDeg) {
-  return wrapDeg(stationOrbit().nodeDeg - herNodeDeg);
+export const START_GAP_DEG = Object.freeze({
+  en: -169.598,   // New York
+  th: -113.565,   // Bangkok
+  ja: -43.391,    // South of Honshu
+  es: 172.209,    // Madrid
+  pt: -14.995,    // Amazon
+  hi: -165.584,   // New Delhi
+  ta: -118.686,   // Chennai
+});
+
+/**
+ * The gap at a new game, from the start city's code (a table, `START_GAP_DEG`; the English start: -169.6 deg, doc §4 line 108). An unknown
+ * or missing code gets New York's.
+ * @param {string|null} [startLang] the language code the start city came from (`gameState.startLang`) @returns {number}
+ */
+export function initialGapDeg(startLang) {
+  const g = typeof startLang === 'string' ? START_GAP_DEG[startLang] : undefined;
+  return Number.isFinite(g) ? g : START_GAP_DEG.en;
 }
 
 /** How far the gap may be from 0 for the station to count as lined up: 0.346 deg, a finish of at most 57 m/s (doc §2). */

@@ -1,15 +1,16 @@
 /**
  * Ephemeris.js — minimal real-sky ephemeris (Sun + Moon) for start-time seeding:
- * where the Sun and Moon are, for a real Date, in the game's Earth-fixed world
- * frame. Sun: declination + sub-solar east longitude. Moon: declination +
+ * where the Sun and Moon are, for a real Date: declination + RA, and the sub-solar / sub-lunar east longitude on the Earth-fixed globe (the
+ * game's scene is inertial and the globe turns under it, see FRAME). Sun: declination + sub-solar east longitude. Moon: declination +
  * sub-lunar east longitude, elongation from the Sun, illuminated fraction.
  *
  * Accuracy: Sun ≈ 0.01° (Meeus low-precision), Moon ≈ 1° (largest series terms).
  *
- * FRAME: the world is Earth-FIXED (the Earth mesh never rotates; the texture is
- * longitude-mirrored, `mirrorLon: true` in main.js; see OrbitalMechanics.subPointToOrbit).
- * East longitude λE maps to scene azimuth −λE, Y the polar axis, (lat 0, lon 0)
- * on +X; latLonToUnitVec() applies exactly that.
+ * FRAME: `latLonToUnitVec` and the sub-solar / sub-lunar longitudes below are in the Earth-FIXED frame of the globe's own texture (the
+ * mesh's local frame; the texture is longitude-mirrored, `mirrorLon: true` in main.js). The scene itself is inertial and the globe turns
+ * under it by GMST of the game date (Reality 7: `Earth.setTurn`, `systems/GameDate`), so anything drawn among the dots or the sky is
+ * placed with `raDecToDotFrame` (inertial), and only things riding the globe's group use `latLonToUnitVec`. East longitude λE maps to
+ * the globe's local azimuth −λE, Y the polar axis, (lat 0, lon 0) on +X; latLonToUnitVec() applies exactly that.
  *
  * Pure math — no THREE, no DOM.
  *
@@ -110,20 +111,20 @@ export function moonEphemeris(date) {
 
 /**
  * Right ascension / declination (degrees) → unit direction in the SKY-DOT frame: the frame `SkyPropagator` (the real-sky dots on
- * floors 4-5, `ui/RealSkyLayer`) puts its satellites in, which is the game's orbit frame (`keplerianToCartesian`): x = ECI X,
- * y = the polar axis, z = ECI Y, azimuth atan2(z, x) = RA. NO Earth rotation (no GMST: the dots are inertial in a fixed-Earth scene)
- * and NOT the Starfield's basis (`raDec2xyz` negates z). Use it for anything drawn among the dots; NOT for geography
- * (`latLonToUnitVec`).
+ * floors 4-5, `ui/RealSkyLayer`) puts its satellites in, which is the game's orbit frame (`keplerianToCartesian`, the frame law
+ * `OrbitalMechanics.eciToScene`): x = ECI X, y = the polar axis, z = −ECI Y, so RA runs from +X toward −Z (azimuth −atan2(z, x) = RA) and
+ * it is the same direction as the Starfield's `raDec2xyz`. NO Earth rotation here: the dots are inertial (the globe turns under them by
+ * GMST, R7E). Use it for anything drawn among the dots; NOT for geography (`latLonToUnitVec`).
  * @param {number} raDeg @param {number} declDeg
  * @returns {{ x: number, y: number, z: number }} unit vector (plain object)
  */
 export function raDecToDotFrame(raDeg, declDeg) {
   const a = raDeg * DEG2RAD, d = declDeg * DEG2RAD;
-  return { x: Math.cos(d) * Math.cos(a), y: Math.sin(d), z: Math.cos(d) * Math.sin(a) };
+  return { x: Math.cos(d) * Math.cos(a), y: Math.sin(d), z: -Math.cos(d) * Math.sin(a) };
 }
 
 /**
- * Geographic (lat, east-lon) → unit direction in the Earth-fixed world frame.
+ * Geographic (lat, east-lon) → unit direction in the Earth-fixed (globe-local) frame; Earth's GMST turn (`Earth.setTurn`) carries it to the world.
  * AUTHORITATIVE geographic→scene entry point: the mirrored-longitude convention
  * is applied INTERNALLY (pass real east longitude; never negate before calling).
  * Unlike latLonToPosition, which does NOT mirror (its callers negate longitude:

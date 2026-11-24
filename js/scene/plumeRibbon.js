@@ -107,7 +107,10 @@ export function updateRibbon(mesh, opts) {
   const colAttr = mesh.geometry.attributes.color;
   const pos = posAttr.array, col = colAttr.array;
 
+  // The camera in the Earth group's LOCAL frame: the ascent path (`pointAt`) and the side vector are local, and the group turns by
+  // GMST of the game date (Reality 7), so a world camera vector against a local tangent would twist the ribbon by that turn.
   camera.getWorldPosition(_camWorld);
+  parent.worldToLocal(_camWorld);
 
   // Each sample's ascent point is computed ONCE and carried forward (n pointAt
   // calls, not 2n). The tangent uses the NEXT sample, except at the head
@@ -125,11 +128,10 @@ export function updateRibbon(mesh, opts) {
     _tangent.normalize();
 
     // side = normalize(tangent × toCam); if tangent ∥ view the cross degenerates →
-    // fall back to radial × tangent. _p is LOCAL-frame; convert to world for the camera vector.
-    _toCam.copy(_p);
-    parent.localToWorld(_toCam);
-    const distKm = _toCam.distanceTo(_camWorld) * 100;
-    _toCam.subVectors(_camWorld, _toCam).normalize();
+    // fall back to radial × tangent. _p, the tangent and _camWorld are all in the group's LOCAL frame (the group is unscaled, so
+    // distances are world distances).
+    const distKm = _p.distanceTo(_camWorld) * 100;
+    _toCam.subVectors(_camWorld, _p).normalize();
     _side.crossVectors(_tangent, _toCam);
     if (_side.lengthSq() < 1e-6) {
       _side.set(_p.x, _p.y, _p.z).normalize().cross(_tangent);

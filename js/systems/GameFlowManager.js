@@ -34,6 +34,7 @@ import { trawlManager } from './TrawlManager.js';
 import { openingDance } from './OpeningDance.js';
 import { orbitToSceneCartesian, reseatOrbitFromScene } from '../entities/OrbitalMechanics.js';
 import { computeStartOrbit } from './startOrbitMath.js';
+import { gameClock, gameEarthAngleRad, earthAngleRad } from './GameDate.js';   // Reality 7: her start orbit is aimed with Earth's turn angle at the game date
 import { getLanguage, isSupportedLanguage } from '../core/Languages.js';   // route-1109 lane C: a save's own start city (startLang)
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
@@ -684,9 +685,14 @@ export class GameFlowManager {
 
       // Clean slate first, then restore saved progression (the start lines wait for the saved field)
       this.resetGame({ deferStartLine: true });
+      gameClock.reset();   // a Continue wakes at the save's own date: no carry from the menu's no-date clock
       // route-1109 lane C (owner 2026-11-09): the orbit, station and field plane follow the SAVE's start city, not the language set now;
       // a save without a supported code (an old one) uses the settings language and its next save writes the code.
-      this._applyStartLocation(isSupportedLanguage(save.startLang) ? getLanguage(save.startLang) : null);
+      // Reality 7: over that city at the SAVE's game date (a save with none: the clock's now).
+      const saveDateMs = Number.isFinite(save.skyStartMs)
+        ? save.skyStartMs + (Number.isFinite(save.shipDays) && save.shipDays > 0 ? save.shipDays : 0) * 86400000
+        : undefined;
+      this._applyStartLocation(isSupportedLanguage(save.startLang) ? getLanguage(save.startLang) : null, saveDateMs);
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
 
       // Skip first-experience guidance for returning players (must be AFTER resetGame, which resets these flags)
@@ -797,7 +803,7 @@ export class GameFlowManager {
         // `missionNum` stops at 12, so past 60 catches a boundary save would never look owed.
         this._refs.fieldRegistry.restore(save.fields, { missionNumber: scoringSystem.getMissionNumber() });
       }
-      // route-1101 lane S2: the station node gap as saved; a save from before it gets it from her node (NodeDrift.initialGapDeg)
+      // route-1101 lane S2: the station node gap as saved; a save from before it gets its start city's gap (NodeDrift.initialGapDeg)
       gameState.stationNodeGapDeg = Number.isFinite(save.stationNodeGapDeg) ? wrapDeg(save.stationNodeGapDeg) : null;
       if (gameState.stationNodeGapDeg == null) gameState.stationNodeGapDeg = this.stationGapDeg();
       gameState.stationJoined = save.stationJoined === true && (typeof save.stationJoinedCity === 'string' ? save.stationJoinedCity : null) === cityStationKey(this._herIncDeg());   // route-1107-d2: an old save has none; a save joined at another city's object (her tilt now differs) is not joined
@@ -1670,7 +1676,8 @@ export class GameFlowManager {
         // Deliberately no "Place names are on your Earth view. Press 5 to hide them." line: it names a key on a keyless device.
 
         // Launch cameo — a single plume rises from the player's home spaceport during the opening pass. The pad may not be
-        // above the horizon at the 7 s mark (e.g. en/Canaveral rises ~15 s in), so poll every 2 s for up to 90 s and fire
+        // above the horizon at the 7 s mark (measured with a pad-visibility probe: th's Wenchang is in view 6-31 s, es's Semnan from 60 s; en
+        // has no scripted pad, none is in view from 7 s), so poll every 2 s for up to 90 s and fire
         // the moment it's in view; give up silently after that (no distraction mid-game).
         timerManager.setTimeout(() => {
           if (this._firstTimeComms.has('orbital_view_cameo')) return;
@@ -1700,7 +1707,7 @@ export class GameFlowManager {
               announce();
               return;
             }
-            // 45 × 2 s = 90 s of coverage — a pad rising from behind the limb at spawn (en ≈ 15 s, ja ≈ 3 s) is caught inside the pass.
+            // 45 × 2 s = 90 s of coverage — a pad that rises late on her eastward track (es's Semnan ≈ 60 s) is caught inside the pass.
             if (++tries < 45) timerManager.setTimeout(attempt, 2000, { owner: this });
           };
           attempt();
@@ -1859,12 +1866,13 @@ export class GameFlowManager {
    * The UI language is not touched.
    *
    * @param {object|null} [entry] language entry whose start city to use (default: the settings language)
+   * @param {number} [dateMs] the game date she starts at (Reality 7: Earth's turn angle at it aims her track over the city); default the game clock's now
    */
-  _applyStartLocation(entry) {
+  _applyStartLocation(entry, dateMs) {
     const { player, debrisField } = this._refs;
     if (!player || !player.orbit) return;
     const lang = entry || settingsManager.getLanguageEntry();
-    const orbit = computeStartOrbit(lang);
+    const orbit = computeStartOrbit(lang, Number.isFinite(dateMs) ? earthAngleRad(dateMs) : gameEarthAngleRad());
     if (!orbit) return;
 
     player.orbit.inclination = orbit.inclination;
@@ -1875,8 +1883,8 @@ export class GameFlowManager {
     player.orbit.eccentricity = 0.0001;
     player.orbit.argPerigee = 0;
     // route-1101 lane S2: a new game's node gap to the station, from her start city's node (English: -169.6 deg). A load sets it
-    // again from the save right after this (or from her node, for a save from before it).
-    gameState.stationNodeGapDeg = initialGapDeg(orbit.raan * 180 / Math.PI);
+    // again from the save right after this (or from the start city's table, for a save from before it).
+    gameState.stationNodeGapDeg = initialGapDeg(lang && lang.code);
     gameState.stationJoined = false;     // route-1107-d2: a new start is in her own plane
     gameState.startLang = lang && typeof lang.code === 'string' ? lang.code : null;   // route-1109 lane C: the city this orbit came from (saved)
 
@@ -1952,7 +1960,7 @@ export class GameFlowManager {
     gameState.reset();
     // A NEW game gets its own first-start date and storm calendar (stamped on first use, SunStorms.js); a continue loads the save's after this,
     // and a game-over retry (no newGame) keeps the date it had.
-    if (newGame) { gameState.skyStartMs = null; gameState.skySeed = null; }
+    if (newGame) { gameState.skyStartMs = null; gameState.skySeed = null; gameClock.reset(); }   // (the game's no-date clock starts fresh too)
     scoringSystem.reset();
     resourceSystem.reset();
 
@@ -2202,7 +2210,7 @@ export class GameFlowManager {
     // The big pieces still aboard (counted at the catch, paid when disposed of), each with its fate and holder, so a
     // reload puts them back on her. A game-over save carries none.
     if (gameState.currentState !== GameStates.GAME_OVER) {
-      const pending = bigPieces.serialize();
+      const pending = bigPieces.serialize(this._refs.player && this._refs.player.quaternion);
       if (pending.length) saveData.bigPieces = pending;
       const jobs = jobToSave(this._job);                         // the jobs board's posting (none: no key; a game-over save carries none)
       if (jobs) saveData.jobs = jobs;
@@ -2819,8 +2827,9 @@ export class GameFlowManager {
     const df = r.debrisField;
     if (!Array.isArray(list) || !list.length || !df || typeof df.restoreHeldPiece !== 'function') return;
     const orbit = r.player && r.player.orbit ? r.player.orbit : null;
+    const shipQuat = r.player && r.player.quaternion ? r.player.quaternion : null;   // a saved `seat` is set against her attitude now
     const result = bigPieces.restore(list, {
-      makeBody: (spec) => df.restoreHeldPiece(spec, { orbit }),
+      makeBody: (spec) => df.restoreHeldPiece(spec, { orbit, shipQuat }),
       makeBag: (parts) => (typeof df.mergeIntoBag === 'function' ? df.mergeIntoBag(parts) : null),
       place: (body, holder) => this._placeBigPiece(body, holder),
     });
@@ -4326,13 +4335,13 @@ export class GameFlowManager {
 
   /**
    * The station's node minus hers (deg, (-180, 180]): the saved, moving gap (`gameState.stationNodeGapDeg`); before a game has set
-   * it, from her node now (js/systems/NodeDrift.js). Null without either.
+   * it, from the start city's table (js/systems/NodeDrift.js). Null without either.
    * @returns {number|null}
    */
   stationGapDeg() {
     if (Number.isFinite(gameState.stationNodeGapDeg)) return gameState.stationNodeGapDeg;
     const o = this._refs && this._refs.player && this._refs.player.orbit;
-    return o && Number.isFinite(o.raan) ? initialGapDeg(o.raan * 180 / Math.PI) : null;
+    return o && Number.isFinite(o.raan) ? initialGapDeg(gameState.startLang) : null;
   }
 
   /**

@@ -250,6 +250,7 @@ export class OrbitPane {
    * @param {function} [deps.sunDir]        () => {x,y,z}|null — the current sun direction
    * @param {function} [deps.sunDirAt]      (aheadRealS, out) => {x,y,z} — the FUTURE sun direction (SunLight.directionAt)
    * @param {function} [deps.clock]         () => ({ rate, baseScale }) (timeAuthority.rate, TimeAuthority.BASE_SCALE)
+   * @param {function} [deps.earthAngle]    () => radians Earth has turned to at the game date now (systems/GameDate); absent = Earth still
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -265,7 +266,7 @@ export class OrbitPane {
     this._sunDir = typeof deps.sunDir === 'function' ? deps.sunDir : null;
     this._sunDirAt = typeof deps.sunDirAt === 'function' ? deps.sunDirAt : null;
     this._clock = typeof deps.clock === 'function' ? deps.clock : null;
-
+    this._earthAngle = typeof deps.earthAngle === 'function' ? deps.earthAngle : null;
     this._root = null;
     this._el = null;                 // { slots, cells: {slot → value el}, units, trend }
     this._rung = null;
@@ -621,7 +622,7 @@ export class OrbitPane {
       v.period = F.mmss(this._periodS(orbit));
     }
     if (pos && typeof pos === 'object' && num(pos.x) != null && num(pos.y) != null && num(pos.z) != null) {
-      const sp = subSatellitePoint(pos);
+      const sp = subSatellitePoint(pos, this._earthAngle ? (num(this._read(this._earthAngle)) || 0) : 0);   // her inertial position over the turning Earth
       v.lat = F.lat(sp.latDeg);
       v.lon = F.lon(sp.lonEastDeg);
     }

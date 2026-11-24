@@ -36,6 +36,7 @@ import { VisualLaw } from '../../core/VisualLaw.js';
 import { computeTransferWindow, isCoOrbital, clusterToOrbitKm } from '../../entities/LaunchWindow.js';
 import { propagateOrbit, keplerianToCartesian, orbitToKm } from '../../entities/OrbitalMechanics.js';
 import { TransferWindows } from '../TransferWindows.js';
+import { EARTH_RATE_RAD_S } from '../../systems/GameDate.js';
 import { DEG2RAD } from '../../core/MathUtil.js';
 
 /** The root element id (FloorMask MASK_PANES.next.els = ['#hud-next-pane']). */
@@ -201,7 +202,9 @@ export class NextPane {
    *   SCENE units (PlayerSatellite.getOrbitalElements shape).
    * @param {function} [deps.tca]       () => { id, label, tcaS, distM, tier } | null.
    * @param {function} [deps.eclipse]   () => { inShadow, secondsToFlip } | null (world seconds).
-   * @param {function} [deps.subPoint]  (pos {x,y,z}) => { latDeg, lonEastDeg } (direction only).
+   * @param {function} [deps.subPoint]  (pos {x,y,z}, earthAngleRad) => { latDeg, lonEastDeg } (direction only).
+   * @param {function} [deps.earthAngle] () => radians Earth has turned to at the game date now (systems/GameDate); absent = Earth still
+   *   (the sweep then adds no Earth turn either).
    * @param {function} [deps.stations]  () => [{ name, lat, lon }] | null (degrees, east-positive).
    * @param {function} [deps.simple]    () => true at the simple level (absent = never simple).
    */
@@ -216,6 +219,7 @@ export class NextPane {
     this._tca = deps.tca;
     this._eclipse = deps.eclipse;
     this._subPoint = deps.subPoint;
+    this._earthAngle = deps.earthAngle;
     this._stations = deps.stations;
     this._simpleDep = typeof deps.simple === 'function' ? deps.simple : null;
 
@@ -586,7 +590,8 @@ export class NextPane {
   /**
    * @private PASS: propagate the player orbit over ONE period in PASS_STEPS samples (the tick's only
    * propagation budget); the first sample within PASS_RADIUS_KM of a station wins (the closest station of that
-   * sample). The Earth's surface does not rotate in this game, so the ECI sub-point IS the ground point.
+   * sample). Earth turns (Reality 7): the orbit is inertial, so each sample's ground point is read against the Earth angle
+   * at that sample, the angle now plus Earth's rate over the seconds propagated. Without the `earthAngle` dep Earth is still.
    */
   _passRow() {
     const stations = call(this._stations);
@@ -598,6 +603,8 @@ export class NextPane {
     const period = 2 * Math.PI * Math.sqrt((a * a * a) / MU);
     if (!Number.isFinite(period) || !(period > 0)) return unknownRow('PASS');
     const dt = period / PASS_STEPS;
+    const angle0 = num(call(this._earthAngle));
+    const turns = Number.isFinite(angle0);
     const list = [];
     for (const st of stations) {
       if (!st || typeof st !== 'object') continue;
@@ -610,7 +617,7 @@ export class NextPane {
     for (let i = 0; i < PASS_STEPS; i++) {
       if (i > 0) propagateOrbit(km, dt);
       let sp;
-      try { sp = subPoint(keplerianToCartesian(km).position); } catch (_e) { return unknownRow('PASS'); }
+      try { sp = subPoint(keplerianToCartesian(km).position, turns ? angle0 + EARTH_RATE_RAD_S * i * dt : 0); } catch (_e) { return unknownRow('PASS'); }
       const lat = sp && num(sp.latDeg), lon = sp && num(sp.lonEastDeg);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
       let hit = null;

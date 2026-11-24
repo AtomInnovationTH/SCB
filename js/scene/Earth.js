@@ -2597,13 +2597,34 @@ export class Earth {
       this.atmosphereMesh.getWorldPosition(this.atmosphereMaterial.uniforms.uCenter.value);
     }
 
-    // Sidereal cloud rotation (visible drift over a game hour). The live rotation is fed to the surface shader so its
-    // straight-down cloud-shadow projection stays registered to the drifting clouds.
+    // The clouds' own slow drift over the ground (the group's turn carries them with Earth). The drift runs on the wall clock (dt
+    // here is real seconds, 0 while the world is held) and Earth turns on world seconds, so the clouds' share of Earth's rate is not
+    // one number: 4.8 % at 1 world second per real second (a piece near her: the world at real speed), 0.48 % at the usual 10 world
+    // seconds per real second, 0.012 % at the top speed-up (floor 3's 40 x 10 = 400; computed from the
+    // constants). The live rotation is fed to the surface shader so its straight-down cloud-shadow projection stays registered to the
+    // drifting clouds (it works in the mesh's UV, so the group's turn does not enter).
     if (this.cloudMesh) {
       this.cloudMesh.rotation.y += Constants.EARTH.CLOUD_ROTATION_RATE * dt;
       this.surfaceMaterial.uniforms.uCloudRotation.value = this.cloudMesh.rotation.y;
     }
   }
+
+  /**
+   * Turn the whole globe (surface, clouds, atmosphere and everything parented to the group: city labels, launch plumes) to Earth's
+   * sidereal angle at the game date (`systems/GameDate.earthAngleRad`). The scene is inertial: rotation.y = angle turns +X toward -Z,
+   * which is east, so the ground goes east under the orbits. Called every frame on every floor from main.js.
+   * @param {number} angleRad
+   */
+  setTurn(angleRad) {
+    if (!Number.isFinite(angleRad)) return;
+    if (this.group.rotation.y === angleRad) return;
+    this.group.rotation.y = angleRad;
+    // the labels, the cameo and the ambient pads read the group's world matrix in the same frame (before the renderer updates it)
+    this.group.updateMatrixWorld(true);
+  }
+
+  /** @returns {number} the globe's current turn, radians */
+  getTurn() { return this.group.rotation.y; }
 
   getGroup() {
     return this.group;

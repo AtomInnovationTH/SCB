@@ -14,8 +14,9 @@
  * authored explicitly (hot core sprite + larger dimmer halo sprite, both additive)
  * and every colour is LDR. The cameo looks the same whether the gate is open or closed.
  *
- * Anchored to the Earth group with CityLabels' mirrored-longitude convention (the
- * solid Earth never rotates; the sub-point tracks westward, `lonEci = -lonEastDeg`).
+ * Anchored to the Earth group with CityLabels' mirrored-longitude convention. The group TURNS (Reality 7: GMST of the game date), so the
+ * plume rides with the ground it left, and every world-space test (the gates, the sun, the ribbon's side vector) goes through the
+ * group's matrix. The plume flies EAST: `azimuthDeg` is a compass bearing (90 = due east).
  *
  * Pure helpers (`ascentPoint`, `cameoIntensity`, `padFor`) are Node-testable;
  * THREE/DOM lives behind init guards and tolerates a null glow map.
@@ -112,31 +113,35 @@ export function launchVisible(padWorld, centre, camPos, camera, margin = FRAME_M
  * @param {number} lat @param {number} lon — pad coordinates (degrees)
  * @param {number} radius — Earth radius (scene units)
  * @param {boolean} mirrorLon — match CityLabels' mirrored-longitude convention
- * @param {number} azimuthDeg — launch heading
+ * @param {number} azimuthDeg — launch heading (compass bearing, 90 = due east)
+ * @param {THREE.Object3D} [parent] — the Earth group; its (turning) world matrix carries the local head point to the world. Absent = identity.
  * @returns {boolean} true if the t=0.5 head projects within NDC `gate`
  */
-export function plumeHeadVisible(lat, lon, radius, mirrorLon, azimuthDeg, camera, gate = HEAD_GATE_NDC) {
+export function plumeHeadVisible(lat, lon, radius, mirrorLon, azimuthDeg, camera, gate = HEAD_GATE_NDC, parent = null) {
   const h = ascentPoint(lat, lon, radius, 0.5, mirrorLon, azimuthDeg, _headGatePt);
-  _ndc.set(h.x, h.y, h.z).project(camera);
+  _ndc.set(h.x, h.y, h.z);
+  if (parent) parent.localToWorld(_ndc);
+  _ndc.project(camera);
   return _ndc.z < 1 && Math.abs(_ndc.x) <= gate && Math.abs(_ndc.y) <= gate;
 }
 
 /**
- * Per-language home pad for the SCRIPTED opening cameo, chosen by measured on-screen
- * visibility from the chase view (launchVisible), not map distance: Wenchang is NEVER
- * in frame from the th orbit; hi's Sriharikota enters only ~518 s in, so hi gets
- * Baikonur (~18 s). pt has no pad visible in the opening window, so no scripted
- * cameo (the ambient scheduler fires Alcantara at ~514 s). `azimuthDeg` is the launch
- * heading. Coordinates come from data/cities.json (kind:'launch', matched by name)
- * so a data correction can't desync the cameo from the pad's label.
+ * Per-language home pad for the SCRIPTED opening cameo, chosen by measured on-screen visibility from the chase view
+ * (launchVisible + plumeHeadVisible, polled from 7 s as the game does), not map distance. Reality 7 (her orbit now runs EAST over the real
+ * map, so the pad she meets first changed; measured 2026-11-24 with `tmp/padprobe3.mjs`, the test's own camera model, Earth still and
+ * Earth turning at 10x within 3 s): th meets Wenchang at 7-30 s (Sriharikota is behind her), es meets Semnan at 58-74 s (El Arenosillo
+ * is behind her at 0-1 s), en has no pad in view from 7 s on (Wallops is in view only 0-5 s; Canaveral is never in the chase view), pt
+ * has none either in the opening window (Alcantara rises at 12 s and the ambient scheduler fires it). ja (Tanegashima, 0-8 s), hi
+ * (Baikonur, 19-38 s) and ta (Sriharikota, 0-12 s) keep theirs. `azimuthDeg` is the launch heading, a compass bearing (90 = due east);
+ * the headings are for the look (data/cities.json stores none). Coordinates come from data/cities.json (kind:'launch', matched by
+ * name) so a data correction can't desync the cameo from the pad's label.
  */
 export const CAMEO_PADS = {
-  en: { name: 'Cape Canaveral', vehicle: 'Falcon 9', azimuthDeg: 90 },
-  th: { name: 'Sriharikota', vehicle: 'PSLV', azimuthDeg: 140 },
+  th: { name: 'Wenchang', vehicle: 'Long March 7', azimuthDeg: 100 },
   ja: { name: 'Tanegashima', vehicle: 'H3', azimuthDeg: 100 },
-  es: { name: 'El Arenosillo', vehicle: 'sounding rocket', azimuthDeg: 230 },
+  es: { name: 'Semnan', vehicle: 'Simorgh', azimuthDeg: 55 },
   hi: { name: 'Baikonur', vehicle: 'Soyuz', azimuthDeg: 60 },
-  ta: { name: 'Sriharikota', vehicle: 'PSLV', azimuthDeg: 140 },
+  ta: { name: 'Sriharikota', vehicle: 'PSLV', azimuthDeg: 100 },
 };
 
 /**
@@ -154,12 +159,13 @@ export function padFor(code, cities) {
 }
 
 /**
- * A point on the ascent path. Pass `out` to reuse an object (update() calls this 33×/frame).
+ * A point on the ascent path, in the Earth group's LOCAL frame (the group turns, so the world position is `parent.localToWorld`).
+ * Pass `out` to reuse an object (update() calls this 33×/frame).
  * @param {number} lat @param {number} lon — pad coordinates (degrees)
  * @param {number} radius — Earth radius (scene units)
  * @param {number} t — progress ∈ [0,1]
  * @param {boolean} mirrorLon — match CityLabels' mirrored-longitude convention
- * @param {number} [azimuthDeg=90] — launch heading (90 = due east)
+ * @param {number} [azimuthDeg=90] — launch heading, a compass bearing from true north, clockwise (90 = due east, 180 = due south)
  * @returns {{x:number,y:number,z:number,alt:number}} position + altitude (units)
  */
 export function ascentPoint(lat, lon, radius, t, mirrorLon, azimuthDeg = 90, out) {
@@ -175,16 +181,23 @@ export function ascentPoint(lat, lon, radius, t, mirrorLon, azimuthDeg = 90, out
   const nLen = Math.hypot(surf.x, surf.y, surf.z) || 1;
   const nx = surf.x / nLen, ny = surf.y / nLen, nz = surf.z / nLen;
 
-  // Downrange = local east (d(position)/d(lon) in the latLonToPosition frame) rotated by the azimuth around n.
+  // Reality 7: the heading is a COMPASS bearing (the pads' `azimuthDeg` doc: 90 = due east; Cape Canaveral 90, Baikonur 60, Tanegashima 100)
+  // in the true local frame. Geographic east is the direction of INCREASING east longitude: with CityLabels' mirror (`lonDeg = -lon`) that
+  // is d(position)/d(lonDeg) reversed (toward -Z at lonDeg 0); without the mirror it is d(position)/d(lonDeg). North is the pole's direction
+  // projected onto the tangent plane. (Until Reality 7 the code flew west, along d(position)/d(lonDeg), and called a south-pointing
+  // vector "north".)
   const la = degToRad(lat), lo = degToRad(lonDeg);
-  let ex = -Math.cos(la) * Math.sin(lo), ey = 0, ez = Math.cos(la) * Math.cos(lo);
+  const sgn = mirrorLon ? -1 : 1;
+  let ex = sgn * -Math.cos(la) * Math.sin(lo), ey = 0, ez = sgn * Math.cos(la) * Math.cos(lo);
   const eLen = Math.hypot(ex, ey, ez) || 1;
   ex /= eLen; ez /= eLen;
-  // North = n × east.
-  let ux = ny * ez - nz * ey, uy = nz * ex - nx * ez, uz = nx * ey - ny * ex;
+  // North = +Y minus its part along the surface normal.
+  let ux = -ny * nx, uy = 1 - ny * ny, uz = -ny * nz;
+  const uLen = Math.hypot(ux, uy, uz);
+  if (uLen > 1e-9) { ux /= uLen; uy /= uLen; uz /= uLen; } else { ux = -ex; uy = 0; uz = -ez; }   // at a pole: any tangent will do
   const az = degToRad(azimuthDeg);
   const ca = Math.cos(az), sa = Math.sin(az);
-  const dx = ex * ca + ux * sa, dy = ey * ca + uy * sa, dz = ez * ca + uz * sa;
+  const dx = ex * sa + ux * ca, dy = ey * sa + uy * ca, dz = ez * sa + uz * ca;
 
   // Projected back onto the sphere of radius R+alt.
   const px = nx * (radius + alt) + dx * down;
@@ -335,7 +348,7 @@ export class LaunchCameo {
     // Gate 2: the plume's mid-flight head must be on screen too (PERMANENT refusal for
     // this pass). Uses the SAME azimuth as the flight so the gate predicts the real arc.
     const azimuthDeg = (typeof pad.azimuthDeg === 'number') ? pad.azimuthDeg : 90;
-    if (!plumeHeadVisible(pad.lat, pad.lon, radius, mirrorLon, azimuthDeg, camera)) { this.lastRefusal = 'geometry'; return false; }
+    if (!plumeHeadVisible(pad.lat, pad.lon, radius, mirrorLon, azimuthDeg, camera, HEAD_GATE_NDC, parent)) { this.lastRefusal = 'geometry'; return false; }
 
     slot.pad = pad;
     slot.azimuthDeg = azimuthDeg;
@@ -346,6 +359,8 @@ export class LaunchCameo {
     // Cached for the per-frame limb boost.
     slot.padWorld = slot.padWorld || new THREE.Vector3();
     slot.padWorld.copy(_v);
+    slot.padLocal = slot.padLocal || new THREE.Vector3();
+    slot.padLocal.set(surf.x, surf.y, surf.z);   // the pad rides the turning globe: its world place is re-read each frame
     // Ribbon ascent-path closure built once per fire (not per frame); captures this
     // pad/azimuth so a reused slot points at its own pad.
     const lat = pad.lat, lon = pad.lon;
@@ -428,6 +443,7 @@ export class LaunchCameo {
     // Limb boost: brightness only; size uses slant range.
     parent.getWorldPosition(_c);
     camera.getWorldPosition(this._camPos || (this._camPos = new THREE.Vector3()));
+    if (slot.padLocal) { slot.padWorld.copy(slot.padLocal); parent.localToWorld(slot.padWorld); }
     const boost = limbBoost(cityFacingDot(slot.padWorld, _c, this._camPos));
 
     // Head position + slant range.
@@ -453,8 +469,10 @@ export class LaunchCameo {
     let intensity = 0.8;
     if (sunLight && typeof sunLight.getSunDirection === 'function') {
       const sd = sunLight.getSunDirection();
-      const nLen = Math.hypot(head.x, head.y, head.z) || 1;
-      const sunDot = (head.x * sd.x + head.y * sd.y + head.z * sd.z) / nLen;
+      // The head's direction from Earth's centre in WORLD space (the sun is a world direction; the head is group-local and the group turns).
+      const wx = _v.x - _c.x, wy = _v.y - _c.y, wz = _v.z - _c.z;
+      const nLen = Math.hypot(wx, wy, wz) || 1;
+      const sunDot = (wx * sd.x + wy * sd.y + wz * sd.z) / nLen;
       intensity = cameoIntensity(sunDot);
     }
     const envelope = plumeEnvelope(t);

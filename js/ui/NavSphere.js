@@ -15,8 +15,8 @@ import { VisualLaw } from '../core/VisualLaw.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
-import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
-import { gmstDeg } from '../scene/Ephemeris.js';
+import { orbitToSceneCartesian, sceneToEci } from '../entities/OrbitalMechanics.js';
+import { gameEarthAngleRad } from '../systems/GameDate.js';
 import { prefersReducedMotion } from './hudPulse.js';
 import { mono } from '../core/Typeface.js';
 import { HUD_EDGE_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
@@ -108,19 +108,22 @@ function _sortContactsSelectedLast(contacts, selectedId) {
 }
 
 /**
- * ECI → WGS-84 geodetic with explicit GMST. Game frame: Y = polar axis, XZ = equatorial plane.
- * @param {number} x - ECI X (km)
- * @param {number} y - ECI Y / polar axis (km)
- * @param {number} z - ECI Z (km)
+ * Scene position → WGS-84 geodetic with explicit GMST. Scene frame (the frame law, `OrbitalMechanics.eciToScene`): Y = polar axis,
+ * ECI = (x, −z, y), so east longitude runs toward −Z.
+ * @param {number} x - scene X (km)
+ * @param {number} y - scene Y / polar axis (km)
+ * @param {number} z - scene Z (km; ECI Y is −z)
  * @param {number} gmst - Greenwich Mean Sidereal Time (radians)
  * @returns {{ lat: number, lon: number, alt: number }} degrees, degrees, km
  */
 function _eciToGeodeticWithGMST(x, y, z, gmst) {
   const cg = Math.cos(gmst), sg = Math.sin(gmst);
-  const xe = x * cg + z * sg, ze = -x * sg + z * cg, ye = y;
+  const eci = sceneToEci({ x, y, z });
+  const ex = eci.x, ey = eci.y;
+  const xe = ex * cg + ey * sg, ye2 = -ex * sg + ey * cg, ye = eci.z;
   const a = 6378.137, f = 1 / 298.257223563, b = a * (1 - f);
   const e2 = 1 - (b * b) / (a * a);
-  const p = Math.sqrt(xe * xe + ze * ze);
+  const p = Math.sqrt(xe * xe + ye2 * ye2);
   let lat = Math.atan2(ye, p * (1 - e2));
   for (let i = 0; i < 5; i++) {
     const sLat = Math.sin(lat);
@@ -130,17 +133,15 @@ function _eciToGeodeticWithGMST(x, y, z, gmst) {
   const sinLat = Math.sin(lat), cosLat = Math.cos(lat);
   const N = a / Math.sqrt(1 - e2 * sinLat * sinLat);
   const alt = Math.abs(cosLat) > 1e-10 ? p / cosLat - N : Math.abs(ye) - b;
-  return { lat: radToDeg(lat), lon: radToDeg(Math.atan2(ze, xe)), alt };
+  return { lat: radToDeg(lat), lon: radToDeg(Math.atan2(ye2, xe)), alt };
 }
 
 /**
- * ECI → WGS-84 geodetic using Date.now() for GMST (no sim-epoch in GameState; approximate, but the visible LAT/LON drift is
- * correct). GMST comes from scene/Ephemeris.js, the source the real-clock sky seeding uses, so readouts and sky stay in lockstep.
+ * ECI → WGS-84 geodetic at the GAME date (Reality 7: `systems/GameDate`, the one clock the globe, the dots and the orbit pane read), so the
+ * nav orb's LAT / LON are where the drawn Earth is under her. GMST comes from scene/Ephemeris.js via `earthAngleRad`.
  */
 function _eciToGeodetic(x, y, z) {
-  const jd = Date.now() / 86400000 + 2440587.5;
-  const gmst = degToRad(gmstDeg(jd - 2451545.0));
-  return _eciToGeodeticWithGMST(x, y, z, gmst);
+  return _eciToGeodeticWithGMST(x, y, z, gameEarthAngleRad());
 }
 
 export class NavSphere {
