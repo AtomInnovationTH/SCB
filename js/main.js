@@ -200,6 +200,7 @@ import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
 import { devShotGate } from './core/DevShotGate.js';
 import { isDevHost, devSearch, devStartMission, installDevStart } from './core/DevHost.js';
+import { PlayRecorder } from './systems/PlayRecorder.js';
 import { stageHoldScenario, holdStatus, netBlockFor } from './dev/holdScenario.js';
 import { installBlackFrameProbe } from './core/BlackFrameProbe.js';
 import { installBlackPatchHeal } from './core/BlackPatchHeal.js';
@@ -621,6 +622,7 @@ let slowMoFactor = 1.0;
 // Game time ×8 while the wheels turn her (SimClock; DECISIONS §57 row 5). One instance; its gate inputs are ONE reused
 // object filled per frame in gameLoop (no allocation).
 const _simClock = new SimClock();
+let _playRecorder = null;   // the play log (PlayRecorder), built at the end of init(); the game loop feeds it the game clock
 const _simSig = {
   gameplay: false, dance: false, paused: false, worldHold: false, taRate: 1, trip: false, slowMo: false,
   netInFlight: false, lasso: false, netLineup: false, ceremony: false, leash: false, conjunction: false, daughterByHand: false, arrowKeys: false,
@@ -1446,7 +1448,10 @@ async function init() {
   } catch (e) {
     console.warn('[main] field regime derivation failed, DebrisField default applies:', e?.message);
   }
-  const _fieldSeed = (Date.now() >>> 0);
+  // `?seed=N` (dev host only, like every debug switch): the same field again (orbits and the mover/group/high-field specs; scripts/play/drive-training.mjs).
+  // Without it, or on a public host: Date.now() exactly as before.
+  const _seedQ = new URLSearchParams(devSearch(window.location)).get('seed');
+  const _fieldSeed = /^\d{1,10}$/.test(_seedQ || '') ? (Number(_seedQ) >>> 0) : (Date.now() >>> 0);
   debrisField = new DebrisField(scene, { catalogLoader, seed: _fieldSeed, fieldRegime: _fieldRegime });
   // A piece the ship holds is drawn in the near-field pass while it is near the ship (the hull cannot paint over
   // it). Guarded like registerNearFieldRoot above (a stale cached module just leaves the pieces in the far pass).
@@ -6150,6 +6155,95 @@ async function init() {
     console.warn('[netShot] hook setup failed:', e);
   }
 
+  // --- Play log (js/systems/PlayRecorder.js): always on, memory only, saved from the help page's "Save play log" button. ---
+  // READ-ONLY: it listens and reads; every field read is wrapped inside the recorder (a missing field logs null).
+  try {
+    const _pcPos = { x: 0, y: 0, z: 0 }, _pcVel = { x: 0, y: 0, z: 0 }, _ppPos = { x: 0, y: 0, z: 0 }, _ppVel = { x: 0, y: 0, z: 0 };
+    const _selfHome = /DOCKED|HOLDING_CATCH|RELOADING|DOCKING/;
+    const _M = Constants.SCENE_UNITS_PER_METER;
+    const _rangeToTarget = () => {
+      const t = targetSelector.getActiveTarget();
+      const sp = t && t._scenePosition;
+      if (!sp) return null;
+      const pp = player.getPosition();
+      return Math.hypot(sp.x - pp.x, sp.y - pp.y, sp.z - pp.z) / _M;
+    };
+    /** The pieces laid out for the current mission (welcome-field pieces of this chapter): id, name, kg, m, range m, spin deg/s, drift m/s. */
+    const _pieceTable = () => {
+      const mission = scoringSystem.getMissionNumber();
+      const pp = player.getPosition();
+      const po = player.getOrbitalElements();
+      let haveVp = false;
+      try { orbitToSceneCartesianInto(po, _ppPos, _ppVel); haveVp = true; } catch (_e) { haveVp = false; }
+      const rows = [];
+      for (const d of debrisField.debrisList) {
+        if (!d.alive || !d.welcomeSpawn || d.welcomeChapter !== mission || d._captured || d.hazard || d._disposed) continue;
+        const sp = d._scenePosition;
+        let driftMps = null;
+        if (haveVp && d.orbit) {
+          try { orbitToSceneCartesianInto(d.orbit, _pcPos, _pcVel); driftMps = Math.hypot(_pcVel.x - _ppVel.x, _pcVel.y - _ppVel.y, _pcVel.z - _ppVel.z) * 1000; } catch (_e) { driftMps = null; }
+        }
+        rows.push({
+          id: d.id, name: d.name || d.type || null, massKg: d.mass, sizeM: d.sizeMeter,
+          distM: sp ? Math.hypot(sp.x - pp.x, sp.y - pp.y, sp.z - pp.z) / _M : null,
+          spinDegS: Number.isFinite(d.tumbleRate) ? d.tumbleRate * 180 / Math.PI : null,
+          driftMps,
+        });
+      }
+      for (const r of rows) for (const k of ['massKg', 'sizeM', 'distM', 'spinDegS', 'driftMps']) r[k] = Number.isFinite(r[k]) ? Math.round(r[k] * 100) / 100 : null;
+      return { mission, rows };
+    };
+    _playRecorder = new PlayRecorder({
+      eventBus, Events,
+      win: window,
+      missionTime: () => gameState.missionTime,
+      metaProbe: () => ({
+        game: Constants.VERSION_LABEL,
+        fieldSeed: _fieldSeed,
+        viewport: `${window.innerWidth}x${window.innerHeight}`,
+        input: _glassBoot ? 'touch' : 'mouse',
+        mission: scoringSystem.getMissionNumber(),
+      }),
+      pieces: _pieceTable,
+      fields: {
+        mission: () => scoringSystem.getMissionNumber(),
+        beat: () => { const c = missionCoach._seq && missionCoach._seq.current(); return c ? c.id : onboardingDirector.getActiveBeatId(); },
+        catches: () => gameState.debrisCleared,
+        nets: () => captureNetSystem.getMotherNetCount(),
+        gasKg: () => resourceSystem.coldGas * Constants.OCTOPUS_CORE_COLD_GAS / Constants.COLD_GAS_MAX,
+        argonKg: () => engineGasKg(resourceSystem),
+        battery: () => resourceSystem.battery,
+        heatC: () => resourceSystem.getThermalSource().tempC,
+        target: () => { const t = targetSelector.getActiveTarget(); return t ? t.id : null; },
+        targetM: _rangeToTarget,
+        daughtersOut: () => armManager.arms.filter((a) => !_selfHome.test(String(a.state))).length,
+        floor: () => ((ladderController && ladderController.isActive()) ? ladderController.currentFloor() : null),
+      },
+    });
+    _playRecorder.start();
+    // What the comms panel really draws (the raw COMMS_MESSAGE also carries held or dropped lines). The original runs first;
+    // its behaviour and return value are unchanged.
+    const _cp = hud && hud.commsPanel;
+    if (_cp && typeof _cp._pushShown === 'function') {
+      const _origPushShown = _cp._pushShown;
+      _cp._pushShown = function (...args) {
+        const r = _origPushShown.apply(this, args);
+        try { _playRecorder.noteCoachLine(args[0]); } catch (_e) { /* the log never breaks the panel */ }
+        return r;
+      };
+    }
+    if (hotkeyOverlay && typeof hotkeyOverlay.setPlayLog === 'function') hotkeyOverlay.setPlayLog(_playRecorder);   // the help page's button (works on the live site)
+    // `refs`: the game objects the scripted driver (scripts/play/drive-training.mjs) reads; the same set the old per-session drivers
+    // reached through a route that appended a hook to this file. Dev host only.
+    if (isDevHost()) window.__playLog = {
+      snapshot: () => _playRecorder.snapshot(), download: () => _playRecorder.download(),
+      note: (t) => _playRecorder.noteText(t), elapsedMs: () => _playRecorder.elapsedMs(),
+      refs: () => ({ eventBus, Events, commsSystem, hud, gameState, missionCoach, onboardingDirector, targetSelector, player, captureNetSystem, inputManager, autopilotSystem, resourceSystem, debrisField, TimeAuthority, Constants, lassoSystem, armManager, railIndicator, despinLaser, cameraSystem, scoringSystem, _simClock }),
+    };
+  } catch (e) {
+    console.warn('[main] play log setup failed:', e);
+  }
+
   _bootMark('init() complete. First rAF scheduled');
   _scheduleNextFrame();
 }
@@ -6576,6 +6670,7 @@ function gameLoop(timestamp) {
   }
   _simClock.update(realDt, _simWheelTurn, _simSig);
   _simClock.frame(dt, dtWorld);
+  if (_playRecorder) _playRecorder.tick(_simClock.gameDt);   // the play log's game clock (read-only)
   if (realSkyLayer) realSkyLayer.tickClock(_simClock.gameDtWorld);   // the real sky's clock: game seconds since the game date last moved
   const _simK = _simClock.k;
   const _simN = _simClock.n, _simStepDt = _simClock.stepDt, _simStepDw = _simClock.stepDtWorld;

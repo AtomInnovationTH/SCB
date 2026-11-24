@@ -231,6 +231,9 @@ export const HOTKEY_GROUPS = [
   },
 ];
 
+/** The help page's play-log button label (English: a developer tool, not a lesson). */
+const SAVE_PLAYLOG_LABEL = 'Save play log';
+
 /** True on a touch screen (coarse pointer): FAQ rows are then 44 px tall instead of 24 px. No window (Node) → false. */
 function faqIsTouch() {
   return typeof window !== 'undefined' && !!(window.matchMedia && window.matchMedia('(pointer: coarse)') && window.matchMedia('(pointer: coarse)').matches);
@@ -266,6 +269,27 @@ export class HotkeyOverlay {
   }
 
   isVisible() { return this._visible; }
+
+  /**
+   * Hand the page the play recorder (main.js, end of boot) so "Save play log" can write its file. Read through `download()` only.
+   * @param {{download: function(): string, lastFileName?: string}|null} recorder
+   */
+  setPlayLog(recorder) { this._playLog = recorder || null; }
+
+  /** @private The button's click: save the file, then say so on the button for a moment. */
+  _savePlayLog(btn) {
+    const rec = this._playLog;
+    let label = SAVE_PLAYLOG_LABEL;
+    if (!rec || typeof rec.download !== 'function') label = 'No play log yet';
+    else {
+      try {
+        rec.download();
+        label = rec.lastSaveOk === false ? 'No file saved (log in console)' : `Saved ${rec.lastFileName || ''}`.trim();
+      } catch (e) { console.warn('[help] play log save failed:', e); label = 'Save failed (see console)'; }
+    }
+    btn.textContent = label;
+    setTimeout(() => { if (btn.textContent === label) btn.textContent = SAVE_PLAYLOG_LABEL; }, 3500);
+  }
 
   /**
    * Floor-1 help button: a ? at the top right of the screen that opens this same list; the twin of the menu's
@@ -375,7 +399,26 @@ export class HotkeyOverlay {
       borderRadius: '3px', fontFamily: 'var(--font-mono)',
     });
     header.appendChild(left);
-    header.appendChild(closeBtn);
+    // "Save play log" (js/systems/PlayRecorder.js): one JSON file in Downloads of what was pressed, every coach line drawn, and the
+    // ship's gas, nets and catches over time. Present on every build, mouse and touch; it works once main.js hands over the
+    // recorder (setPlayLog). Before that, or if it is missing, a click does nothing but say so.
+    const right = document.createElement('div');
+    Object.assign(right.style, { display: 'flex', alignItems: 'center', gap: '10px' });
+    const saveBtn = document.createElement('button');
+    saveBtn.id = 'hotkey-save-playlog-btn';
+    saveBtn.type = 'button';
+    saveBtn.textContent = SAVE_PLAYLOG_LABEL;
+    saveBtn.setAttribute('title', 'Save a file of what you pressed and what happened, to send to the developer');
+    Object.assign(saveBtn.style, {
+      background: 'none', border: '1px solid rgba(0,212,255,0.4)', color: '#00d4ff', fontSize: '13px',
+      letterSpacing: '0.08em', textTransform: 'uppercase', cursor: 'pointer', padding: '4px 12px',
+      borderRadius: '3px', fontFamily: 'var(--font-mono)', touchAction: 'manipulation',
+      minHeight: faqIsTouch() ? '44px' : '0',
+    });
+    saveBtn.addEventListener('click', () => this._savePlayLog(saveBtn));
+    right.appendChild(saveBtn);
+    right.appendChild(closeBtn);
+    header.appendChild(right);
 
     const body = document.createElement('div');
     Object.assign(body.style, {
