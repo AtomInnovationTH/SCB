@@ -31,7 +31,7 @@ import { SkyPropagator, WGS72 } from '../systems/SkyPropagator.js';
 import { GameClock } from '../systems/GameDate.js';
 import { meoRadialMap, radiusPxForAltKm, chartTextBoxes, chartTextVersion } from './SdaChart.js';
 import { cardFields, CLASS_COLORS, CLASS_NAMES, CLS_STARLINK, isStarlinkRow, MIL_COLOR } from './RealSkyCard.js';
-import { displayName, famousStory } from './HighlightItems.js';
+import { displayName, famousStory, famousShort } from './HighlightItems.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 import { LOOK_IDS, buildLook, ringTextureBytes, dotTextureBytes, lookFromSearch, installSkyLookHooks, measureClutter } from './SkyLook.js';
 import { devGlareB } from '../core/DevHost.js';
@@ -961,6 +961,8 @@ export class RealSkyLayer {
     f.name = displayName(this._highlights, norad, f.name);   // data/highlights.json `names` (58016 "T2V" -> "THEOS-2"); the hover label uses it too
     const story = famousStory(this._highlights, norad, f.name);   // a Famous object's line, shown on its card whether or not a highlight is on
     if (story) f.story = story;
+    const short = famousShort(this._highlights, norad);   // its short name ("ISS", "Hubble") becomes the card's title; f.name stays the catalogue name (the title's hover)
+    if (short) f.short = short;
     return f;
   }
 

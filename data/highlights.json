@@ -5,7 +5,7 @@
       "label": "International Space Station",
       "short": "ISS",
       "norads": [25544, 25575, 26400, 26700, 36086, 49044],
-      "line": "Run by the space agencies of the US, Russia, Europe, Japan and Canada; the first piece, Zarya, was launched on 20 November 1998.",
+      "line": "US, Russia, Europe, Japan and Canada; since 1998.",
       "source": "https://www.nasa.gov/international-space-station/zarya-module",
       "source2": "https://www.nasa.gov/reference/international-space-station"
     },
@@ -13,7 +13,7 @@
       "id": "tiangong",
       "label": "Tiangong, China's station",
       "norads": [48274, 53239, 54216],
-      "line": "Its core module Tianhe was launched on 29 April 2021.",
+      "line": "China's station, since 2021.",
       "source": "https://en.cmse.gov.cn/news/202105/t20210528_48002.html"
     },
     {
@@ -21,35 +21,35 @@
       "label": "Hubble Space Telescope",
       "short": "Hubble",
       "norads": [20580],
-      "line": "Launched 24 April 1990.",
+      "line": "Launched 1990.",
       "source": "https://science.nasa.gov/mission/hubble/"
     },
     {
       "id": "gps",
       "label": "GPS",
       "norads": [24876, 25933, 26407, 26605, 27663, 27704, 28129, 28190, 28361, 28474, 28874, 29486, 29601, 32260, 32384, 32711, 34661, 35752, 36585, 37753, 38833, 39166, 39533, 39741, 40105, 40294, 40534, 40730, 41019, 41328, 43873, 44506, 45854, 46826, 48859, 55268, 62339, 64202, 67588, 68791],
-      "line": "America's navigation satellites, about 20,200 km up.",
+      "line": "US navigation, about 20,200 km up.",
       "source": "https://www.gps.gov/space-segment"
     },
     {
       "id": "vanguard-1",
       "label": "Vanguard 1",
       "norads": [5],
-      "line": "Launched 17 March 1958: the oldest human-made object still in orbit.",
+      "line": "1958: the oldest object still in orbit.",
       "source": "https://www.navy.mil/Press-Office/Press-Releases/display-pressreleases/Article/2247504/"
     },
     {
       "id": "telstar-1",
       "label": "Telstar 1",
       "norads": [340],
-      "line": "July 1962: carried the first live television across the Atlantic.",
+      "line": "1962: first live TV across the Atlantic.",
       "source": "https://www.nasa.gov/history/telstar-opened-era-of-global-satellite-television"
     },
     {
       "id": "envisat",
       "label": "Envisat",
       "norads": [27386],
-      "line": "Europe's Earth-watching satellite, silent since 8 April 2012, about 8 tonnes.",
+      "line": "Europe's, silent since 2012, about 8 tonnes.",
       "source": "https://www.esa.int/Applications/Observing_the_Earth/Envisat/ESA_declares_end_of_mission_for_Envisat",
       "source2": "https://www.esa.int/Applications/Observing_the_Earth/Envisat_FAQs"
     },
@@ -57,21 +57,21 @@
       "id": "fengyun-1c",
       "label": "Fengyun-1C",
       "norads": [25730],
-      "line": "Destroyed by a Chinese missile test on 11 January 2007.",
+      "line": "Destroyed by a Chinese missile test, 2007.",
       "source": "https://ntrs.nasa.gov/api/citations/20080022435/downloads/20080022435.pdf"
     },
     {
       "id": "iridium-33",
       "label": "Iridium 33",
       "norads": [24946],
-      "line": "Hit Cosmos 2251 on 10 February 2009.",
+      "line": "Hit Cosmos 2251, 2009.",
       "source": "https://www.orbitaldebris.jsc.nasa.gov/newsletter/pdfs/ODQNv13i2.pdf"
     },
     {
       "id": "cosmos-2251",
       "label": "Cosmos 2251",
       "norads": [22675],
-      "line": "Hit by Iridium 33 on 10 February 2009: the first crash of two whole satellites.",
+      "line": "Hit by Iridium 33, 2009: the first crash of two satellites.",
       "source": "https://www.orbitaldebris.jsc.nasa.gov/newsletter/pdfs/ODQNv13i2.pdf",
       "source2": "https://ntrs.nasa.gov/api/citations/20090017680/downloads/20090017680.pdf"
     },
@@ -79,7 +79,7 @@
       "id": "starlink-pioneer",
       "label": "Oldest Starlinks",
       "norads": [44714, 44718, 44723, 44725, 44744, 44747, 44748, 44751, 44752, 44753, 44768],
-      "line": "Launched 11 Nov 2019; the oldest still up, 11 from that launch.",
+      "line": "Launched Nov 2019; the oldest still up.",
       "source": "https://www.space-track.org"
     }
   ],

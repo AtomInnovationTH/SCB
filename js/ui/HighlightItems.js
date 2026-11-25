@@ -66,8 +66,8 @@ function byNorad(cat) {
   return m;
 }
 
-/** The credit line of every list: "catalogue 17 Nov 2026". */
-export const creditLine = (cat) => { const d = snapshotDate(cat && cat.snapshotUtc); return d ? `catalogue ${d}` : 'catalogue'; };
+/** The date line of every list (the header's hover; Sky 34 F): "as of 17 Nov 2026". */
+export const creditLine = (cat) => { const d = snapshotDate(cat && cat.snapshotUtc); return d ? `as of ${d}` : ''; };
 
 /**
  * The short name a globe label uses for a Famous row: the entry's own `short` (data/highlights.json) when it has one, else up to a comma or a
@@ -80,9 +80,6 @@ export function shortName(id, label, short) {
   return String(label).split(/,| \(/)[0].trim();
 }
 
-/** Lower-case letters and digits only ("ISS (ZARYA)" -> "isszarya"), to ask whether a catalogue name already says a short name. */
-const normName = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-
 /** The Famous entry that lists a NORAD number, or null. @param {{famous?:Array}|null} hl */
 export function famousEntryOf(hl, norad) {
   if (!hl || !Array.isArray(hl.famous)) return null;
@@ -90,15 +87,23 @@ export function famousEntryOf(hl, norad) {
 }
 
 /**
- * The story line for the tap card: the Famous entry's `line`, with the entry's short name and ": " before it unless the catalogue name already
- * contains that short name ("HST" -> "Hubble: Launched ..."; "ISS (ZARYA)" -> the line alone). '' when the object is not in the Famous list.
- * @param {{famous?:Array}|null} hl @param {number} norad @param {string} catName the name the card shows
+ * The story line for the tap card: the Famous entry's `line` alone (Sky 34 F: the card's title is the entry's short name, so the line no longer
+ * starts with it). '' when the object is not in the Famous list.
+ * @param {{famous?:Array}|null} hl @param {number} norad @param {string} [catName] unused, kept for callers
  */
 export function famousStory(hl, norad, catName) {
   const f = famousEntryOf(hl, norad);
-  if (!f || !f.line) return '';
-  const short = shortName(f.id, f.label, f.short);
-  return normName(catName).includes(normName(short)) ? f.line : `${short}: ${f.line}`;
+  return f && f.line ? f.line : '';
+}
+
+/**
+ * The card's title for a Famous object: the entry's own `short` field (data/highlights.json, e.g. "ISS", "Hubble"), or '' when the object is not
+ * in the list or its entry has no `short` (the catalogue name then stays the title).
+ * @param {{famous?:Array}|null} hl @param {number} norad
+ */
+export function famousShort(hl, norad) {
+  const f = famousEntryOf(hl, norad);
+  return f && typeof f.short === 'string' && f.short.trim() ? f.short.trim() : '';
 }
 
 /** The name the Highlight lists and the tap card give a catalogue row: data/highlights.json `names` (e.g. 58016 "T2V" -> "THEOS-2"), else the catalogue's own. */
@@ -131,7 +136,7 @@ export function buildFamous(cat, hl) {
   if (rows.length === 0) return null;
   return {
     id: ID_FAMOUS, title: 'Famous', count: rows.length, header: `Famous \u00b7 ${rows.length}`, credit: creditLine(cat),
-    honesty: 'hand list, sourced', rows, norads, names, litCount: norads.size,
+    honesty: '', rows, norads, names, litCount: norads.size,
   };
 }
 
@@ -230,7 +235,7 @@ export function buildCountry(cat, hl, flag, extras = {}) {
       norads: g.list.map((x) => x[c.norad]), first: big[c.norad], count: g.list.length,
     });
   }
-  const extra = [['stages', r.stages, 'stage', 'stages'], ['debris', r.debris, 'debris piece', 'debris pieces']];
+  const extra = [['stages', r.stages, 'stage', 'stages'], ['debris', r.debris, 'debris', 'debris']];
   for (const [key, list, one, many] of extra) {
     if (list.length === 0) continue;
     const on = extras[key] === true;
@@ -242,7 +247,7 @@ export function buildCountry(cat, hl, flag, extras = {}) {
   }
   return {
     id: ID_COUNTRY, title: 'Selected country', flag, choices: countryChoices(hl), count: norads.size, header: `${country.name} \u00b7 ${fmtInt(norads.size)}`, country, credit: creditLine(cat),
-    honesty: 'owner per GCAT', rows, norads, names, litCount: norads.size, extras: { stages: extras.stages === true, debris: extras.debris === true },
+    honesty: '', rows, norads, names, litCount: norads.size, extras: { stages: extras.stages === true, debris: extras.debris === true },
   };
 }
 
@@ -288,7 +293,7 @@ export function buildHeaviest(cat, hidden = []) {
   }
   return {
     id: ID_HEAVY, title: 'Heaviest', count: heavy.length, header: `Heaviest \u00b7 ${fmtInt(heavy.length)} over 1,000 kg`, credit: creditLine(cat),
-    honesty: 'mass per GCAT; a few are estimates there', rows, norads, names, litCount: norads.size,
+    honesty: '', rows, norads, names, litCount: norads.size,
   };
 }
 
@@ -316,8 +321,7 @@ export const ID_FAM_NAV = 'fam-nav', ID_FAM_WEATHER = 'fam-weather', ID_FAM_NET 
 /** The ids of the five family items, in menu order. */
 export const FAMILY_IDS = [ID_FAM_NAV, ID_FAM_WEATHER, ID_FAM_NET, ID_FAM_SPY, ID_FAM_CREW];
 
-const HONESTY_PUBLIC = 'From the public catalogue of 17 Nov 2026; a few new satellites have no job listed yet.';
-const HONESTY_SPY = 'Countries keep some spy satellites secret; these are the ones in the public list.';
+// Sky 34 F (owner 2026-11-25, "less wordy"): the hover says what a family is, then "as of <date>"; the old honesty sentences are gone (`honesty` stays '' on every item).
 const COUNTRY_TOP = 3;
 
 /** Plain names for the GCAT State codes the country rows can show (anything else is shown by its code); the Soviet Union rows count as Russia. */
@@ -332,16 +336,16 @@ const stateKey = (code) => (code === 'SU' ? 'RU' : code);
 
 /** The groups of a code family: the list rows. `codes` = the `fam` values it takes; `rows` = [fam code, label, note]; or `by: 'state'` (the top countries). */
 const FAMILY_DEFS = [
-  { id: ID_FAM_NAV, title: 'Navigation', honesty: HONESTY_PUBLIC,
+  { id: ID_FAM_NAV, title: 'Navigation', honesty: '',
     tag: 'Satellites that tell phones, ships and planes where they are: GPS (USA), GLONASS (Russia), Galileo (Europe), BeiDou (China).',
     rows: [[11, 'GPS', 'the US system'], [12, 'GLONASS', 'the Russian system'], [13, 'Galileo', 'the European system'], [14, 'BeiDou', 'the Chinese system'],
       [19, 'Other navigation', 'India, Japan and older systems']] },
-  { id: ID_FAM_WEATHER, title: 'Weather', honesty: HONESTY_PUBLIC, by: 'state', codes: [20],
+  { id: ID_FAM_WEATHER, title: 'Weather', honesty: '', by: 'state', codes: [20],
     tag: 'Satellites that watch clouds, storms and the air for weather forecasts.' },
-  { id: ID_FAM_NET, title: 'Internet', honesty: HONESTY_PUBLIC,
+  { id: ID_FAM_NET, title: 'Internet', honesty: '',
     tag: 'Big fleets that carry internet and phone links from space: OneWeb, Kuiper, Qianfan, Guowang, Iridium. Starlink has its own box.',
     rows: [[31, 'OneWeb', 'a British fleet'], [32, 'Kuiper', 'Amazon\u2019s fleet'], [33, 'Qianfan', 'a Chinese fleet'], [34, 'Guowang', 'a Chinese fleet'], [35, 'Iridium', 'phone links']] },
-  { id: ID_FAM_SPY, title: 'Spy', honesty: HONESTY_SPY, by: 'state', codes: [40],
+  { id: ID_FAM_SPY, title: 'Spy', honesty: '', by: 'state', codes: [40],
     tag: 'Military satellites that take pictures, listen to radio signals or watch for missile launches.' },
 ];
 for (const d of FAMILY_DEFS) if (!d.codes) d.codes = d.rows.map((r) => r[0]);
@@ -441,7 +445,7 @@ function buildCrew(cat, hl) {
   return {
     id: ID_FAM_CREW, title: 'People', group: 'families', family: true, noCount: true, count: norads.size, all: norads.size, joined: false,
     header: `People \u00b7 ${parts.join(', ')}`, tag: `The two space stations with people living on them, and the crew ships docked to them on ${date}.`,
-    credit: creditLine(cat), honesty: HONESTY_PUBLIC, rows, norads, names, litCount: norads.size, working: [...norads], rest: [], famDead: false,
+    credit: creditLine(cat), honesty: '', rows, norads, names, litCount: norads.size, working: [...norads], rest: [], famDead: false,
   };
 }
 

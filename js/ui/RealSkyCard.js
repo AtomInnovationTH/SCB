@@ -42,7 +42,7 @@ export const LEGEND_LABELS = ['pieces', 'Rocket stages', 'dead', 'working', 'no 
 export const LEGEND_ORDER = Object.freeze([3, CLS_STARLINK, 2, 4, 1, 0, 5]);
 /**
  * What each box means, one plain sentence per kind (same order as CLASS_NAMES), true to how the catalogue sorts objects
- * (scripts/skyPack.mjs `classify`: Space-Track's object type, and CelesTrak's status letter for satellites). The hover text is this + "(tap to show or hide)".
+ * (scripts/skyPack.mjs `classify`: Space-Track's object type, and CelesTrak's status letter for satellites). The hover text is this alone (Sky 34 F).
  */
 export const LEGEND_HINTS = Object.freeze([
   'pieces: broken pieces and fragments left by launches, breakups and collisions',
@@ -58,7 +58,7 @@ export const LEGEND_HINTS = Object.freeze([
 /**
  * The three groups of the key (Sky 32, DECISIONS §104 row 1). `id` is a code name (the player sees `word`); `kinds` are CLASS_NAMES entries top to
  * bottom; the dot is the colour of a kind in it (coordinator's call: Satellites wears "working", Debris "debris", Rocket stages its own); `open`
- * groups have an arrow and rows under them, the Rocket stages row is one box. The hover line is `hint` + " (tap to show or hide)".
+ * groups have an arrow and rows under them, the Rocket stages row is one box. The hover line is `hint` alone (Sky 34 F).
  */
 export const KEY_GROUPS = Object.freeze([
   Object.freeze({ id: 'satellites', word: 'Satellites', kinds: Object.freeze(['working', 'starlink', 'dead', 'satellite']), color: CLASS_COLORS[3], open: true,
@@ -110,9 +110,8 @@ export function shortCredit(full) {
   const old = t.match(/Snapshot (\d+) days old\./);
   return `Data: ${names.join(', ')}${old ? ` \u00b7 snapshot ${old[1]} days old` : ''}`;
 }
-/** Class number -> the kind line on the card. A satellite says which: working, dead, or "no report" (the key's word, Sky 32). */
-const KIND_TEXT = ['debris', 'rocket stage', 'dead satellite (not working)', 'working satellite',
-  'satellite, no report on whether it works', 'unknown object'];
+/** Class number -> the kind line on the card. A satellite says which: working, dead, or "no report" (the key's word, Sky 32; Sky 34 F: shorter words). */
+const KIND_TEXT = ['debris', 'rocket stage', 'dead sat', 'working sat', 'no report', 'unknown'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const RCS_TEXT = [null, 'small', 'medium', 'large'];
 /** Class numbers of the two status classes (skyPack.CLS): the legend hides them when the status was not joined. */
@@ -563,7 +562,7 @@ export class RealSkyCard {
     const kindRow = (i) => {
       const n = CLASS_NAMES[i];
       const item = el('div', `${ROW_CSS};margin-left:18px`);
-      item.title = `${LEGEND_HINTS[i]} (tap to show or hide)`;
+      item.title = LEGEND_HINTS[i];
       item.setAttribute('role', 'checkbox');
       item.setAttribute('tabindex', '0');
       item.setAttribute('aria-label', LEGEND_LABELS[i]);
@@ -575,7 +574,7 @@ export class RealSkyCard {
     // The "military" mark, the last row inside Satellites: a ring, not a dot (DECISIONS §104 row 3). Not a kind: the layer draws the rings; shown only when wired.
     const milItem = el('div', `${ROW_CSS};margin-left:18px`);
     milItem.id = 'real-sky-key-military';
-    milItem.title = `${MIL_HINT} (tap to show or hide)`;
+    milItem.title = MIL_HINT;
     milItem.setAttribute('role', 'checkbox');
     milItem.setAttribute('tabindex', '0');
     milItem.setAttribute('aria-label', MIL_NAME);
@@ -593,14 +592,14 @@ export class RealSkyCard {
       const arrow = el('span', 'flex:none;margin-left:auto;padding:0 4px;color:#9fb0d0;font-size:11px;line-height:1', '\u25b8');
       const kids = [];
       if (g.open) {
-        row.title = `${g.hint} (tap to show or hide)`;   // Sky 33 review (d): the same plain line on the whole row as on its box (it said "tap the box ... tap the word")
+        row.title = g.hint;   // Sky 33 review (d): the same plain line on the whole row as on its box (it said "tap the box ... tap the word")
         row.setAttribute('role', 'button');
         row.setAttribute('tabindex', '0');
         row.setAttribute('aria-expanded', 'false');
         boxWrap.setAttribute('role', 'checkbox');
         boxWrap.setAttribute('tabindex', '0');
         boxWrap.setAttribute('aria-label', g.word);
-        boxWrap.title = `${g.hint} (tap to show or hide)`;
+        boxWrap.title = g.hint;
         row.append(boxWrap, el('span', dotCss(g.color)), el('span', null, g.word), arrow);
         wire(row, () => this.setGroupOpen(g.id, !this._open.has(g.id)));
         // the box ticks the group; a dash (some kinds ticked) ticks all (setGroupTicked)
@@ -609,7 +608,7 @@ export class RealSkyCard {
         for (const n of g.kinds) { const kr = kindRow(CLASS_NAMES.indexOf(n)); kids.push(kr); legend.append(kr); }
         if (g.id === 'satellites') { kids.push(milItem); legend.append(milItem); }
       } else {
-        row.title = `${g.hint} (tap to show or hide)`;
+        row.title = g.hint;
         row.setAttribute('role', 'checkbox');
         row.setAttribute('tabindex', '0');
         row.append(boxWrap, el('span', dotCss(g.color)), el('span', null, g.word));
@@ -623,7 +622,7 @@ export class RealSkyCard {
     // wired by main.js (`setReachSwitch`), so it shows only when one is wired.
     const reachItem = el('div', 'display:none;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;box-sizing:border-box;min-height:22px;padding:0 3px;border-radius:4px;touch-action:manipulation');
     reachItem.id = 'real-sky-key-reach';
-    reachItem.title = `${REACH_HINT} (tap to show or hide)`;
+    reachItem.title = REACH_HINT;
     reachItem.setAttribute('role', 'checkbox');
     reachItem.setAttribute('tabindex', '0');
     reachItem.setAttribute('aria-label', REACH_NAME);
@@ -1305,9 +1304,9 @@ export class RealSkyCard {
       const text = mine && !p1 ? `${name} \u25be` : name;
       if (e.nameBtn.textContent !== text) e.nameBtn.textContent = text;
       e.nameBtn.style.cursor = mine && !p1 ? 'pointer' : 'default';
-      // a family says what it is in one plain sentence, then how far the list can be trusted; the other items show the catalogue date and their honesty word.
+      // a family says what it is in one plain sentence; every item then says "as of <date>" (Sky 34 F: no honesty words)
       // Sky 34 (owner 2026-11-25): the count ("Navigation · 289 of 642 shown"), that sentence and the last tapped row's note are not printed: they are the header's hover (a title).
-      const honesty = mine ? (mine.family ? `${mine.tag} ${mine.honesty}` : `${mine.credit} \u00b7 ${mine.honesty}`) : (L && L.highlightHonesty ? L.highlightHonesty() : '');
+      const honesty = mine ? [mine.family ? mine.tag : '', mine.credit].filter(Boolean).join(' ') : (L && L.highlightHonesty ? L.highlightHonesty() : '');
       const hover = [mine ? this._hlHeaderOf(mine) : '', honesty, this._hlStrip].filter(Boolean).join('\n');
       if (e.head.title !== hover) e.head.title = hover;
     }
@@ -1427,9 +1426,9 @@ export class RealSkyCard {
     e.card.style.display = i ? 'block' : 'none';
     if (!i) { this._syncDodge(); return; }
     e.dot.style.background = CLASS_COLORS[i.cls] || CLASS_COLORS[5];
-    e.nameEl.textContent = i.name;
+    e.nameEl.textContent = i.short || i.name;   // a Famous object with a short name ("ISS", "Hubble") shows it; the catalogue name is in the hover
     // Sky 34 (owner 2026-11-25): the card prints the story, then the values only, one per line (kind, height, mass, "launched <year>"), no label column; the rest is the name's hover.
-    if (e.titleEl) e.titleEl.title = [`number ${i.norad}`, `tilt ${i.tilt}`, `size ${i.size}`, i.sizeNote, i.asOf].filter(Boolean).join('\n');
+    if (e.titleEl) e.titleEl.title = [i.short ? i.name : null, `number ${i.norad}`, `tilt ${i.tilt}`, `size ${i.size}`, i.sizeNote, i.asOf].filter(Boolean).join('\n');
     const rows = [
       i.story ? [null, i.story, true] : null,          // a Famous object's line (HighlightItems.famousStory), full width, quiet
       i.kind, i.height, i.mass || null,

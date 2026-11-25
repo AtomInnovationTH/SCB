@@ -260,7 +260,7 @@ export class ClusterIcons {
    * The three plain lines the card under `You` shows (Sky 30, DECISIONS §102 row 2): her field (height, pieces), the debris there (count and
    * kinds, from the registry's rows for the field), and her reach. Pure + static; reads the registry set by `setFieldRegistry`.
    * @param {{minAltKm:number, maxAltKm:number, budgetDvMs:number}|null} env the reach envelope (ReachOrb), or null while there is none
-   * @returns {string[]} always three lines
+   * @returns {string[]} three lines, or two when the field line already names the piece count (no "Debris here" line then)
    */
   static shipInfoLines(env) {
     const reg = _fieldRegistry();
@@ -286,11 +286,14 @@ export class ClusterIcons {
           if (pieces > 0 || sats === 0) parts.push(ClusterIcons._pieces(pieces));
           if (sats > 0) parts.push(`${sats} dead ${sats === 1 ? 'satellite' : 'satellites'}`);
           debris = catchable > 0 ? `Debris here: ${parts.join(' and ')}` : 'Debris here: none left to catch';
+          // Sky 34 F (owner 2026-11-25, "less wordy"): the field line already names the piece count, so the same count is not said twice; a dead satellite
+          // in the field still gets its line (the field line's count does not say it is one).
+          if (own != null && sats === 0) debris = null;
         }
       }
     }
     const reach = env ? ReachOrb.plainReach(env) : '';
-    return [field, debris, reach || 'Reach: not known yet'];
+    return [field, debris, reach || 'Reach: not known yet'].filter((t) => t != null);
   }
 
   /**

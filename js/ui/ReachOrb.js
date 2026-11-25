@@ -145,14 +145,14 @@ export class ReachOrb {
   }
 
   /**
-   * Her reach in plain words, for the card a click on `You` opens: 'Reach: about 180–1,311 km, budget 585 m/s'. Same numbers as `caption`,
+   * Her reach in plain words, for the card a click on `You` opens: 'Range: 180–1,311 km' (Sky 34 F: no "about", no budget). Same numbers as `caption`,
    * with thousands separators. '' for no envelope.
    * @param {{minAltKm:number, maxAltKm:number, budgetDvMs:number}|null} env
    */
   static plainReach(env) {
     if (!env) return '';
     const n = (v) => Math.round(v).toLocaleString('en-US');
-    return `Range: about ${n(env.minAltKm)}\u2013${n(env.maxAltKm)} km, budget ${n(env.budgetDvMs)} m/s`;
+    return `Range: ${n(env.minAltKm)}\u2013${n(env.maxAltKm)} km`;
   }
 
   _build() {
