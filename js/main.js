@@ -6889,8 +6889,9 @@ function gameLoop(timestamp) {
   // OnboardingDirector's deferWhile).
   if (hud && hud.setToastInhibit) hud.setToastInhibit(_ladderActive && !!(ladderController && ladderController.introInFlight && ladderController.introInFlight()));
   // No floor-1 buttons over the opening dive (owner 2026-11-25, DECISIONS §107): while the intro is in flight (the dive, the dwell,
-  // the pull) body[data-intro-dive] hides the bar and its "?" (index.html). The ride's destination is floor 1, so FloorMask shows
-  // them from the dive's first frame. When it ends they fade in with FloorMask's own arrive fade. Written only on change.
+  // the pull) body[data-intro-dive] hides the bar, its "?" and the SPECS tab (index.html). The ride's destination is floor 1, so
+  // FloorMask shows them from the dive's first frame. When it ends the bar and "?" fade in with FloorMask's own arrive fade; the tab
+  // just returns (its edge-chrome opacity is inline, and the arrive fade's fill would pin it at 1). Written only on change.
   {
     const dive = _ladderActive && !!(ladderController && ladderController.introInFlight && ladderController.introInFlight());
     if (dive !== _introDiveAttr) {

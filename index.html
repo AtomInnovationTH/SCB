@@ -205,9 +205,12 @@
     body[data-pure-scenery] #ladder-workbench-tab,
     body[data-pure-scenery] #build-stamp { display: none !important; }
     /* No floor-1 buttons over the opening dive (owner 2026-11-25, DECISIONS §107): main.js sets data-intro-dive while the
-       dive, the dwell and the pull are in flight. visibility (not display) keeps their layout for FloorMask's measures. */
+       dive, the dwell and the pull are in flight. visibility (not display) keeps their layout for FloorMask's measures.
+       The SPECS tab goes too (owner 2026-11-25, Sky 34: "pure clutter"); it comes back at its own edge-chrome opacity. */
     body[data-intro-dive] #hud-f1-bar,
-    body[data-intro-dive] #hud-f1-help { visibility: hidden !important; pointer-events: none !important; }
+    body[data-intro-dive] #hud-f1-help,
+    body[data-intro-dive] #ladder-workbench-tab,
+    body[data-intro-dive] #ladder-workbench-tab-hit { visibility: hidden !important; pointer-events: none !important; }
 
     /* === HUD OVERLAY === */
     #hud-overlay {
