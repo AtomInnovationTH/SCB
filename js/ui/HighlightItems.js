@@ -144,8 +144,8 @@ export function buildFamous(cat, hl) {
 const COUNTRY_KINDS = [
   { cls: CLS_WORKING, one: 'working sat', many: 'working sats' },   // Sky 34 E (owner 11-25): "sat", not "satellite"
   { cls: CLS_DEAD, one: 'dead sat', many: 'dead sats' },
-  { cls: CLS_SATELLITE, one: 'sat, no report on whether it works', many: 'sats, no report on whether they work' },   // Sky 32: the key's "no report" kind
-  { cls: CLS_UNKNOWN, one: 'unknown object', many: 'unknown objects' },
+  { cls: CLS_SATELLITE, one: 'no-status sat', many: 'no-status sats' },   // Sky 34 H (owner 11-25): the key's "no status" kind, short
+  { cls: CLS_UNKNOWN, one: 'unknown', many: 'unknown' },
 ];
 
 /** The biggest first: mass (a row with none last), then length, then the lowest NORAD number. */
@@ -282,9 +282,9 @@ export function buildHeaviest(cat, hidden = []) {
   for (const g of groups) {
     const hi = g.list[0][c.massKg], lo = g.list[g.list.length - 1][c.massKg];
     const kg = hi === lo ? `${fmtInt(hi)} kg` : `${fmtInt(lo)} to ${fmtInt(hi)} kg`;
-    const kind = g.cls === CLS_STAGE ? 'stage' : g.cls === CLS_DEAD ? 'dead sat' : g.cls === CLS_DEBRIS ? 'debris' : g.cls === CLS_SATELLITE ? 'sat, no report' : g.cls === CLS_WORKING ? 'working sat' : 'object';   // Sky 32: "no report" is the key's word for this kind; Sky 34 E: "sat"
+    const kind = g.cls === CLS_STAGE ? 'stage' : g.cls === CLS_DEAD ? 'dead sat' : g.cls === CLS_DEBRIS ? 'debris' : g.cls === CLS_SATELLITE ? 'no-status sat' : g.cls === CLS_WORKING ? 'working sat' : 'object';   // Sky 32: "no report" is the key's word for this kind; Sky 34 E: "sat"
     const n = g.list.length;
-    const kindMany = g.cls === CLS_SATELLITE ? 'sats, no report' : `${kind}s`;
+    const kindMany = `${kind}s`;
     rows.push({
       key: `heavy-${g.list[0][c.norad]}`, label: n > 1 ? `${g.name} \u00d7 ${n}` : String(g.name), sub: `${kg} \u00b7 ${n > 1 && kind !== 'debris' ? kindMany : kind}`,
       norads: g.list.map((x) => x[c.norad]), first: g.list[0][c.norad], count: n,
@@ -402,7 +402,7 @@ function buildCodeFamily(cat, def, byCode, joined, dead) {
     rows.push({
       key: 'extra-dead', toggle: 'famDead', on,
       label: `${on ? '\u2713 ' : '+ '}dead`,
-      sub: on ? 'lit too (tap to take away)' : `adds the ${fmtInt(rest.length)} that stopped working or have no report`,
+      sub: on ? 'lit too (tap to take away)' : `adds ${fmtInt(rest.length)} dead or no-status sats`,
       norads: rest.map((r) => r[c.norad]), first: rest[0][c.norad], count: rest.length,
     });
   }

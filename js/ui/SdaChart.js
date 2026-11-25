@@ -488,7 +488,7 @@ export const PLATE_PAD_PX = 5;
  */
 export const KEY_ABOVE_PX = 26;
 export const KEY_WARM = { text: '\u25cf debris, stage, dead', color: CLASS_COLORS[1] };
-export const KEY_COOL = { text: '\u25cf working, no report, unknown', color: CLASS_COLORS[3] };
+export const KEY_COOL = { text: '\u25cf working, no status, unknown', color: CLASS_COLORS[3] };
 /** Width of one 10 px label when there is no canvas to measure it (the face is about 6.1 px a glyph). */
 const GLYPH_PX = 6.6;
 

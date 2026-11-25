@@ -34,7 +34,7 @@ export const CLASS_COLORS = ['#d8a050', '#e07f3a', '#c89070', '#6f8fa8', '#8a96a
  * The key's words (same order as CLASS_NAMES; the full sentence is each box's tooltip). Sky 32 (owner 2026-11-24, DECISIONS §104 row 1): the
  * "debris" kind reads "pieces" (it sits under the Debris group), "sat" reads "no report", the rocket stage is the group row "Rocket stages".
  */
-export const LEGEND_LABELS = ['pieces', 'Rocket stages', 'dead', 'working', 'no report', 'unknown', 'Starlink'];
+export const LEGEND_LABELS = ['pieces', 'Rocket stages', 'dead', 'working', 'no status', 'unknown', 'Starlink'];
 /**
  * The order the kinds are drawn in, top to bottom, one column in three groups (Sky 32, DECISIONS §104 row 1): Satellites (working, Starlink, dead,
  * no report), Rocket stages, Debris (pieces, unknown). CLASS_NAMES, CLASS_COLORS and the data's class numbers keep their order.
@@ -49,7 +49,7 @@ export const LEGEND_HINTS = Object.freeze([
   'Rocket stages: a used rocket stage left in orbit after a launch',
   'dead: satellites that have stopped working',
   'working: satellites still doing their job (Starlink has its own box)',
-  'no report: satellites we can place and size, but nobody reports whether they still work',
+  'no status: nobody lists whether these satellites still work',
   // Source: Space-Track FAQ (space-track.org/documentation): "analyst" objects, tracked but not tied to a launch, "generally debris objects";
   // McDowell (planet4589.org/space/gcat/web/intro/analyst.html) agrees. All 525 on the globe are numbered 80000-89999 or 270000+ (measured 11-25).
   'unknown: pieces the Space Force tracks but has not tied to a launch; most are debris',
@@ -111,7 +111,7 @@ export function shortCredit(full) {
   return `Data: ${names.join(', ')}${old ? ` \u00b7 snapshot ${old[1]} days old` : ''}`;
 }
 /** Class number -> the kind line on the card. A satellite says which: working, dead, or "no report" (the key's word, Sky 32; Sky 34 F: shorter words). */
-const KIND_TEXT = ['debris', 'rocket stage', 'dead sat', 'working sat', 'no report', 'unknown'];
+const KIND_TEXT = ['debris', 'rocket stage', 'dead sat', 'working sat', 'no status', 'unknown'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const RCS_TEXT = [null, 'small', 'medium', 'large'];
 /** Class numbers of the two status classes (skyPack.CLS): the legend hides them when the status was not joined. */
