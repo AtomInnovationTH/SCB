@@ -218,7 +218,11 @@ import { gameClock, gameEarthAngleRad, SEEDED_RUN_DATE_MS } from './systems/Game
 
 // The game's ONE date (Reality 7): the first-start real date + ship days (SunStorms.dateMs) + the world seconds since it moved. The globe
 // turns by GMST of it, the real-sky dots, her start orbit, the ground readers and the sun / Moon seed read the same clock.
-gameClock.setSource(() => sunStorms.dateMs());
+// Dev host + `?shot` only: `window.__setGameDate(ms)` (below) sets `_devGameDateMs`; NaN = the normal date. Nothing else writes it, so off a
+// dev host the source is exactly `sunStorms.dateMs()`. The hook also resets the clock's sum, so the date is `ms` at once (even when the
+// clock had no date yet) and keeps ticking with the world clock.
+let _devGameDateMs = NaN;
+gameClock.setSource(() => (Number.isFinite(_devGameDateMs) ? _devGameDateMs : sunStorms.dateMs()));
 
 
 // ============================================================================
@@ -1406,6 +1410,7 @@ async function init() {
   }
 
   sunLight = new SunLight(scene, sceneManager);
+  sunLight.setEarthClock(() => gameClock.dateMs());   // the real Sun on floors 4-5 is drawn for the date Earth's turn reads (Sky 32)
 
   player = new PlayerSatellite(scene);
 
@@ -2918,9 +2923,11 @@ async function init() {
         setHidden: (h) => { _globeClockHidden = h === true; },
       },
       kinds: {
-        // "reach" is the last box (RealSkyCard.legendDrawOrder): its tick is the orb's switch, every other box a kind of the layer
-        ticked: () => realSkyCard.legendDrawOrder().filter((n) => (n === REACH_NAME ? navcomFloor.reachOrb.isEnabled() : !realSkyLayer.isKindHidden(n))),
-        setTicked: (n, on) => { if (n === REACH_NAME) { navcomFloor.reachOrb.setEnabled(on); realSkyCard.refreshKinds(); } else realSkyLayer.setKindHidden(n, !on); },
+        // The boxes `-` and `+` count are the three groups (a group is ONE box, open or closed) and "reach" last (RealSkyCard.keyBoxes; Sky 32, §104 row 4).
+        // A group is ticked while any of its kinds is; `-` unticks it and remembers which were ticked, `+` brings exactly those back. The "military" mark
+        // is not one of them. "reach" is the orb's switch.
+        ticked: () => realSkyCard.keyBoxes().filter((n) => (n === REACH_NAME ? navcomFloor.reachOrb.isEnabled() : realSkyCard.groupState(n) !== 'off')),
+        setTicked: (n, on) => { if (n === REACH_NAME) { navcomFloor.reachOrb.setEnabled(on); realSkyCard.refreshKinds(); } else realSkyCard.setGroupTicked(n, on); },
       },
     });
     if (hud && hud.paneDensity) hud.paneDensity.stepHook = globeSteps;
@@ -4372,6 +4379,9 @@ async function init() {
       });
       // Raw handle for the perf harness (it controls info.autoReset for per-frame totals across composer passes).
       window.__scbSceneManager = () => sceneManager;
+      // The camera system (dev host + ?shot): a probe aims the floor-4 globe view (`_ladderCam.dir`, `curDistU`) at a place on Earth (Sky 32 B).
+      window.__scbCameraSystem = () => cameraSystem;
+      window.__scbEarth = () => earth;   // the probe reads Earth's sun direction (`sunDirection`, the uniform's value) and turn (`group.rotation.y`)
       // Ion start-up (DECISIONS §37 row 7) - CAPTURE ONLY: starts the trip's burn from a loaded game so a witness can film
       // the four engines lighting (frames every 0.5 s). The flat trip by default; `{ field: true }` flies the nearest
       // reachable field instead. Either way the arrival callback starts NO mission. Returns
@@ -4581,6 +4591,9 @@ async function init() {
       // Debug handle for SunLight — inspect bodies and (for verification) temporarily reposition an occluded body.
       // Read-only intent; mutations are the harness's responsibility.
       window.__scbSunLight = sunLight;
+      // Dev host + ?shot: set the game date (Unix ms) and let it keep ticking; `__setGameDate(null)` returns to the real game date.
+      // The globe, the dots and the real Sun on floors 4-5 all read this one clock. Off a dev host this block does not run.
+      if (isDevHost()) window.__setGameDate = (ms) => { _devGameDateMs = (ms === null || ms === undefined) ? NaN : Number(ms); gameClock.reset(); return gameClock.dateMs(); };   // reset(): a date set while the clock still had NO date (a fresh game) would otherwise be carried on from the real time, i.e. ignored
 
       // ── Galactic-coordinate hook ──
       //   window.__scbGalactic(L_deg, b_deg) → { ra, dec }
@@ -6878,16 +6891,16 @@ function gameLoop(timestamp) {
 
   // --- Always update visuals (scene renders behind menus) ---
   // Held world: freeze the sky — sun, Earth and starfield — by passing dt=0 rather than skipping the call.
-  // sunDir is still the return value and is consumed below by earth.setSunDirection / spaceWeatherSystem /
-  // player.update; a skipped call would leave it stale. Side effect: the eclipse-intensity blend and
+  // sunDir is still the return value and is consumed below by spaceWeatherSystem / player.update (Earth reads
+  // sunLight.seenSunDirection since Sky 32: the real Sun on floors 4-5); a skipped call would leave it stale. Side effect: the eclipse-intensity blend and
   // _updateAutoExposure also key off dt, so exposure stops adapting while held. _worldHeld only turns true once the
   // ~0.6 s world-clock ramp to 0 finishes, so the sun runs at full rate through the ramp and then stops.
   // The sun runs on GAME time (dt × SimClock k): while the wheels turn her at 8× the battery's sun and the eclipse
   // predictor (SunLight.directionAt, same unit as the orbit's dt) keep pace with the orbit. Near a piece the orbit runs at real speed, so the
   // sun's ELAPSED clock slows by `_worldSlow` with it (the third argument: only the elapsed increment, not the eclipse blend or exposure).
   // Earth's clouds and the stars are scenery on the wall clock.
-  const sunDir = sunLight.update(_worldHeld ? 0 : _simGameDt, player.getPosition(), _worldSlow);
-  earth.setSunDirection(sunDir);
+  const sunDir = sunLight.update(_worldHeld ? 0 : _simGameDt, player.getPosition(), _worldSlow, dt);
+  earth.setSunDirection(sunLight.seenSunDirection);   // the SEEN sun: the real Sun on floors 4-5, `sunDir` (the stylized one, the game's) elsewhere; game logic below keeps `sunDir` (Sky 32, DECISIONS §104 row 5)
   earth.setTurn(gameEarthAngleRad());   // the globe turns by GMST of the game date, every frame on every floor (Reality 7)
   earth.update(_worldHeld ? 0 : dt);
   // Bloom gate — skips the whole UnrealBloom mip chain on frames where nothing can cross the threshold. NOT

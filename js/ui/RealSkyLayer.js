@@ -30,7 +30,7 @@ import { fetchData } from '../core/dataUrl.js';
 import { SkyPropagator, WGS72 } from '../systems/SkyPropagator.js';
 import { GameClock } from '../systems/GameDate.js';
 import { meoRadialMap, radiusPxForAltKm, chartTextBoxes, chartTextVersion } from './SdaChart.js';
-import { cardFields, CLASS_COLORS, CLASS_NAMES, CLS_STARLINK, isStarlinkRow } from './RealSkyCard.js';
+import { cardFields, CLASS_COLORS, CLASS_NAMES, CLS_STARLINK, isStarlinkRow, MIL_COLOR } from './RealSkyCard.js';
 import { displayName, famousStory } from './HighlightItems.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 import { LOOK_IDS, buildLook, ringTextureBytes, dotTextureBytes, lookFromSearch, installSkyLookHooks, measureClutter } from './SkyLook.js';
@@ -86,6 +86,15 @@ export const DOUBLE_TAP_PX = 24;
  * the fade's shape is unchanged.
  */
 export const DIVE_PEAK = 0.7;
+/**
+ * The military ring (Sky 32, DECISIONS §104 row 3): a thin ring this many CSS px wider than the dot it rings (mouse / glass), so a 2 px dot (mouse)
+ * wears a 7 px ring and a 3 px dot (glass) a 9 px one; the ring is drawn from the one soft-annulus texture (SkyLook.ringTextureBytes: 62-97 % of the
+ * radius), about 1 px wide on a mouse. MIL_COLOR (RealSkyCard) is a quiet lilac, not red.
+ */
+export const MIL_RING_EXTRA = 5;
+export const MIL_RING_EXTRA_GLASS = 6;
+/** The kinds a military ring can sit on: dead, working, "no report" and Starlink satellites (CLASS_NAMES indexes). Debris, stages and unknown get none (coordinator's call). */
+const MIL_RING_CLS = Object.freeze([2, 3, 4, CLS_STARLINK]);
 
 const FLOOR_NAVCOM = 4;
 const FLOOR_SDA = 5;
@@ -163,6 +172,11 @@ export class RealSkyLayer {
     this._storage = deps.storage !== undefined ? deps.storage : (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (_) { return null; } })();
     this._hideCls = new Uint8Array(CLASS_NAMES.length);   // 1 = that kind is switched off (index = class number); read from storage now
     this._loadHiddenKinds();
+    this._milOn = false;                // the "military" box inside Satellites is ticked (rings drawn); saved, off by default
+    this._loadMilitary();
+    this._mil = null;                   // Uint8Array(N): 1 = a military satellite row (data/sky.json `mil`); null when the data has no such field
+    this._milGroups = [];               // [{size, pts, geo, idx}] one ring Points per ring size, built only while the box is ticked
+    this._milTex = null;
     this._idxAttr = null;               // the draw index floor 4 uses while a kind is hidden (created once, reused)
     this._lastTap = null;               // the previous floor 4 touch tap that hit a dot: {i, x, y, t}
     // mouse hover (lane sky-look-1119): setCursor(css) sets the game canvas's cursor; the ring and label are DOM elements made on the first hover
@@ -201,6 +215,7 @@ export class RealSkyLayer {
         onSearch: (q) => this.search(q), onClose: () => this.select(-1),
         onToggleKind: (name) => this.setKindHidden(name, !this.isKindHidden(name)),
         isKindHidden: (name) => this.isKindHidden(name),
+        isMilitary: () => this._milOn, onToggleMilitary: () => this.setMilitary(!this._milOn), hasMilitary: () => this.hasMilitary(),
         onFlyName: () => this.flySelected(),
       });
     }
@@ -391,6 +406,7 @@ export class RealSkyLayer {
       this._ingest(sky);
       this._loadState = 'ready';
       if (this._lookWant !== '0') { this._lookId = this._lookWant; this._lookBuild(); }   // 'b' by default, or a dev host `?look=<id>`; its _apply follows
+      else if (this._milOn) this._milBuild();                                            // look '0' builds no Points of its own; the saved military box still draws its rings
       if (this._hl) this._hlBuild();     // a highlight set before the data arrived
       this._apply();
     } catch (err) {
@@ -427,6 +443,9 @@ export class RealSkyLayer {
       const p = palette[ci];
       col[3 * i] = p[0]; col[3 * i + 1] = p[1]; col[3 * i + 2] = p[2];
     }
+    const milAt = Array.isArray(sky.fields) ? sky.fields.indexOf('mil') : -1;   // a build with no `mil` field: no ring, no mark
+    this._mil = null;
+    if (milAt >= 0) { this._mil = new Uint8Array(N); for (let i = 0; i < N; i++) this._mil[i] = sky.rows[i][milAt] === 1 ? 1 : 0; }
     if (this._card && this._card.setStatusJoined) this._card.setStatusJoined(sky.statusJoined === true);
     this._byNorad = new Map();
     for (let i = 0; i < N; i++) this._byNorad.set(sky.rows[i][0], i);
@@ -508,6 +527,7 @@ export class RealSkyLayer {
       // a look variant draws its own Points on floor 4 instead; the opening dive always draws these plain dots (the look's Points carry no dive fade)
       this._points.visible = this._lookGroups.length === 0 ? (f4 || diveDots) : (diveDots && !f4);
       for (const g of this._lookGroups) g.pts.visible = f4;
+      for (const g of this._milGroups) g.pts.visible = f4;
       this._points.material.size = this._isGlass() ? DOT_PX_GLASS : DOT_PX;   // 3 px on glass, 2 px with a mouse
       const sel = this._selected >= 0;
       this._hiPoints.visible = f4 && sel;
@@ -1175,6 +1195,111 @@ export class RealSkyLayer {
     try { if (this._storage) this._storage.setItem(StorageKeys.REAL_SKY_HIDDEN, JSON.stringify(this.hiddenKinds())); } catch (_) { /* private mode: not saved */ }
   }
 
+  /* ---------------------------------------------------------------- the military ring (Sky 32, DECISIONS §104 row 3) */
+
+  /** True when the "military" box is ticked: each military satellite whose kind is shown wears a thin ring on the globe. Page 1's 2D dots never do (page 1 has no key). */
+  militaryOn() { return this._milOn; }
+
+  /** True when the loaded data carries the military flag (a `mil` field); without it there is nothing to ring and the key hides the box. */
+  hasMilitary() { return this._mil !== null; }
+
+  /**
+   * Tick or untick the "military" box (saved). On: ring Points are built once for the ring sizes and indexed with the rows that show; off: freed.
+   * @param {boolean} on @returns {boolean} the state now
+   */
+  setMilitary(on) {
+    const o = on === true;
+    if (o === this._milOn) return o;
+    this._milOn = o;
+    try { if (this._storage) this._storage.setItem(StorageKeys.REAL_SKY_MIL, o ? '1' : '0'); } catch (_) { /* private mode: not saved */ }
+    if (o) this._milBuild(); else this._milDrop();
+    if (this._card && this._card.refreshKinds) this._card.refreshKinds();
+    return o;
+  }
+
+  _loadMilitary() {
+    try { this._milOn = !!this._storage && this._storage.getItem(StorageKeys.REAL_SKY_MIL) === '1'; } catch (_) { this._milOn = false; }
+  }
+
+  /** The ring Points now, one per ring size (probes and tests). */
+  militaryPoints() { return this._milGroups.map((g) => g.pts); }
+
+  /** Rows that wear a ring right now: military, a satellite kind, the kind shown, not left out of a highlight's draw. Page 1 and the rest never ask. */
+  militaryRingRows() {
+    const out = [];
+    if (!this._mil || !this._milOn || !this._cls) return out;
+    const hh = this._hlHide, lm = this._hlGlobeMask();
+    for (let i = 0; i < this._mil.length; i++) if (this._milRings(i, hh, lm)) out.push(i);
+    return out;
+  }
+
+  /** With a Highlight on the globe only its lit rows keep their rings (a dimmed dot gets none; Sky 32 review), else rows a highlight leaves out of the draw get none. */
+  _milRings(i, hh, lm) {
+    const c = this._cls[i];
+    return this._mil[i] === 1 && MIL_RING_CLS.includes(c) && this._hideCls[c] !== 1 && (lm ? lm[i] === 1 : (hh === null || hh[i] !== 1));
+  }
+
+  /** A row's ring diameter, CSS px: its dot's size (the look's, or today's plain dot) plus the margin. */
+  _milRingPx(i) {
+    const glass = this._isGlass();
+    const d = this._lookData && this._lookData.id !== '0' ? this._lookData.px[i] : (glass ? DOT_PX_GLASS : DOT_PX);
+    return d + (glass ? MIL_RING_EXTRA_GLASS : MIL_RING_EXTRA);
+  }
+
+  /** Build the ring Points (the box is ticked and the data has the flag); a rebuild frees the old ones. Shares the dots' position buffer: rings move with the dots, no per-frame work. */
+  _milBuild() {
+    this._milDrop();
+    if (!this._milOn || !this._mil || !this._cls || this._loadState !== 'ready' || !this._posAttr) return;
+    const N = this._rows.length;
+    const sizes = new Map();   // ring size -> how many rows can ever wear it
+    for (let i = 0; i < N; i++) if (this._mil[i] === 1 && MIL_RING_CLS.includes(this._cls[i])) { const s = this._milRingPx(i); sizes.set(s, (sizes.get(s) || 0) + 1); }
+    if (sizes.size === 0) return;
+    this._milTex = new THREE.DataTexture(ringTextureBytes(32), 32, 32, THREE.RGBAFormat);
+    this._milTex.minFilter = THREE.LinearFilter; this._milTex.magFilter = THREE.LinearFilter; this._milTex.generateMipmaps = false;
+    this._milTex.needsUpdate = true;
+    [...sizes.keys()].sort((a, b) => a - b).forEach((size, k) => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', this._posAttr);   // the one shared, carried-forward position buffer
+      const idx = new THREE.BufferAttribute(new Uint32Array(sizes.get(size)), 1);
+      geo.setIndex(idx);
+      geo.setDrawRange(0, 0);
+      const mat = new THREE.PointsMaterial({ size, sizeAttenuation: false, color: MIL_COLOR, map: this._milTex, transparent: true, alphaTest: 0.05, depthWrite: false });
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false;
+      pts.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT + 0.0006 + 0.00001 * k;   // under the dots, over the heavy rings
+      pts.visible = this.isActive() && this._floor === FLOOR_NAVCOM;
+      pts.name = `real-sky-military-${size}`;
+      this._milGroups.push({ size, pts, geo, idx });
+    });
+    for (const g of this._milGroups) if (this._scene && this._scene.add) this._scene.add(g.pts);
+    this._milReindex();
+  }
+
+  /** Which rows each ring Points draws; called with every change of the hidden kinds or a highlight's draw. */
+  _milReindex() {
+    if (this._milGroups.length === 0 || !this._mil || !this._cls) return;
+    const N = this._rows.length, hh = this._hlHide, lm = this._hlGlobeMask();
+    const bySize = new Map(this._milGroups.map((g) => [g.size, g]));
+    for (const g of this._milGroups) g.n = 0;
+    for (let i = 0; i < N; i++) {
+      if (!this._milRings(i, hh, lm)) continue;
+      const g = bySize.get(this._milRingPx(i));
+      if (g) g.idx.array[g.n++] = i;
+    }
+    for (const g of this._milGroups) { g.idx.needsUpdate = true; g.geo.setDrawRange(0, g.n); }
+  }
+
+  /** Remove the ring Points from the scene and free them (the shared position buffer is taken off first, as `_lookDrop`). */
+  _milDrop() {
+    for (const g of this._milGroups) {
+      if (this._scene && this._scene.remove) this._scene.remove(g.pts);
+      g.geo.deleteAttribute('position');
+      g.geo.dispose(); g.pts.material.dispose();
+    }
+    if (this._milTex) { this._milTex.dispose(); this._milTex = null; }
+    this._milGroups = [];
+  }
+
   /**
    * Floor 4: which rows are drawn and in what order. The Starlink rows go first in the index, so every other kind's dots are drawn over
    * them (the Points draw in index order, depthWrite off); a hidden kind is left out. With no Starlink rows and nothing hidden it is the
@@ -1236,7 +1361,7 @@ export class RealSkyLayer {
     const data = buildLook(this._lookId, this._rows, glass, this._lookBaseCol);
     this._lookData = data;
     this._lookGlass = glass;
-    if (this._lookId === '0') { this._lookReindex(); this._hlAfterLook(); return; }
+    if (this._lookId === '0') { this._lookReindex(); this._hlAfterLook(); this._milBuild(); return; }
     const N = this._rows.length;
     const colAttr = data.col === this._lookBaseCol ? this._baseColAttr : new THREE.BufferAttribute(data.col, 3);
     this._lookColAttr = colAttr;
@@ -1287,10 +1412,12 @@ export class RealSkyLayer {
     for (const g of this._lookGroups) if (this._scene && this._scene.add) this._scene.add(g.pts);
     this._lookReindex();
     this._hlAfterLook();
+    this._milBuild();                                    // the rings' sizes follow the dots' sizes (a rebuild after a look or a mouse / touch change)
   }
 
   /** Which rows each look Points draws, kept in step with the hidden kinds; Starlink first inside a size (drawn under the rest), as `_applyHiddenDraw`. */
   _lookReindex() {
+    this._milReindex();                                  // the military rings follow the same hidden kinds and highlight draw
     const data = this._lookData;
     if (!data || !this._cls || this._lookGroups.length === 0) return;
     const N = this._rows.length, cls = this._cls, hide = this._hideCls, hh = this._hlHide, lm = this._hlGlobeMask();
@@ -1326,6 +1453,7 @@ export class RealSkyLayer {
     for (const t of this._lookTexs) t.dispose();
     this._lookTexs = [];
     this._lookGroups = []; this._lookRing = null; this._lookData = null;
+    this._milDrop();
   }
 
   /**

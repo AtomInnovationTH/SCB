@@ -12,6 +12,7 @@
  */
 
 import { buildItems, toHighlight, isMenuId, ID_COUNTRY } from './HighlightItems.js';
+import { StorageKeys } from '../core/StorageKeys.js';
 
 export const CLASS_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown', 'starlink'];
 /** The seventh kind (lane sky-skylook-1119, owner 2026-11-19): a working satellite whose name starts with STARLINK. It is not a data class: RealSkyLayer assigns it at load. */
@@ -28,26 +29,61 @@ export function isStarlinkRow(row) {
  * and less saturated than the hex (sampled 2026-11-19: debris 175,139,71; working 93,117,133; stage 178,112,51).
  */
 export const CLASS_COLORS = ['#d8a050', '#e07f3a', '#c89070', '#6f8fa8', '#8a96a0', '#6a7078', '#3f4a58'];
-/** The one-row colour key's short words (same order as CLASS_NAMES; the full name is each item's tooltip). */
-export const LEGEND_LABELS = ['debris', 'stage', 'dead', 'working', 'sat', 'unknown', 'Starlink'];
 /**
- * The order the tick boxes are drawn in: CLASS_NAMES indexes, "unknown" below Starlink (owner 2026-11-24, DECISIONS §102 row 4). Only the
- * drawing order changes; CLASS_NAMES, CLASS_COLORS and the data's class numbers keep theirs.
+ * The key's words (same order as CLASS_NAMES; the full sentence is each box's tooltip). Sky 32 (owner 2026-11-24, DECISIONS §104 row 1): the
+ * "debris" kind reads "pieces" (it sits under the Debris group), "sat" reads "no report", the rocket stage is the group row "Rocket stages".
  */
-export const LEGEND_ORDER = Object.freeze([0, 1, 2, 3, 4, CLS_STARLINK, 5]);
+export const LEGEND_LABELS = ['pieces', 'Rocket stages', 'dead', 'working', 'no report', 'unknown', 'Starlink'];
+/**
+ * The order the kinds are drawn in, top to bottom, one column in three groups (Sky 32, DECISIONS §104 row 1): Satellites (working, Starlink, dead,
+ * no report), Rocket stages, Debris (pieces, unknown). CLASS_NAMES, CLASS_COLORS and the data's class numbers keep their order.
+ */
+export const LEGEND_ORDER = Object.freeze([3, CLS_STARLINK, 2, 4, 1, 0, 5]);
 /**
  * What each box means, one plain sentence per kind (same order as CLASS_NAMES), true to how the catalogue sorts objects
  * (scripts/skyPack.mjs `classify`: Space-Track's object type, and CelesTrak's status letter for satellites). The hover text is this + "(tap to show or hide)".
  */
 export const LEGEND_HINTS = Object.freeze([
-  'debris: broken pieces and fragments left by launches, breakups and collisions',
-  'stage: a used rocket stage left in orbit after a launch',
+  'pieces: broken pieces and fragments left by launches, breakups and collisions',
+  'Rocket stages: a used rocket stage left in orbit after a launch',
   'dead: satellites that have stopped working',
   'working: satellites still doing their job (Starlink has its own box)',
-  'sat: satellites where the catalogue does not say if they still work',
-  'unknown: objects the catalogue lists as unknown, with no kind',
+  'no report: satellites we can place and size, but nobody reports whether they still work',
+  // Source: Space-Track FAQ (space-track.org/documentation): "analyst" objects, tracked but not tied to a launch, "generally debris objects";
+  // McDowell (planet4589.org/space/gcat/web/intro/analyst.html) agrees. All 525 on the globe are numbered 80000-89999 or 270000+ (measured 11-25).
+  'unknown: pieces the Space Force tracks but has not tied to a launch; most are debris',
   'Starlink: the working Starlink internet satellites',
 ]);
+/**
+ * The three groups of the key (Sky 32, DECISIONS §104 row 1). `id` is a code name (the player sees `word`); `kinds` are CLASS_NAMES entries top to
+ * bottom; the dot is the colour of a kind in it (coordinator's call: Satellites wears "working", Debris "debris", Rocket stages its own); `open`
+ * groups have an arrow and rows under them, the Rocket stages row is one box. The hover line is `hint` + " (tap to show or hide)".
+ */
+export const KEY_GROUPS = Object.freeze([
+  Object.freeze({ id: 'satellites', word: 'Satellites', kinds: Object.freeze(['working', 'starlink', 'dead', 'satellite']), color: CLASS_COLORS[3], open: true,
+    hint: 'Satellites: machines built to do a job in orbit, working or not' }),
+  Object.freeze({ id: 'rocket stages', word: 'Rocket stages', kinds: Object.freeze(['rocket stage']), color: CLASS_COLORS[1], open: false, hint: LEGEND_HINTS[1] }),
+  Object.freeze({ id: 'debris', word: 'Debris', kinds: Object.freeze(['debris', 'unknown']), color: CLASS_COLORS[0], open: true,
+    hint: 'Debris: broken pieces and objects nobody has identified' }),
+]);
+/**
+ * The "military" mark inside Satellites (DECISIONS §104 row 3): not a kind and not part of the Satellites tick; it puts a thin ring round each
+ * military satellite whose kind is shown. A quiet lilac that reads on day and night Earth and is not red (red is for threats near her path).
+ */
+export const MIL_NAME = 'military';
+export const MIL_COLOR = '#b9a8ff';
+export const MIL_HINT = 'military: satellites run by armed forces or spy agencies (the US keeps some secret ones off the public list)';
+
+/**
+ * A group's tick from its kinds: 'on' (all ticked), 'off' (none) or 'dash' (some). Pure.
+ * @param {string[]} kinds the kinds the key shows in the group @param {(name: string) => boolean} isHidden
+ * @returns {'on'|'off'|'dash'}
+ */
+export function groupState(kinds, isHidden) {
+  let on = 0;
+  for (const k of kinds) if (!isHidden(k)) on++;
+  return on === 0 ? 'off' : (on === kinds.length ? 'on' : 'dash');
+}
 /**
  * The last box of the key: the blue see-through band around Earth (ReachOrb). Its name in `legendDrawOrder()`, its word, its swatch (the band's
  * own cyan, ReachOrb `_paint` rgba(0,204,255)) and its hover text (owner 2026-11-24, DECISIONS §103 row 5).
@@ -73,9 +109,9 @@ export function shortCredit(full) {
   const old = t.match(/Snapshot (\d+) days old\./);
   return `Data: ${names.join(', ')}${old ? ` \u00b7 snapshot ${old[1]} days old` : ''}`;
 }
-/** Class number -> the kind line on the card. A satellite says which: working, dead, or "status not known". */
+/** Class number -> the kind line on the card. A satellite says which: working, dead, or "no report" (the key's word, Sky 32). */
 const KIND_TEXT = ['debris', 'rocket stage', 'dead satellite (not working)', 'working satellite',
-  'satellite (working or dead not known)', 'unknown object'];
+  'satellite, no report on whether it works', 'unknown object'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const RCS_TEXT = [null, 'small', 'medium', 'large'];
 /** Class numbers of the two status classes (skyPack.CLS): the legend hides them when the status was not joined. */
@@ -257,6 +293,13 @@ export class RealSkyCard {
     this._onClose = null;
     this._onToggleKind = null;
     this._isKindHidden = null;
+    this._isMilitary = null;              // () => the "military" mark is on (the layer; Sky 32)
+    this._onToggleMilitary = null;
+    this._hasMilitary = null;              // () => the data carries the military flag (false: the row stays out)
+    this._storage = deps.storage !== undefined ? deps.storage : (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (_) { return null; } })();
+    this._open = new Set();               // the key groups that are open (ids from KEY_GROUPS); saved
+    this._loadOpen();
+    this._memory = new Map();             // group id -> the kinds that were ticked when the group was unticked (a tap on the box or `-`); `+` or a tap brings them back
     this._reachSwitch = null;             // the "reach" box's switch (setReachSwitch)
     this._onFlyName = null;
     this._shown = false;
@@ -275,13 +318,16 @@ export class RealSkyCard {
     this._ro = null;
   }
 
-  /** The layer wires these: onSearch(query) => row index or -1; onClose() => void; onToggleKind(name) flips a legend box; isKindHidden(name) => bool (the boxes read it); onFlyName() turns floor 4's globe to the open object. */
-  setHandlers({ onSearch, onClose, onToggleKind, isKindHidden, onFlyName } = {}) {
+  /** The layer wires these: onSearch(query) => row index or -1; onClose() => void; onToggleKind(name) flips a legend box; isKindHidden(name) => bool (the boxes read it); onFlyName() turns floor 4's globe to the open object; isMilitary() / onToggleMilitary() are the "military" mark inside Satellites (the row shows only with both, and while hasMilitary() is not false: data with no `mil` field has nothing to ring). */
+  setHandlers({ onSearch, onClose, onToggleKind, isKindHidden, onFlyName, isMilitary, onToggleMilitary, hasMilitary } = {}) {
     this._onSearch = onSearch || null;
     this._onClose = onClose || null;
     this._onToggleKind = onToggleKind || null;
     this._isKindHidden = isKindHidden || null;
     this._onFlyName = onFlyName || null;
+    this._isMilitary = typeof isMilitary === 'function' && typeof onToggleMilitary === 'function' ? isMilitary : null;
+    this._onToggleMilitary = this._isMilitary ? onToggleMilitary : null;
+    this._hasMilitary = typeof hasMilitary === 'function' ? hasMilitary : null;
   }
 
   /** The legend's boxes again (the layer changed a kind). */
@@ -296,30 +342,111 @@ export class RealSkyCard {
     this._renderLegend();
   }
 
-  /** Legend state for tests and the browser probe: kind name -> true when its box is ticked (shown). Entries the legend does not show are left out. */
+  /** True when the key lists this kind (the status-less data has no working, dead or Starlink: DECISIONS §75). Not about the group being open. */
+  _kindInKey(name) {
+    const i = CLASS_NAMES.indexOf(name);
+    if (i < 0) return false;
+    return this._statusJoined || !(i === CLS_DEAD || i === CLS_WORKING || i === CLS_STARLINK);   // Starlink is a working satellite: no status, no Starlink
+  }
+
+  _hidden(name) { return !!(this._isKindHidden && this._isKindHidden(name)); }
+
+  /** Legend state for tests and the browser probe: kind name -> true when its box is ticked (shown). Kinds the key does not list are left out. */
   legendState() {
     const out = {};
-    const e = this._els;
-    if (e.legendItems) CLASS_NAMES.forEach((n, i) => { if (e.legendItems[i].style.display !== 'none') out[n] = !(this._isKindHidden && this._isKindHidden(n)); });
+    if (this._els.legendItems) CLASS_NAMES.forEach((n) => { if (this._kindInKey(n)) out[n] = !this._hidden(n); });
     return out;
   }
 
   isShown() { return this._shown; }
   info() { return this._info; }
   get root() { return this._els.root || null; }
-  /** The legend entries that show now (class names), for tests and the browser probe. */
+  /** The kinds the key lists now (class names, CLASS_NAMES order), open group or not, for tests and the browser probe. */
   legendNames() {
-    const e = this._els;
-    return e.legendItems ? CLASS_NAMES.filter((n, i) => e.legendItems[i].style.display !== 'none') : [];
+    return this._els.legendItems ? CLASS_NAMES.filter((n) => this._kindInKey(n)) : [];
   }
-  /** The boxes that show now, in the order they are drawn, top to bottom (LEGEND_ORDER, then "reach" last): what `-` on the globe unticks from the bottom. */
+  /** The kinds the key lists, in the order they are drawn, top to bottom (LEGEND_ORDER). */
   legendDrawOrder() {
-    const e = this._els;
-    if (!e.legendItems) return [];
-    const out = LEGEND_ORDER.filter((i) => e.legendItems[i].style.display !== 'none').map((i) => CLASS_NAMES[i]);
-    if (e.reachItem && e.reachItem.style.display !== 'none') out.push(REACH_NAME);
+    return this._els.legendItems ? LEGEND_ORDER.map((i) => CLASS_NAMES[i]).filter((n) => this._kindInKey(n)) : [];
+  }
+
+  /**
+   * The boxes `-` and `+` count on the globe, top to bottom (Sky 32, DECISIONS §104 row 4): the three groups (a group is ONE box, open or closed),
+   * then "reach" when its switch is wired. The "military" mark is not one of them.
+   */
+  keyBoxes() {
+    if (!this._els.legendItems) return [];
+    const out = KEY_GROUPS.map((g) => g.id);
+    if (this._reachSwitch) out.push(REACH_NAME);
     return out;
   }
+
+  _groupKinds(g) { return g.kinds.filter((n) => this._kindInKey(n)); }
+
+  /** A group's tick, from its kinds that the key lists: 'on', 'off' or 'dash' (some). The kinds the layer holds are the one truth. */
+  groupState(id) {
+    const g = KEY_GROUPS.find((x) => x.id === id);
+    return g ? groupState(this._groupKinds(g), (n) => this._hidden(n)) : 'off';
+  }
+
+  /**
+   * Tick or untick a whole group. Unticking remembers which kinds were ticked; ticking an unticked group brings those back (all of them when
+   * none are remembered); ticking a half-ticked group ticks all (a tap on the dash). The "military" mark is never touched.
+   * @param {string} id a KEY_GROUPS id @param {boolean} on
+   */
+  setGroupTicked(id, on) {
+    const g = KEY_GROUPS.find((x) => x.id === id);
+    if (!g || !this._onToggleKind) return;
+    const kinds = this._groupKinds(g);
+    const st = groupState(kinds, (n) => this._hidden(n));
+    let want;
+    if (!on) {
+      if (st === 'off') return;
+      this._memory.set(id, kinds.filter((n) => !this._hidden(n)));
+      want = new Set();
+    } else {
+      if (st === 'on') return;
+      const mem = st === 'off' ? (this._memory.get(id) || []).filter((n) => kinds.includes(n)) : [];
+      want = new Set(mem.length ? mem : kinds);
+      this._memory.delete(id);
+    }
+    for (const n of kinds) if (this._hidden(n) === want.has(n)) this._onToggleKind(n);   // flips each kind that is not as wanted
+    this._renderLegend();
+  }
+
+  /** Whether a group is open (its rows show). */
+  groupOpen(id) { return this._open.has(id); }
+
+  /**
+   * Open or close a group (saved). With a touch screen opening one closes the other: the iPad's rows are 44 px tall, so Satellites open (9 rows)
+   * already fills the panel and both open (11 rows) would not fit.
+   */
+  setGroupOpen(id, open) {
+    const g = KEY_GROUPS.find((x) => x.id === id);
+    if (!g || !g.open) return;
+    if (open === this._open.has(id)) return;
+    if (open) { if (this._glass) this._open.clear(); this._open.add(id); } else this._open.delete(id);
+    this._saveOpen();
+    this._renderLegend();
+    // The iPad panel is 342 px high and scrolls (PANEL_MAX_PX_GLASS), and 44 px rows do not fit under the highlight menu: bring the opened group to the top of the view
+    const ge = this._els.groupEls && this._els.groupEls[id], root = this._els.root;
+    if (open && this._glass && ge && root && typeof ge.row.offsetTop === 'number') root.scrollTop = Math.max(0, ge.row.offsetTop - 6);
+  }
+
+  _loadOpen() {
+    try {
+      const raw = this._storage ? this._storage.getItem(StorageKeys.REAL_SKY_GROUPS) : null;
+      const list = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(list)) for (const id of list) { const g = KEY_GROUPS.find((x) => x.id === id); if (g && g.open) this._open.add(id); }
+    } catch (_) { /* a bad value = all closed */ }
+  }
+
+  _saveOpen() {
+    try { if (this._storage) this._storage.setItem(StorageKeys.REAL_SKY_GROUPS, JSON.stringify(KEY_GROUPS.filter((g) => this._open.has(g.id)).map((g) => g.id))); } catch (_) { /* private mode: not saved */ }
+  }
+
+  /** The "military" mark is on (the layer draws rings). False with no layer. */
+  militaryOn() { return !!(this._isMilitary && this._isMilitary()); }
 
   /**
    * The player hides or shows the whole panel (the globe's `-` / `+` steps, DECISIONS §102 row 3). The panel still counts as shown for the layer
@@ -385,29 +512,81 @@ export class RealSkyCard {
     const body = el('div', 'margin-top:3px');
     card.append(head, body);
 
-    // The colour key is also the show/hide switch (owner 2026-11-18, DECISIONS §75 row 4): one tick box per kind; the whole entry
-    // (box + swatch + word) toggles. A 3-column grid: 44 px tall chips on glass, 22 px with a mouse (_renderLegend sets the height).
-    const legend = el('div', 'margin-top:7px;display:grid;grid-template-columns:repeat(3,1fr);gap:2px 4px;font-size:10px;letter-spacing:0;color:#aebbd6');
+    // The colour key is also the show/hide switch (owner 2026-11-18, DECISIONS §75 row 4), in ONE column of three groups (Sky 32, owner 2026-11-24,
+    // DECISIONS §104 row 1): Satellites (working, Starlink, dead, no report, military), Rocket stages, Debris (pieces, unknown), then "reach". A group row
+    // has a tick box (its own tap target), a dot, its word and an open/close arrow; the word and the arrow open it, the box ticks all its kinds. Rows
+    // under an open group are indented. 44 px tall rows on glass, 22 px with a mouse (_renderLegend sets the height).
+    const legend = el('div', 'margin-top:7px;display:grid;grid-template-columns:1fr;gap:2px 4px;font-size:10px;letter-spacing:0;color:#aebbd6');
     legend.id = 'real-sky-key';
-    const legendItems = [];
-    CLASS_NAMES.forEach((n, i) => {   // built in class order (legendItems[i] is class i); appended in LEGEND_ORDER below
-      const item = el('div', 'display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;box-sizing:border-box;min-height:22px;padding:0 3px;border-radius:4px;touch-action:manipulation');
+    const ROW_CSS = 'display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;box-sizing:border-box;min-height:22px;padding:0 3px;border-radius:4px;touch-action:manipulation';
+    const BOX_CSS = 'flex:none;display:inline-block;width:12px;height:12px;box-sizing:border-box;border:1px solid #9fb0d0;border-radius:2px;line-height:10px;text-align:center;font-size:10px;color:#e8eefc';
+    const dotCss = (c) => `flex:none;display:inline-block;width:7px;height:7px;border-radius:50%;background:${c}`;
+    const legendItems = new Array(CLASS_NAMES.length);   // legendItems[i] is class i's row (the Rocket stages group row for the stage class)
+    // A click (mouse or finger) must not leave keyboard focus on a row, or Space (floor 4's approach command) would go to it instead of the game.
+    // A row reached by Tab acts with Enter only; Space is never handled here, so it always reaches InputManager.
+    const wire = (node, act) => {
+      node.addEventListener('click', (ev) => { if (ev && ev.stopPropagation) ev.stopPropagation(); act(); if (typeof node.blur === 'function') node.blur(); });
+      node.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); act(); } });
+    };
+    const kindRow = (i) => {
+      const n = CLASS_NAMES[i];
+      const item = el('div', `${ROW_CSS};margin-left:18px`);
       item.title = `${LEGEND_HINTS[i]} (tap to show or hide)`;
       item.setAttribute('role', 'checkbox');
       item.setAttribute('tabindex', '0');
-      item.setAttribute('aria-label', n);
-      const box = el('span', 'flex:none;display:inline-block;width:12px;height:12px;box-sizing:border-box;border:1px solid #9fb0d0;border-radius:2px;line-height:10px;text-align:center;font-size:10px;color:#e8eefc');
-      const sw = el('span', `flex:none;display:inline-block;width:7px;height:7px;border-radius:50%;background:${CLASS_COLORS[i]}`);
-      const word = el('span', null, LEGEND_LABELS[i]);
-      item.append(box, sw, word);
-      const toggle = () => { if (this._onToggleKind) this._onToggleKind(n); this._renderLegend(); };
-      // A click (mouse or finger) must not leave keyboard focus on the chip, or Space (floor 4's approach command) would go to it
-      // instead of the game. A chip reached by Tab toggles with Enter only; Space is never handled here, so it always reaches InputManager.
-      item.addEventListener('click', () => { toggle(); if (typeof item.blur === 'function') item.blur(); });
-      item.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); toggle(); } });
-      legendItems.push(item);
-    });
-    for (const i of LEGEND_ORDER) legend.append(legendItems[i]);
+      item.setAttribute('aria-label', LEGEND_LABELS[i]);
+      item.append(el('span', BOX_CSS), el('span', `flex:none;display:inline-block;width:7px;height:7px;border-radius:50%;background:${CLASS_COLORS[i]}`), el('span', null, LEGEND_LABELS[i]));
+      wire(item, () => { if (this._onToggleKind) this._onToggleKind(n); this._renderLegend(); });
+      legendItems[i] = item;
+      return item;
+    };
+    // The "military" mark, the last row inside Satellites: a ring, not a dot (DECISIONS §104 row 3). Not a kind: the layer draws the rings; shown only when wired.
+    const milItem = el('div', `${ROW_CSS};margin-left:18px`);
+    milItem.id = 'real-sky-key-military';
+    milItem.title = `${MIL_HINT} (tap to show or hide)`;
+    milItem.setAttribute('role', 'checkbox');
+    milItem.setAttribute('tabindex', '0');
+    milItem.setAttribute('aria-label', MIL_NAME);
+    milItem.append(el('span', BOX_CSS),
+      el('span', `flex:none;display:inline-block;width:9px;height:9px;box-sizing:border-box;border:1px solid ${MIL_COLOR};border-radius:50%;margin:-1px`),
+      el('span', null, MIL_NAME));
+    wire(milItem, () => { if (this._onToggleMilitary) this._onToggleMilitary(); this._renderLegend(); });
+    const groupEls = {};
+    for (const g of KEY_GROUPS) {
+      const row = el('div', ROW_CSS);
+      row.setAttribute('aria-label', g.word);
+      const boxWrap = el('span', 'flex:none;display:flex;align-items:center;justify-content:center;align-self:stretch;width:12px');
+      const box = el('span', BOX_CSS);
+      boxWrap.append(box);
+      const arrow = el('span', 'flex:none;margin-left:auto;padding:0 4px;color:#9fb0d0;font-size:11px;line-height:1', '\u25b8');
+      const kids = [];
+      if (g.open) {
+        row.title = `${g.hint} (tap the box to show or hide; tap the word to open or close)`;
+        row.setAttribute('role', 'button');
+        row.setAttribute('tabindex', '0');
+        row.setAttribute('aria-expanded', 'false');
+        boxWrap.setAttribute('role', 'checkbox');
+        boxWrap.setAttribute('tabindex', '0');
+        boxWrap.setAttribute('aria-label', g.word);
+        boxWrap.title = `${g.hint} (tap to show or hide)`;
+        row.append(boxWrap, el('span', dotCss(g.color)), el('span', null, g.word), arrow);
+        wire(row, () => this.setGroupOpen(g.id, !this._open.has(g.id)));
+        // the box ticks the group; a dash (some kinds ticked) ticks all (setGroupTicked)
+        wire(boxWrap, () => this.setGroupTicked(g.id, this.groupState(g.id) !== 'on'));
+        legend.append(row);
+        for (const n of g.kinds) { const kr = kindRow(CLASS_NAMES.indexOf(n)); kids.push(kr); legend.append(kr); }
+        if (g.id === 'satellites') { kids.push(milItem); legend.append(milItem); }
+      } else {
+        row.title = `${g.hint} (tap to show or hide)`;
+        row.setAttribute('role', 'checkbox');
+        row.setAttribute('tabindex', '0');
+        row.append(boxWrap, el('span', dotCss(g.color)), el('span', null, g.word));
+        wire(row, () => this.setGroupTicked(g.id, this.groupState(g.id) !== 'on'));
+        legendItems[CLASS_NAMES.indexOf(g.kinds[0])] = row;
+        legend.append(row);
+      }
+      groupEls[g.id] = { row, boxWrap, box, arrow, kids };
+    }
     // The last box: the blue see-through band around Earth, her reach (owner 2026-11-24, DECISIONS §103 row 5). Not a kind of object: the switch is
     // wired by main.js (`setReachSwitch`), so it shows only when one is wired.
     const reachItem = el('div', 'display:none;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;box-sizing:border-box;min-height:22px;padding:0 3px;border-radius:4px;touch-action:manipulation');
@@ -441,7 +620,7 @@ export class RealSkyCard {
     d.body.appendChild(root);
     // A size change the render calls do not see (the full credit wording opened, a late font) moves the panel's bottom too.
     if (typeof ResizeObserver !== 'undefined') { try { this._ro = new ResizeObserver(() => this._syncDodge()); this._ro.observe(root); } catch (_) { this._ro = null; } }
-    Object.assign(this._els, { root, input, msg, card, nameEl, dot, body, credit, legend, legendItems, reachItem, fail, hl });
+    Object.assign(this._els, { root, input, msg, card, nameEl, dot, body, credit, legend, legendItems, groupEls, milItem, reachItem, fail, hl });
     // A double-click or double-tap on the object's name turns floor 4's globe to it (two clicks within 350 ms; a click fires for mouse and finger).
     let lastNameClick = -Infinity;
     title.style.cursor = 'pointer';
@@ -661,16 +840,48 @@ export class RealSkyCard {
     // Touch: the six-kind key folds while the Highlight menu or a list is open, so the panel stays within its 342 px (research 2.1)
     e.legend.style.display = this._loadFailed || p1 || (this._glass && this._hlView !== 'closed') ? 'none' : 'grid';
     e.credit.style.display = this._loadFailed || p1 ? 'none' : 'block';
-    CLASS_NAMES.forEach((n, i) => {
-      const hide = (i === CLS_DEAD || i === CLS_WORKING || i === CLS_STARLINK) && !this._statusJoined;   // Starlink is a working satellite: no status, no Starlink
-      const item = e.legendItems[i];
-      item.style.display = hide ? 'none' : 'flex';
-      item.style.minHeight = this._glass ? '44px' : '22px';
-      const off = !!(this._isKindHidden && this._isKindHidden(n));
+    const minH = this._glass ? '44px' : '22px';
+    const tick = (item, off) => {   // a kind row: the box holds a tick or nothing; a row that is off is dimmed
+      item.style.minHeight = minH;
       item.style.opacity = off ? '0.45' : '1';
       item.setAttribute('aria-checked', off ? 'false' : 'true');
       item.children[0].textContent = off ? '' : '\u2713';
+    };
+    for (const g of KEY_GROUPS) {
+      const ge = e.groupEls[g.id];
+      const kinds = this._groupKinds(g);
+      const st = groupState(kinds, (n) => this._hidden(n));
+      const open = g.open && this._open.has(g.id);
+      ge.row.style.display = kinds.length ? 'flex' : 'none';
+      ge.row.style.minHeight = minH;
+      ge.row.style.opacity = st === 'off' ? '0.45' : '1';
+      ge.box.textContent = st === 'on' ? '\u2713' : (st === 'dash' ? '\u2013' : '');
+      const mixed = st === 'dash' ? 'mixed' : (st === 'on' ? 'true' : 'false');
+      if (g.open) {
+        ge.boxWrap.style.width = this._glass ? '40px' : '20px';
+        ge.boxWrap.setAttribute('aria-checked', mixed);
+        ge.row.setAttribute('aria-expanded', open ? 'true' : 'false');
+        ge.arrow.textContent = open ? '\u25be' : '\u25b8';
+        ge.arrow.style.padding = this._glass ? '0 10px' : '0 4px';
+      } else {
+        ge.boxWrap.style.width = this._glass ? '40px' : '20px';
+        ge.row.setAttribute('aria-checked', mixed);
+      }
+    }
+    CLASS_NAMES.forEach((n, i) => {
+      const item = e.legendItems[i];
+      const inGroup = KEY_GROUPS.find((g) => g.open && g.kinds.includes(n));
+      if (!inGroup) return;                                                     // the Rocket stages row was drawn with its group above
+      item.style.display = this._kindInKey(n) && this._open.has(inGroup.id) ? 'flex' : 'none';
+      tick(item, this._hidden(n));
     });
+    const mi = e.milItem;
+    if (mi) {   // the "military" mark: inside Satellites, shown with its handlers while Satellites is open; ticked while the rings are on
+      const onM = this.militaryOn();
+      mi.style.display = this._onToggleMilitary && (!this._hasMilitary || this._hasMilitary()) && this._open.has('satellites') ? 'flex' : 'none';
+      tick(mi, !onM);
+    }
+
     const ri = e.reachItem;
     if (ri) {   // the reach box: shown with its switch, ticked while the band is on
       const sw = this._reachSwitch, offR = !!sw && !sw.isOn();

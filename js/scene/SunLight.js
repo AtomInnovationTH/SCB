@@ -633,6 +633,9 @@ const DEPTH_MASK_MAT = new THREE.MeshBasicMaterial({
 
 const DEPTH_MASK_DIST = Constants.BODY_DEPTH_MASK_DIST;
 
+/** Seconds of real time the seen Sun takes to turn from the stylized sun to the real one (and back) when the camera reaches floor 4 (leaves 4-5). Owner-set in the plan (Sky 32): "about 1.5 s". */
+export const SEEN_SLIDE_S = 1.5;
+
 /**
  * Camera-following bodies (floors 4-5, see SunLight._followsCamera): SunLight.update runs BEFORE the camera moves each frame,
  * so a body placed at (sky offset + camera.position) there would trail the camera by one frame while it zooms or turns.
@@ -680,6 +683,20 @@ export class SunLight {
     this._moonAzOffset = degToRad(110);   // legacy fixed elongation fallback
     this._moonTanDecl = 0.25;                   // legacy y-lift fallback (≈14°)
     this._seedSkyFromClock(new Date());
+
+    // The sun as SEEN (Sky 32, DECISIONS §104 row 5): on floors 4-5 the real Sun (so Earth's day/night line and the drawn Sun sit where the
+    // real ones do at the game date); everywhere else exactly `sunDirection`. DRAWING reads this one (Earth's light, the disc, glare, depth
+    // mask, flares, the directional light, exposure, the camera's shadow blend). GAME logic reads `sunDirection` (the stylized sun) on every
+    // floor: eclipse and sunlit tests, power, heat, shadow timing, the orbit pane and the weather. `_seenW` is the blend, 0 = stylized,
+    // 1 = real; it turns toward 1 while `_followsCamera()` and back to 0 after, over SEEN_SLIDE_S of REAL time (a ride never snaps it).
+    this.seenSunDirection = this.sunDirection.clone();
+    this._seenP = 0;                       // linear progress 0..1 of the slide (the eased weight is `_seenW`)
+    this._seenW = 0;
+    this._seenTurnLast = 0;                // the last frame's turn of the seen direction, degrees (a probe / test reads it)
+    this._seenPrev = new THREE.Vector3();  // last frame's seen direction (turn measure)
+    this._seenPerp = new THREE.Vector3();  // slerp temp: the unit vector at 90° to the stylized sun, toward the real one
+    this._shadowTmp = new THREE.Vector3(); // _isInEarthShadow temps (it ran with two clones a frame)
+    this._shadowPerp = new THREE.Vector3();
 
     this._updateLightPosition();
     scene.add(this.directionalLight);
@@ -732,9 +749,11 @@ export class SunLight {
     // The real Moon on floors 4-5 (owner 2026-11-21, "Hide planets, real Moon"; see _updateMoon / _placeRealMoon).
     this._skyClock = null;                 // () => the dots' sky date, ms (main.js: realSkyLayer.skyDateMs); null = no real Moon
     this._moonRealOn = false;              // the Moon is drawn real this frame (follow floors + a clock)
-    this._realSkyMs = NaN;                 // the clock reading the three vectors below were computed for
+    this._earthClock = null;               // () => the GAME date, ms (main.js: gameClock.dateMs): the date Earth's turn uses; the real Sun is drawn for it
+    this._realSkyMs = NaN;                 // the clock reading the Moon's vector below was computed for
+    this._realSunMs = NaN;                 // the clock reading `_realSunDir` was computed for
     this._moonGeoU = new THREE.Vector3();  // the Moon's geocentric position, scene units, dot frame
-    this._realSunDir = new THREE.Vector3(1, 0, 0); // the real Sun's direction, dot frame (the Moon's lit side)
+    this._realSunDir = new THREE.Vector3(1, 0, 0); // the real Sun's direction, dot frame (the seen Sun and the Moon's lit side)
     this._rmV = new THREE.Vector3();       // camera -> Moon temp
     this._rmDir = new THREE.Vector3();     // unit camera -> Moon temp
     this._moonR0 = 1;                      // the stylized disc's radius at MOON_DIST (set in _createMoon)
@@ -746,6 +765,16 @@ export class SunLight {
    */
   setSkyClock(fn) {
     this._skyClock = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * Hand SunLight the game clock (GameDate.gameClock.dateMs), the clock Earth's turn reads (`gameEarthAngleRad`): the real Sun is drawn
+   * for exactly that date, so the day/night line and Earth's turn can never use two dates (the dots' sky clock can carry a highlight's
+   * own date; the globe never does). Without it the sky clock is used.
+   * @param {(function(): number)|null} fn returns the game date in ms (NaN = unknown)
+   */
+  setEarthClock(fn) {
+    this._earthClock = typeof fn === 'function' ? fn : null;
   }
 
   _createSunDisc(sceneManager) {
@@ -1015,14 +1044,13 @@ export class SunLight {
     // update() recomputes the identical direction (rotateAboutY IS update()'s yaw).
     const d = rotateAboutY(this.sunDirection, yaw);
     this.sunDirection.set(d.x, d.y, d.z).normalize();
+    if (!(this._seenW > 0)) this.seenSunDirection.copy(this.sunDirection);   // floors 0-3: the seen sun is this one
     this._updateLightPosition();
   }
 
   _updateLightPosition() {
     const sunDistance = 200;
-    this.directionalLight.position.copy(
-      this.sunDirection.clone().multiplyScalar(sunDistance)
-    );
+    this.directionalLight.position.copy(this.seenSunDirection).multiplyScalar(sunDistance);
     this.directionalLight.target.position.set(0, 0, 0);
   }
 
@@ -1074,18 +1102,24 @@ export class SunLight {
    * @param {THREE.Vector3} [cameraPos] — player camera position for eclipse check
    * @param {number} [timeFactor=1] — `TimeAuthority.worldSlowFactor()` (main.js): scales ONLY the sun's elapsed increment (the sun's position
    *   in the sky), not the eclipse blend or the exposure adaptation, which stay on `dt` (plan debris-1 C2)
-   * @returns {THREE.Vector3} current sun direction (normalized)
+   * @param {number} [realDt=dt] — the REAL frame delta (s), for the seen Sun's slide on floors 4-5 (it must not stall or race with the
+   *   world clock: held 0, wheels 8x). Omitted = `dt`.
+   * @returns {THREE.Vector3} current STYLIZED sun direction (normalized): the game's sun, on every floor. Earth and the drawn Sun read
+   *   `seenSunDirection` (the real Sun on floors 4-5), see the constructor.
    */
-  update(dt, cameraPos, timeFactor = 1) {
+  update(dt, cameraPos, timeFactor = 1, realDt = dt) {
     this.elapsedTime += dt * timeFactor;
 
     this.directionAt(0, this.sunDirection);
+    this._updateSeenSun(realDt);
 
     this._updateLightPosition();
 
     this._inShadow = false;
     if (cameraPos) {
-      this._inShadow = this._isInEarthShadow(cameraPos);
+      // Visual only (the light's brightness, exposure, the flare): the camera in Earth's shadow of the SEEN sun. The game's shadow
+      // (power, heat, eclipse timing) is the player's own test against the stylized sun.
+      this._inShadow = this._isInEarthShadow(cameraPos, this.seenSunDirection);
       const targetIntensity = this._inShadow ? 0.05 : 1.5;
       this.directionalLight.intensity +=
         (targetIntensity - this.directionalLight.intensity) * Math.min(1, dt * 3);
@@ -1108,8 +1142,8 @@ export class SunLight {
     // (menu/first frames); occlusion then uses _inShadow. Only the sun is
     // special-cased: moon/planets stay origin-centered (floors 1-3; on 4-5 the Moon rides the camera, real, and the planets are hidden).
     const sunPos = this.camera
-      ? this._bodyPos.copy(this.sunDirection).multiplyScalar(Constants.SUN_DIST).add(this.camera.position)
-      : this._bodyPos.copy(this.sunDirection).multiplyScalar(Constants.SUN_DIST);
+      ? this._bodyPos.copy(this.seenSunDirection).multiplyScalar(Constants.SUN_DIST).add(this.camera.position)
+      : this._bodyPos.copy(this.seenSunDirection).multiplyScalar(Constants.SUN_DIST);
     this.sunSprite.position.copy(sunPos);
 
     // Floors 4-5 (camera-following sky): the Sun is at the sky, farther than any Earth surface, so only Earth's angular disc hides it
@@ -1140,19 +1174,19 @@ export class SunLight {
       if (this.camera) {
         const R = Constants.STAR_SPHERE_RADIUS;
         const cam = this.camera.position;
-        const s = cam.dot(this.sunDirection);
+        const s = cam.dot(this.seenSunDirection);
         const disc = R * R - cam.lengthSq() + s * s;
         if (disc <= 0) {
           // Camera at/outside the star shell (not expected in gameplay).
           this._sunDepthMask.visible = false;
         } else {
           const t = (-s + Math.sqrt(disc)) * 0.98;
-          this._sunDepthMask.position.copy(this.sunDirection).multiplyScalar(t).add(cam);
+          this._sunDepthMask.position.copy(this.seenSunDirection).multiplyScalar(t).add(cam);
           this._sunDepthMask.scale.setScalar((t / DEPTH_MASK_DIST) * this._sunMaskK);
           this._sunDepthMask.visible = !sunHidden;
         }
       } else {
-        this._sunDepthMask.position.copy(this.sunDirection).multiplyScalar(DEPTH_MASK_DIST);
+        this._sunDepthMask.position.copy(this.seenSunDirection).multiplyScalar(DEPTH_MASK_DIST);
         this._sunDepthMask.scale.setScalar(1);
         this._sunDepthMask.visible = !sunHidden;
       }
@@ -1203,7 +1237,7 @@ export class SunLight {
     const G = Constants.GLARE_B;
     const earthRad = Math.asin(Constants.EARTH_RADIUS / camDist);
     const toEarth = this._occToEarth.copy(cam).multiplyScalar(-1 / camDist);
-    const ang = Math.acos(clamp(toEarth.dot(this.sunDirection), -1, 1));
+    const ang = Math.acos(clamp(toEarth.dot(this.seenSunDirection), -1, 1));
     const coreRad = 0.5 * G.SUN_CORE_DEG * DEG2RAD;
     const fadeW = Math.min(0.3 * earthRad, G.SUN_LIMB_FADE_DEG * DEG2RAD);
     return clamp((ang - (earthRad + coreRad)) / fadeW, 0, 1);
@@ -1228,10 +1262,10 @@ export class SunLight {
 
     // Camera-relative sun position, as in _updateSunDisc.
     const camPos = this.camera.position;
-    const sunPos = this._bodyPos.copy(this.sunDirection).multiplyScalar(Constants.SUN_DIST).add(camPos);
+    const sunPos = this._bodyPos.copy(this.seenSunDirection).multiplyScalar(Constants.SUN_DIST).add(camPos);
 
     this._camForward.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
-    const sunDot = this._camForward.dot(this.sunDirection);
+    const sunDot = this._camForward.dot(this.seenSunDirection);
 
     const flareFade = THREE.MathUtils.smoothstep(sunDot, 0.3, 0.9);
 
@@ -1313,8 +1347,77 @@ export class SunLight {
   }
 
   /**
-   * The real Moon's and Sun's places at the dots' sky date (floors 4-5), in the SKY-DOT frame (Ephemeris.raDecToDotFrame: the frame
-   * SkyPropagator puts the satellites in; no GMST), into `_moonGeoU` (geocentric, scene units) and `_realSunDir`. Recomputed only when the
+   * Set `seenSunDirection` for this frame (Sky 32, §104 row 5): the stylized sun off floors 4-5, the real Sun on them, and a great-circle
+   * turn between the two over SEEN_SLIDE_S of real time when the camera reaches floor 4 (`_followsCamera()` flips on arrival, not during
+   * the ride) or leaves floor 5. Floors 4 <-> 5 keep the real Sun. It refreshes the real Sun ITSELF before anything reads it
+   * (`update` draws the disc before `_updateMoon` ever refreshes it, and `_realSunDir` starts as (1,0,0)). While the slide back runs
+   * the real Sun keeps being refreshed (the clock keeps ticking); with no clock, or no finite date, the seen sun stays the stylized one.
+   * Allocation-free. Floors 0-3 with no slide running: an exact copy of `sunDirection` (a test pins it).
+   * @param {number} realDt real seconds since the last frame (0 = hold the slide)
+   */
+  _updateSeenSun(realDt) {
+    const follow = this._followsCamera();
+    const realOk = (follow || this._seenP > 0) ? this._refreshRealSun() : false;
+    const target = (follow && realOk) ? 1 : 0;
+    const step = Number.isFinite(realDt) && realDt > 0 ? realDt / SEEN_SLIDE_S : 0;
+    if (this._seenP < target) this._seenP = Math.min(target, this._seenP + step);
+    else if (this._seenP > target) this._seenP = Math.max(target, this._seenP - step);
+    if (!realOk) { this._seenP = 0; }
+    const p = this._seenP;
+    this._seenW = p * p * (3 - 2 * p);   // smoothstep: no kink at either end
+    const out = this.seenSunDirection;
+    const prev = this._seenPrev.copy(out);
+    const a = this.sunDirection;
+    if (this._seenW <= 0) {
+      out.copy(a);
+    } else if (this._seenW >= 1) {
+      out.copy(this._realSunDir);
+    } else {
+      // Slerp a -> b by W. `perp` is the unit vector at 90° to a, toward b; two nearly opposite suns have no one direction toward b, so any
+      // perpendicular to a does (the turn is then 180° whichever way it goes).
+      const b = this._realSunDir;
+      const d = clamp(a.dot(b), -1, 1);
+      const theta = Math.acos(d);
+      const perp = this._seenPerp.copy(b).addScaledVector(a, -d);
+      let pl = perp.length();
+      if (pl < 1e-6) {
+        perp.set(0, 1, 0).addScaledVector(a, -a.y);
+        pl = perp.length();
+        if (pl < 1e-6) { perp.set(1, 0, 0).addScaledVector(a, -a.x); pl = perp.length(); }
+      }
+      perp.multiplyScalar(1 / pl);
+      const phi = this._seenW * theta;
+      out.copy(a).multiplyScalar(Math.cos(phi)).addScaledVector(perp, Math.sin(phi)).normalize();
+    }
+    this._seenTurnLast = Math.acos(clamp(prev.dot(out), -1, 1)) / DEG2RAD;
+  }
+
+  /**
+   * The real Sun's direction at the GAME date (the clock Earth's turn uses; the sky clock if none was given), into `_realSunDir`, dot
+   * frame. Recomputed only when the clock reading changes. Cost: one `sunEphemeris` (a few dozen flops) + one `raDecToDotFrame`,
+   * measured in the Sky 32 log; it runs only on floors 4-5 and during the slide back.
+   * @returns {boolean} false without a clock or a finite date
+   */
+  _refreshRealSun() {
+    const clock = this._earthClock || this._skyClock;
+    if (!clock) return false;
+    const ms = clock();
+    if (!Number.isFinite(ms)) return false;
+    // The Sun moves ~1° a day against the stars (0.00001° a second), so it is recomputed only when the date has moved a second: at the
+    // usual 1x-10x the per-frame cost (a Date, two small objects) is paid once a second; at the 1000x button it is one a frame.
+    if (!(Math.abs(ms - this._realSunMs) < 1000)) {
+      this._realSunMs = ms;
+      const sun = sunEphemeris(new Date(ms));
+      const s = raDecToDotFrame(sun.raDeg, sun.declDeg);
+      this._realSunDir.set(s.x, s.y, s.z);
+    }
+    return true;
+  }
+
+  /**
+   * The real Moon's place at the dots' sky date (floors 4-5), in the SKY-DOT frame (Ephemeris.raDecToDotFrame: the frame
+   * SkyPropagator puts the satellites in; no GMST), into `_moonGeoU` (geocentric, scene units); the real Sun (`_refreshRealSun`) too, for
+   * its lit side. Recomputed only when the
    * clock reading changes (a held clock costs nothing). The time moves exactly as the dots do (same world clock, so the floor-4 time slider
    * speeds the Moon up too).
    * @returns {boolean} false without a clock or a date: the stylized Moon stays
@@ -1326,14 +1429,11 @@ export class SunLight {
     if (!Number.isFinite(ms)) return false;
     if (ms !== this._realSkyMs) {
       this._realSkyMs = ms;
-      const date = new Date(ms);
-      const moon = moonEphemeris(date);
-      const sun = sunEphemeris(date);
+      const moon = moonEphemeris(new Date(ms));
       const m = raDecToDotFrame(moon.raDeg, moon.declDeg);
       this._moonGeoU.set(m.x, m.y, m.z).multiplyScalar(moon.distKm * Constants.SCENE_SCALE);
-      const s = raDecToDotFrame(sun.raDeg, sun.declDeg);
-      this._realSunDir.set(s.x, s.y, s.z);
     }
+    this._refreshRealSun();
     return true;
   }
 
@@ -1591,7 +1691,7 @@ export class SunLight {
     if (!this.camera || !this.renderer) return;
 
     this._camForward.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
-    const sunDot = this._camForward.dot(this.sunDirection);
+    const sunDot = this._camForward.dot(this.seenSunDirection);
 
     // Under ACES the filmic shoulder makes values >1 usable. Away-from-sun is only
     // 1.05: a bigger boost fires exactly when the day-side disc is fully lit and
@@ -1672,13 +1772,13 @@ export class SunLight {
     return THREE.MathUtils.clamp((angle - earthAngularRadius) / (0.3 * earthAngularRadius), 0, 1);
   }
 
-  /** Earth's shadow, cylindrical approximation; `pos` is world. */
-  _isInEarthShadow(pos) {
-    const sunDot = pos.dot(this.sunDirection);
+  /** Earth's shadow, cylindrical approximation; `pos` is world; `dir` the sun to test against (the stylized one unless given). */
+  _isInEarthShadow(pos, dir = this.sunDirection) {
+    const sunDot = pos.dot(dir);
     if (sunDot > 0) return false;
 
-    const projOnSun = this.sunDirection.clone().multiplyScalar(sunDot);
-    const perpendicular = pos.clone().sub(projOnSun);
+    const projOnSun = this._shadowTmp.copy(dir).multiplyScalar(sunDot);
+    const perpendicular = this._shadowPerp.copy(pos).sub(projOnSun);
     return perpendicular.length() < Constants.EARTH_RADIUS;
   }
 

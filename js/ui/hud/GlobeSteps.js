@@ -3,12 +3,15 @@
  * and 3). From the fullest view to the emptiest:
  *
  *   [panes `+` brought in past the arrival view] … [+1: the score bar] · 0: the view at arrival · −1: the object panel hidden ·
- *   −2: the time buttons hidden · −3 …: one ticked kind box unticked per press, the lowest box first, until none is ticked.
+ *   −2: the time buttons hidden · −3 …: one ticked box unticked per press, the lowest box first, until none is ticked. The boxes are the key's
+ *   three groups (a group is ONE box, open or closed) and "reach": from the bottom reach, Debris, Rocket stages, Satellites (Sky 32, owner
+ *   2026-11-24, DECISIONS §104 row 4). The "military" mark is never one of them.
  *
  * `-` moves one step down, `+` one step up. Above 0 the steps are the ones the pane ladder already had (the mother box and the other
  * panes the room leaves out; PaneDensity.hideRung / up()); the score bar is the first `+` from 0 and the last `-` before 0 (the globe's
- * room no longer shows it, FloorMask `score: 'gone'`). Below 0 each `+` undoes the last step it can: the last unticked box is ticked again,
- * then the time buttons come back, then the panel. A tapped dot shows the panel again by itself (RealSkyCard.setObject): its step is then
+ * room no longer shows it, FloorMask `score: 'gone'`). Below 0 each `+` undoes the last step it can: the last unticked box is ticked again
+ * (a group comes back exactly as it was before that `-`: a kind the player had unticked stays unticked, which `setTicked(group, true)` does by
+ * remembering), then the time buttons come back, then the panel. A tapped dot shows the panel again by itself (RealSkyCard.setObject): its step is then
  * stale and skipped. The rails, the game message line and the page dots are never touched at any step.
  *
  * Leaving the globe (`sync(false)`) gives the panel and the time buttons back and forgets the steps; the ticks stay as the player left them
@@ -26,8 +29,9 @@
  * @property {() => object|null} mask                the FloorMask (extraRungGroups(), setAttributePane(), attributePaneShown())
  * @property {{isShown: () => boolean, setHidden: (hidden: boolean) => void}} panel   the object panel (shown = on screen and not hidden by a step)
  * @property {{isHidden: () => boolean, setHidden: (hidden: boolean) => void}} clock  the time buttons
- * @property {{ticked: () => string[], setTicked: (name: string, on: boolean) => void}} kinds  the kind boxes: `ticked()` lists the ticked boxes that show,
- *   top to bottom in the order they are drawn
+ * @property {{ticked: () => string[], setTicked: (name: string, on: boolean) => void}} kinds  the key's boxes (the three groups and "reach"): `ticked()` lists the
+ *   ticked boxes that show, top to bottom in the order they are drawn; `setTicked(name, false)` unticks a box and remembers what was ticked in it,
+ *   `setTicked(name, true)` brings that back
  */
 
 export class GlobeSteps {

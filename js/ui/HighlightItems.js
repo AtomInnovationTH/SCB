@@ -132,7 +132,7 @@ export function buildFamous(cat, hl) {
 const COUNTRY_KINDS = [
   { cls: CLS_WORKING, one: 'working satellite', many: 'working satellites' },
   { cls: CLS_DEAD, one: 'dead satellite', many: 'dead satellites' },
-  { cls: CLS_SATELLITE, one: 'satellite, status not known', many: 'satellites, status not known' },
+  { cls: CLS_SATELLITE, one: 'satellite, no report on whether it works', many: 'satellites, no report on whether they work' },   // Sky 32: the key's "no report" kind
   { cls: CLS_UNKNOWN, one: 'unknown object', many: 'unknown objects' },
 ];
 
@@ -239,10 +239,11 @@ export function buildHeaviest(cat) {
   for (const g of groups) {
     const hi = g.list[0][c.massKg], lo = g.list[g.list.length - 1][c.massKg];
     const kg = hi === lo ? `${fmtInt(hi)} kg` : `${fmtInt(lo)} to ${fmtInt(hi)} kg`;
-    const kind = g.cls === CLS_STAGE ? 'stage' : g.cls === CLS_DEAD ? 'dead satellite' : g.cls === CLS_DEBRIS ? 'debris' : g.cls === CLS_SATELLITE ? 'satellite' : 'object';
+    const kind = g.cls === CLS_STAGE ? 'stage' : g.cls === CLS_DEAD ? 'dead satellite' : g.cls === CLS_DEBRIS ? 'debris' : g.cls === CLS_SATELLITE ? 'satellite, no report' : 'object';   // Sky 32: "no report" is the key's word for this kind
     const n = g.list.length;
+    const kindMany = g.cls === CLS_SATELLITE ? 'satellites, no report' : `${kind}s`;
     rows.push({
-      key: `heavy-${g.list[0][c.norad]}`, label: n > 1 ? `${g.name} \u00d7 ${n}` : String(g.name), sub: `${kg} \u00b7 ${n > 1 && kind !== 'debris' ? `${kind}s` : kind}`,
+      key: `heavy-${g.list[0][c.norad]}`, label: n > 1 ? `${g.name} \u00d7 ${n}` : String(g.name), sub: `${kg} \u00b7 ${n > 1 && kind !== 'debris' ? kindMany : kind}`,
       norads: g.list.map((x) => x[c.norad]), first: g.list[0][c.norad], count: n,
     });
     names.set(g.list[0][c.norad], n > 1 ? `${g.name} \u00d7 ${n}` : String(g.name));

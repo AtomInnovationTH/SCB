@@ -21,7 +21,7 @@ export const Constants = {
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as ?v=<DATA_VERSION>). Deliberately SEPARATE
   // from VERSION: a curated-content edit must invalidate cached JSON without moving the release number. Bump it on
   // every ./data/ content change; leave VERSION for actual releases.
-  DATA_VERSION: '1125',   // Sky 28 (11-24): data/highlights.json Famous 11 entries, `short`, `names` (was 1124: Sky 23, sky.json State column, new highlights.json)
+  DATA_VERSION: '1126',   // Sky 32 (11-25): data/sky.json `mil` field (GCAT payload Class D) (was 1125: Sky 28, data/highlights.json Famous 11 entries, `short`, `names`)
   // owner 2026-09-08: the T1 nose-collar card is the DOCKING COLLAR card (docking_berthing.hardwareNames). The DAUGHTER
   // STRUTS card (daughter cradle struts callout) was appended to that list later, no entries added: DECISIONS §13 r4.
 
