@@ -21,7 +21,7 @@ export const Constants = {
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as ?v=<DATA_VERSION>). Deliberately SEPARATE
   // from VERSION: a curated-content edit must invalidate cached JSON without moving the release number. Bump it on
   // every ./data/ content change; leave VERSION for actual releases.
-  DATA_VERSION: '1127',   // Reality 13 G4 (11-25): data/codex.json gas text (a bought gas tool takes a catch's gas, not instant) (was 1126: Sky 32 (11-25): data/sky.json `mil` field (GCAT payload Class D) (was 1125: Sky 28, data/highlights.json Famous 11 entries, `short`, `names`))
+  DATA_VERSION: '1128',   // Sky 33 (11-25): data/sky.json `fam` field (family code) (was 1127: Reality 13 G4 (11-25): data/codex.json gas text (a bought gas tool takes a catch's gas, not instant) (was 1126: Sky 32 (11-25): data/sky.json `mil` field (GCAT payload Class D) (was 1125: Sky 28, data/highlights.json Famous 11 entries, `short`, `names`)))
   // owner 2026-09-08: the T1 nose-collar card is the DOCKING COLLAR card (docking_berthing.hardwareNames). The DAUGHTER
   // STRUTS card (daughter cradle struts callout) was appended to that list later, no entries added: DECISIONS §13 r4.
 
@@ -5622,8 +5622,9 @@ export const Constants = {
     // (`_coach`) or result line (`_result`, 2026-11-08) is never the one skipped, so if every waiting non-warning line is one of them they may wait up to
     // PANE_QUEUE_MAX_COACH; past that the oldest non-warning line is skipped even if it is a coach line.
     PANE_MIN_SHOW_S: 3,
-    // owner 2026-11-17 (docs/DECISIONS.md §74 row 2): on floors 4-5 the box is hidden by default and a NEW message shows it for
-    // this long (each queued message gets its own time, so also the release gap on those floors), then it hides again.
+    // owner 2026-11-25 (docs/DECISIONS.md §105 row 5, replacing §74 row 2): on floors 4-5 the box is hidden by default and only a
+    // WARNING (amber or red) shows it, for this long (each queued line gets its own time, so also the release gap on those floors),
+    // then it hides again; an ordinary line goes into the `+` log silently.
     PANE_FAR_SHOW_S: 6,
     PANE_QUEUE_MAX: 4,
     PANE_QUEUE_MAX_COACH: 8,

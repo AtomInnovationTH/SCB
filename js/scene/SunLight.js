@@ -695,6 +695,8 @@ export class SunLight {
     this._seenTurnLast = 0;                // the last frame's turn of the seen direction, degrees (a probe / test reads it)
     this._seenPrev = new THREE.Vector3();  // last frame's seen direction (turn measure)
     this._seenPerp = new THREE.Vector3();  // slerp temp: the unit vector at 90° to the stylized sun, toward the real one
+    this._seenAx = 0; this._seenAy = 0; this._seenAz = 0;   // the slide's turn axis, picked once when the slide starts (`_seenAxisOn`)
+    this._seenAxisOn = false;
     this._shadowTmp = new THREE.Vector3(); // _isInEarthShadow temps (it ran with two clones a frame)
     this._shadowPerp = new THREE.Vector3();
 
@@ -752,6 +754,7 @@ export class SunLight {
     this._earthClock = null;               // () => the GAME date, ms (main.js: gameClock.dateMs): the date Earth's turn uses; the real Sun is drawn for it
     this._realSkyMs = NaN;                 // the clock reading the Moon's vector below was computed for
     this._realSunMs = NaN;                 // the clock reading `_realSunDir` was computed for
+    this._realSunDate = new Date(0);       // the one Date `_refreshRealSun` hands to `sunEphemeris` (reused, never rebuilt)
     this._moonGeoU = new THREE.Vector3();  // the Moon's geocentric position, scene units, dot frame
     this._realSunDir = new THREE.Vector3(1, 0, 0); // the real Sun's direction, dot frame (the seen Sun and the Moon's lit side)
     this._rmV = new THREE.Vector3();       // camera -> Moon temp
@@ -1370,22 +1373,36 @@ export class SunLight {
     const a = this.sunDirection;
     if (this._seenW <= 0) {
       out.copy(a);
+      this._seenAxisOn = false;
     } else if (this._seenW >= 1) {
       out.copy(this._realSunDir);
+      this._seenAxisOn = false;
     } else {
-      // Slerp a -> b by W. `perp` is the unit vector at 90° to a, toward b; two nearly opposite suns have no one direction toward b, so any
-      // perpendicular to a does (the turn is then 180° whichever way it goes).
+      // Slerp a -> b by W. `perp` is the unit vector at 90° to a, toward b. While there is a clear way toward b it is taken live, so the
+      // slide lands exactly on the real Sun (a fixed axis drifted off it while the stylized sun moved, and snapped 0.3° at 1x, 2.3° at 8x on
+      // the landing frame: Sky 33 review). It is also remembered: two nearly opposite suns have no one direction toward b, and then the last
+      // clear one is kept (re-squared to the current a), so the turn never jumps between "toward b", y and x as the suns drift past the
+      // threshold (the Sky 32 review's wobble). A slide that starts nearly opposite picks y (or x) ONCE.
       const b = this._realSunDir;
       const d = clamp(a.dot(b), -1, 1);
       const theta = Math.acos(d);
-      const perp = this._seenPerp.copy(b).addScaledVector(a, -d);
+      const perp = this._seenPerp;
+      perp.copy(b).addScaledVector(a, -d);
       let pl = perp.length();
-      if (pl < 1e-6) {
+      if (pl > 1e-3) {
+        this._seenAx = perp.x / pl; this._seenAy = perp.y / pl; this._seenAz = perp.z / pl;   // plain numbers: no per-slide object
+        this._seenAxisOn = true;
+      } else if (!this._seenAxisOn) {
         perp.set(0, 1, 0).addScaledVector(a, -a.y);
         pl = perp.length();
         if (pl < 1e-6) { perp.set(1, 0, 0).addScaledVector(a, -a.x); pl = perp.length(); }
+        this._seenAx = perp.x / pl; this._seenAy = perp.y / pl; this._seenAz = perp.z / pl;
+        this._seenAxisOn = true;
       }
-      perp.multiplyScalar(1 / pl);
+      perp.set(this._seenAx, this._seenAy, this._seenAz);
+      perp.addScaledVector(a, -perp.dot(a));
+      const pl2 = perp.length();
+      perp.multiplyScalar(pl2 > 1e-6 ? 1 / pl2 : 1);
       const phi = this._seenW * theta;
       out.copy(a).multiplyScalar(Math.cos(phi)).addScaledVector(perp, Math.sin(phi)).normalize();
     }
@@ -1404,10 +1421,13 @@ export class SunLight {
     const ms = clock();
     if (!Number.isFinite(ms)) return false;
     // The Sun moves ~1° a day against the stars (0.00001° a second), so it is recomputed only when the date has moved a second: at the
-    // usual 1x-10x the per-frame cost (a Date, two small objects) is paid once a second; at the 1000x button it is one a frame.
+    // usual 1x-10x the per-frame cost (two small objects) is paid once a second; at the 1000x button it is one a frame. The Date is one
+    // object reused (`setTime`): `sunEphemeris` only reads it, so no Date is built per recompute (Sky 32 review).
     if (!(Math.abs(ms - this._realSunMs) < 1000)) {
       this._realSunMs = ms;
-      const sun = sunEphemeris(new Date(ms));
+      if (!this._realSunDate) this._realSunDate = new Date(0);
+      this._realSunDate.setTime(ms);
+      const sun = sunEphemeris(this._realSunDate);
       const s = raDecToDotFrame(sun.raDeg, sun.declDeg);
       this._realSunDir.set(s.x, s.y, s.z);
     }

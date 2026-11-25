@@ -89,6 +89,8 @@ export class RailIndicator {
     this._toast = null;
     this._notches = [];   // per-floor { el, fill, _cur, _pct, _deny, _denyTimer } (index 0 = F1)
     this._visible = false;
+    /** Kept out of sight by the caller (setSuppressed): opacity 0, no pointer, no wake lifts it. */
+    this._suppressed = false;
     this._built = false;
     this._toastTimer = null;
     // Reused notchState() output: refresh() runs per frame, so no per-notch allocation.
@@ -302,17 +304,41 @@ export class RailIndicator {
     this._root = root;
   }
 
-  /** Show the rail (builds on first show); wakes the edge chrome and applies the phase at once. */
+  /** Show the rail (builds on first show); wakes the edge chrome and applies the phase at once. A suppressed rail stays invisible. */
   show() {
     this._build();
     this._visible = true;
-    if (this._root) this._root.style.opacity = '1';
+    if (this._root) this._root.style.opacity = this._suppressed ? '0' : '1';
     if (this._edgeChrome) {
       const now = this._clock();
       this._edgeChrome.wake('rail', now);
       if (this._root) this._applyPhase(now);
     }
   }
+
+  /**
+   * Keep the rail out of sight on one floor (DECISIONS §105 row 5: floor 4 after the player's first visit; main.js decides when).
+   * While on: opacity 0 through the rail's own fade transition (no pop), no rung takes the pointer, and nothing lifts it - not
+   * `show()`, an edge wake, the sim-speed wake, a charge or a touch screen's always-awake rule. The rail keeps its place in the
+   * layout: `leftPx()` / `bottomPx()` still answer (RangeMap and the hull callouts read them), and the dodge keeps measuring.
+   * Off again: the rail comes back as `show()` leaves it. Write-on-change, so the per-frame call is free.
+   * @param {boolean} on
+   */
+  setSuppressed(on) {
+    const want = !!on;
+    if (want === this._suppressed) return;
+    this._suppressed = want;
+    if (want) {
+      if (this._root) this._root.style.opacity = '0';
+      this._phase = null;   // the next un-suppress re-applies the phase
+      this._dropClickable();
+    } else if (this._visible) {
+      this.show();
+    }
+  }
+
+  /** @returns {boolean} whether the rail is being kept out of sight (setSuppressed) */
+  isSuppressed() { return this._suppressed; }
 
   /** Hide the rail (clears denial feedback); resets the cached phase so the next show re-applies (hide() is the menu, not a sleep). */
   hide() {
@@ -321,6 +347,11 @@ export class RailIndicator {
     this._clearDenied();
     this._phase = null;
     // A hidden rail (opacity 0) must not take clicks: drop every rung's clickable state (the next refresh sets it again).
+    this._dropClickable();
+  }
+
+  /** @private No rung takes the pointer (the rail is hidden or suppressed); the next refresh sets them again when it may. */
+  _dropClickable() {
     for (const n of this._notches) {
       if (!n || !n._clickable) continue;
       n._clickable = false;
@@ -380,7 +411,7 @@ export class RailIndicator {
         n._pct = fillPct;
       }
       // The floor 4 <-> 5 rung takes the pointer (write-on-change); every other rung stays pass-through.
-      const clickable = !!this._onNotchClick && RailIndicator.notchClickable(state, i + 1);
+      const clickable = !this._suppressed && !!this._onNotchClick && RailIndicator.notchClickable(state, i + 1);
       if (n._clickable !== clickable) {
         n._clickable = clickable;
         n.el.style.pointerEvents = clickable ? 'auto' : 'none';
@@ -439,7 +470,7 @@ export class RailIndicator {
    * @param {number} now - caller clock (the chrome reads it)
    */
   _applyPhase(now) {
-    if (!this._edgeChrome || !this._root) return;
+    if (!this._edgeChrome || !this._root || this._suppressed) return;
     let ph = this._edgeChrome.phase('rail', now);
     // On glass the rail is the only thing that says which floor you are on (floors 1-2 have no caption), and an edge
     // tap to wake it is not discoverable: once revealed (the mission-1 quiet state is its own CSS attribute) it never

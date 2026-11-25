@@ -204,6 +204,10 @@
        discipline); `+`, any ride or a fresh engage clears the attribute. */
     body[data-pure-scenery] #ladder-workbench-tab,
     body[data-pure-scenery] #build-stamp { display: none !important; }
+    /* No floor-1 buttons over the opening dive (owner 2026-11-25, DECISIONS §107): main.js sets data-intro-dive while the
+       dive, the dwell and the pull are in flight. visibility (not display) keeps their layout for FloorMask's measures. */
+    body[data-intro-dive] #hud-f1-bar,
+    body[data-intro-dive] #hud-f1-help { visibility: hidden !important; pointer-events: none !important; }
 
     /* === HUD OVERLAY === */
     #hud-overlay {

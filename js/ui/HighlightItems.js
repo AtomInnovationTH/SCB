@@ -8,6 +8,8 @@
  *                      left out, listed by kind with the biggest named; "+ stages" and "+ debris" add those kinds;
  *   Heaviest leftovers `isHeavyRow` (over 1,000 kg, not working, mean height under 2,000 km): all of them lit, the heaviest 25 listed
  *                      grouped by family.
+ *   Families           Navigation, Weather, Internet fleets, Spy satellites (the catalogue's `fam` column), People on board (data/highlights.json
+ *                      `crew`): working ones lit first, "+ dead" adds the rest (Sky 33, DECISIONS §105 rows 1-3).
  *
  * Nothing here is made up: names, masses and owners are the catalogue's; a row with no mass says nothing about mass.
  *
@@ -19,10 +21,10 @@ import { isHeavyRow } from './SkyLook.js';
 export const ID_FAMOUS = 'menu-famous';
 export const ID_COUNTRY = 'menu-country';
 export const ID_HEAVY = 'menu-heavy';
-/** The ids of the three items, in menu order. */
+/** The ids of the three items, in menu order (the five Families come after them: FAMILY_IDS). */
 export const ITEM_IDS = [ID_FAMOUS, ID_COUNTRY, ID_HEAVY];
-/** True for an id that is one of this menu's items (another item's highlight is not the menu's to list). */
-export const isMenuId = (id) => ITEM_IDS.includes(id);
+/** True for an id that is one of this menu's items, a family included (another item's highlight is not the menu's to list). */
+export const isMenuId = (id) => ITEM_IDS.includes(id) || FAMILY_IDS.includes(id);
 
 /** How many heavy objects the list shows (grouped by family into a few rows; all of them are lit). */
 export const HEAVY_LIST_TOP = 25;
@@ -255,14 +257,169 @@ export function buildHeaviest(cat) {
 }
 
 /**
- * The menu's items, in order, each null-free (an item the data cannot give is left out).
+ * The menu's items, in order, each null-free (an item the data cannot give is left out): Famous, Your country, Heaviest leftovers, then the
+ * Families (`group: 'families'`; the card draws them under a "Families" row).
  * @param {object|null} cat `layer.catalogue()` @param {object|null} hl `layer.highlights()` @param {string|null} flag the language's flag code
  * @param {{stages?:boolean, debris?:boolean}} [extras] the Your country extras now on
+ * @param {{joined?:boolean, famDead?:string|null}} [opts] `joined` = the catalogue's working / dead status is trusted (default: the data's own
+ *   `statusJoined`); `famDead` = the id of the family whose "+ dead" is on (the card keeps that state)
  * @returns {Array<object>}
  */
-export function buildItems(cat, hl, flag, extras) {
+export function buildItems(cat, hl, flag, extras, opts = {}) {
   if (!cat || !Array.isArray(cat.rows)) return [];
-  return [buildFamous(cat, hl), flag ? buildCountry(cat, hl, flag, extras) : null, buildHeaviest(cat)].filter(Boolean);
+  const joined = typeof opts.joined === 'boolean' ? opts.joined : cat.statusJoined !== false;
+  return [buildFamous(cat, hl), flag ? buildCountry(cat, hl, flag, extras) : null, buildHeaviest(cat), ...buildFamilies(cat, hl, { joined, famDead: opts.famDead || null })].filter(Boolean);
+}
+
+/* ---------------------------------------------------------------- Families (Sky 33, DECISIONS §105 rows 1-3)
+ * Five rows under "Families": Navigation, Weather, Internet fleets, Spy satellites, People on board. A family lights its working satellites
+ * first; its last list row "+ dead (N)" adds the ones that stopped working or have no report. The code of each satellite is the catalogue's
+ * `fam` column (scripts/skyPack.mjs `FAM`); People on board is the dated hand list in data/highlights.json `crew`. */
+
+export const ID_FAM_NAV = 'fam-nav', ID_FAM_WEATHER = 'fam-weather', ID_FAM_NET = 'fam-net', ID_FAM_SPY = 'fam-spy', ID_FAM_CREW = 'fam-crew';
+/** The ids of the five family items, in menu order. */
+export const FAMILY_IDS = [ID_FAM_NAV, ID_FAM_WEATHER, ID_FAM_NET, ID_FAM_SPY, ID_FAM_CREW];
+
+const HONESTY_PUBLIC = 'From the public catalogue of 17 Nov 2026; a few new satellites have no job listed yet.';
+const HONESTY_SPY = 'Countries keep some spy satellites secret; these are the ones in the public list.';
+const COUNTRY_TOP = 3;
+
+/** Plain names for the GCAT State codes the country rows can show (anything else is shown by its code); the Soviet Union rows count as Russia. */
+const STATE_NAMES = {
+  US: 'United States', CN: 'China', RU: 'Russia', SU: 'Russia', F: 'France', J: 'Japan', IN: 'India', UK: 'United Kingdom', D: 'Germany', I: 'Italy',
+  KR: 'South Korea', TW: 'Taiwan', E: 'Spain', CA: 'Canada', 'I-EUM': 'EUMETSAT (Europe)', 'I-ESA': 'ESA (Europe)', SG: 'Singapore', TR: 'Turkey',
+  MA: 'Morocco', EG: 'Egypt', DZ: 'Algeria', NL: 'Netherlands', P: 'Portugal', AU: 'Australia', UAE: 'United Arab Emirates', KP: 'North Korea',
+};
+const stateName = (code) => STATE_NAMES[code] || code;
+/** The state codes that read as the same country (a row's `state` for the Soviet Union and for Russia). */
+const stateKey = (code) => (code === 'SU' ? 'RU' : code);
+
+/** The groups of a code family: the list rows. `codes` = the `fam` values it takes; `rows` = [fam code, label, note]; or `by: 'state'` (the top countries). */
+const FAMILY_DEFS = [
+  { id: ID_FAM_NAV, title: 'Navigation', honesty: HONESTY_PUBLIC,
+    tag: 'Satellites that tell phones, ships and planes where they are: GPS (USA), GLONASS (Russia), Galileo (Europe), BeiDou (China).',
+    rows: [[11, 'GPS', 'the US system'], [12, 'GLONASS', 'the Russian system'], [13, 'Galileo', 'the European system'], [14, 'BeiDou', 'the Chinese system'],
+      [19, 'Other navigation', 'India, Japan and older systems']] },
+  { id: ID_FAM_WEATHER, title: 'Weather', honesty: HONESTY_PUBLIC, by: 'state', codes: [20],
+    tag: 'Satellites that watch clouds, storms and the air for weather forecasts.' },
+  { id: ID_FAM_NET, title: 'Internet fleets', honesty: HONESTY_PUBLIC,
+    tag: 'Big fleets that carry internet and phone links from space: OneWeb, Kuiper, Qianfan, Guowang, Iridium. Starlink has its own box.',
+    rows: [[31, 'OneWeb', 'a British fleet'], [32, 'Kuiper', 'Amazon\u2019s fleet'], [33, 'Qianfan', 'a Chinese fleet'], [34, 'Guowang', 'a Chinese fleet'], [35, 'Iridium', 'phone links']] },
+  { id: ID_FAM_SPY, title: 'Spy satellites', honesty: HONESTY_SPY, by: 'state', codes: [40],
+    tag: 'Military satellites that take pictures, listen to radio signals or watch for missile launches.' },
+];
+for (const d of FAMILY_DEFS) if (!d.codes) d.codes = d.rows.map((r) => r[0]);
+
+const _famCache = new WeakMap();
+/** The catalogue's rows per `fam` code (kept per rows array): Map code -> rows in catalogue order. null when the data has no `fam` column. */
+function familyRows(cat) {
+  let m = _famCache.get(cat.rows);
+  if (m === undefined) {
+    const fi = (cat.fields || []).indexOf('fam');
+    if (fi < 0) m = null;
+    else { m = new Map(); for (const r of cat.rows) { const k = r[fi]; if (k) { if (!m.has(k)) m.set(k, []); m.get(k).push(r); } } }
+    _famCache.set(cat.rows, m);
+  }
+  return m;
+}
+
+/** "GPS · 31" (a count of 1 stays bare in People on board: "Soyuz MS-29 · 1" would say nothing). */
+const withCount = (label, n) => `${label} \u00b7 ${fmtInt(n)}`;
+
+/** One code family as an item, or null when none of its satellites is in the data. */
+function buildCodeFamily(cat, def, byCode, joined, dead) {
+  const c = columns(cat);
+  const members = [];
+  for (const code of def.codes) for (const r of byCode.get(code) || []) members.push(r);
+  if (members.length === 0) return null;
+  members.sort((a, b) => a[c.norad] - b[c.norad]);
+  // statuses not trusted: every member is lit and nothing is said about working; else the working ones, and "+ dead" adds the rest
+  const working = joined ? members.filter((r) => r[c.cls] === CLS_WORKING) : members;
+  const rest = joined ? members.filter((r) => r[c.cls] !== CLS_WORKING) : [];
+  const on = joined && rest.length > 0 && dead === true;
+  const lit = on ? [...working, ...rest] : working;
+  const names = new Map(), rows = [];
+  const isRest = new Set(rest.map((r) => r[c.norad]));
+  /** A list row for a group of lit rows: the working ones first, then the rest. */
+  const pushRow = (key, label, note, list) => {
+    if (list.length === 0) return;
+    const ordered = [...list.filter((r) => !isRest.has(r[c.norad])), ...list.filter((r) => isRest.has(r[c.norad]))];
+    rows.push({ key, label: withCount(label, ordered.length), sub: note, norads: ordered.map((r) => r[c.norad]), first: ordered[0][c.norad], count: ordered.length });
+    names.set(ordered[0][c.norad], label);
+  };
+  if (def.by === 'state') {
+    // the top countries by their members (all of them, so the rows do not change with "+ dead"), then "Other countries"
+    const tally = new Map();
+    for (const r of members) { const k = c.state >= 0 && r[c.state] >= 0 ? stateKey(cat.states[r[c.state]]) : ''; tally.set(k, (tally.get(k) || 0) + 1); }
+    const top = [...tally.entries()].filter(([k]) => k !== '').sort((a, b) => (b[1] - a[1]) || stateName(a[0]).localeCompare(stateName(b[0]))).slice(0, COUNTRY_TOP).map(([k]) => k);
+    const keyOf = (r) => (c.state >= 0 && r[c.state] >= 0 ? stateKey(cat.states[r[c.state]]) : '');
+    for (const k of top) pushRow(`state-${k}`, stateName(k), k === 'RU' ? 'Russia, with the old Soviet Union' : `run by ${stateName(k)}`, lit.filter((r) => keyOf(r) === k));
+    pushRow('state-other', 'Other countries', 'every other country, and those the catalogue does not name', lit.filter((r) => !top.includes(keyOf(r))));
+  } else {
+    const fi = (cat.fields || []).indexOf('fam');
+    for (const [code, label, note] of def.rows) pushRow(`fam-${code}`, label, note, lit.filter((r) => r[fi] === code));
+  }
+  if (joined && rest.length > 0) {
+    rows.push({
+      key: 'extra-dead', toggle: 'famDead', on,
+      label: `${on ? '\u2713 ' : '+ '}dead (${fmtInt(rest.length)})`,
+      sub: on ? 'lit too (tap to take away)' : `adds the ${fmtInt(rest.length)} that stopped working or have no report`,
+      norads: rest.map((r) => r[c.norad]), first: rest[0][c.norad], count: rest.length,
+    });
+  }
+  const norads = new Set(lit.map((r) => r[c.norad]));
+  return {
+    id: def.id, title: def.title, group: 'families', family: true, count: working.length, all: members.length, joined,
+    header: `${def.title} \u00b7 ${fmtInt(norads.size)} of ${fmtInt(members.length)} shown`, tag: def.tag, credit: creditLine(cat), honesty: def.honesty,
+    rows, norads, names, litCount: norads.size, working: working.map((r) => r[c.norad]), rest: rest.map((r) => r[c.norad]), famDead: on,
+  };
+}
+
+/** People on board: the two stations (the module lists of the Famous entries data/highlights.json `crew.stations` names) and the crewed ships docked to them on the list's date. */
+function buildCrew(cat, hl) {
+  const crew = hl && hl.crew;
+  if (!crew || !Array.isArray(hl.famous)) return null;
+  const m = byNorad(cat);
+  const rows = [], names = new Map(), norads = new Set();
+  let stations = 0, ships = 0;
+  // This family counts craft, not catalogue pieces (a station is 3-6 pieces): a child reads "12" as 12 people. So the rows carry no count; the lit set is every piece.
+  const push = (key, label, note, list) => {
+    const have = list.filter((n) => m.has(n));
+    if (have.length === 0) return false;
+    for (const n of have) norads.add(n);
+    rows.push({ key, label, sub: note, norads: have, first: have[0], count: have.length });
+    names.set(have[0], label);
+    return true;
+  };
+  for (const id of crew.stations || []) {
+    const f = hl.famous.find((x) => x.id === id);
+    if (f && push(`crew-${id}`, shortName(f.id, f.label, f.short), 'a station with people living on it', f.norads || [])) stations++;
+  }
+  for (const s of crew.ships || []) {
+    if (s && Number.isFinite(s.norad) && push(`crew-${s.norad}`, s.label, `a crew ship docked to ${s.at || 'the station'}`, [s.norad])) ships++;
+  }
+  if (rows.length === 0) return null;
+  const date = crew.date ? snapshotDate(`${crew.date}T12:00:00Z`) : '17 Nov 2026';
+  const parts = [];
+  if (stations) parts.push(`${stations} ${stations === 1 ? 'station' : 'stations'}`);
+  if (ships) parts.push(`${ships} crew ${ships === 1 ? 'ship' : 'ships'}`);
+  return {
+    id: ID_FAM_CREW, title: 'People on board', group: 'families', family: true, noCount: true, count: norads.size, all: norads.size, joined: false,
+    header: `People on board \u00b7 ${parts.join(', ')}`, tag: `The two space stations with people living on them, and the crew ships docked to them on ${date}.`,
+    credit: creditLine(cat), honesty: HONESTY_PUBLIC, rows, norads, names, litCount: norads.size, working: [...norads], rest: [], famDead: false,
+  };
+}
+
+/**
+ * The family items, in menu order, those with nothing in the data left out (the whole list is empty when the data has no `fam` column).
+ * @param {object} cat @param {object|null} hl @param {{joined: boolean, famDead: string|null}} o
+ */
+export function buildFamilies(cat, hl, o) {
+  const byCode = cat && Array.isArray(cat.rows) ? familyRows(cat) : null;
+  if (!byCode) return [];
+  const out = FAMILY_DEFS.map((d) => buildCodeFamily(cat, d, byCode, o.joined, o.famDead === d.id));
+  out.splice(4, 0, buildCrew(cat, hl));   // People on board comes last
+  return out.filter(Boolean);
 }
 
 /** What `layer.setHighlight` takes for an item (the layer adds the fade, the rings and the names' boxes). */

@@ -35,8 +35,9 @@ const SCROLL_STEP_MAX = 3;
 const SHOWN_MAX = 20;
 // A float sum of frame times can land a hair under the limit; this slack never lets a line leave early in play.
 const SHOW_TIME_SLACK_S = 1e-6;
-// Floors 4 and 5 (owner 2026-11-17, DECISIONS §74 row 2): the room hides the box; a NEW message shows it for
-// COMMS.PANE_FAR_SHOW_S through this attribute, never through the density bit (so no room memory is written).
+// Floors 4 and 5 (owner 2026-11-25, DECISIONS §105 row 5, replacing §74 row 2): the room hides the box; only a WARNING (amber or red)
+// shows it, for COMMS.PANE_FAR_SHOW_S, through this attribute, never through the density bit (so no room memory is written). An
+// ordinary line goes into the `+` log silently (`_quietOnFar`).
 const FAR_FLOORS = Object.freeze([4, 5]);
 export const FLASH_ATTR = 'data-comms-flash';
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
@@ -262,7 +263,9 @@ export class CommsPanel {
    * show runs on (the same one the release gap uses), so the box and the queue never disagree.
    */
   _noteRowDrawn() {
-    if (!this._isFar()) return;
+    // Only while the room hides the box: rows drawn in a box the player showed with `+` are not a temporary show, or a later room-hide
+    // would flash those ordinary lines for PANE_FAR_SHOW_S (Sky 33 review; DECISIONS §105 row 5: only a warning shows the box there).
+    if (!this._farFlashMode()) return;
     this._flashRows = Math.min(this._flashRows + 1, SHOWN_MAX);
     this._syncFlashAttr(this._farFlashMode());
   }
@@ -611,12 +614,26 @@ export class CommsPanel {
         let k = this._waiting.findIndex((w) => !isWarningOrWorse(w.priority));
         if (k < 0) k = this._waiting.length;
         this._waiting.splice(k, 0, m);
+      } else if (this._quietOnFar()) {
+        // DECISIONS §105 row 5 (owner 2026-11-25, replaces §74 row 2): on floors 4-5, while the room hides the box, an ordinary
+        // line never shows it. It goes into the log at once (the `+` box lists it) and holds nothing up: no `_noteRowDrawn`
+        // (that would start the temporary show), no `_sinceShown` reset (the queue clock is for lines that were shown).
+        this._shown.push(m);
+        while (this._shown.length > SHOWN_MAX) this._shown.shift();
       } else {
         this._waiting.push(m);
       }
     }
     return jumped;
   }
+
+  /**
+   * @private True when an ordinary (green) line goes straight into the log without showing the box: a far floor, the box hidden
+   * by the room (the player has not shown it with `+`), and no temporary show up. While a warning's show is up the box draws the
+   * last `_flashRows` rows of the log, so an ordinary line must take the normal path then (it shows in that box and never pushes
+   * the warning out of it).
+   */
+  _quietOnFar() { return this._flashRows <= 0 && this._farFlashMode(); }
 
   /**
    * @private At most COMMS.PANE_QUEUE_MAX lines wait. Past that the oldest waiting line that is neither a warning nor a
@@ -643,7 +660,7 @@ export class CommsPanel {
     }
   }
 
-  /** @private Seconds a line stays before the next waiting one replaces it: longer on floors 4-5 (DECISIONS §74 row 2). */
+  /** @private Seconds a line stays before the next waiting one replaces it: longer on floors 4-5 (DECISIONS §74 row 2's hold time, kept by §105 row 5 for the warnings that still show there). */
   _minShowS() {
     return this._isFar() ? COMMS.PANE_FAR_SHOW_S : COMMS.PANE_MIN_SHOW_S;
   }
@@ -955,7 +972,7 @@ export class CommsPanel {
 
     let allMessages = this._displayMessages();
     // Floors 4-5 with the box hidden by the room: only the rows that arrived since the temporary show began, never the
-    // old log (DECISIONS §74 row 2). With the box shown by the player (`+`, 7) the full log, as on every other floor.
+    // old log (DECISIONS §105 row 5: only warnings start such a show). With the box shown by the player (`+`, 7) the full log, as on every other floor.
     if (this._farFlashMode()) allMessages = allMessages.slice(Math.max(0, allMessages.length - this._flashRows));
 
     if (allMessages.length === 0) {

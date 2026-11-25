@@ -11,7 +11,7 @@
  * @module ui/RealSkyCard
  */
 
-import { buildItems, toHighlight, isMenuId, ID_COUNTRY } from './HighlightItems.js';
+import { buildItems, toHighlight, isMenuId, ID_COUNTRY, ID_FAMOUS } from './HighlightItems.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 
 export const CLASS_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown', 'starlink'];
@@ -275,6 +275,11 @@ export class RealSkyCard {
     this._layer = null;                             // the RealSkyLayer, through attachLayer (the Highlight menu calls it)
     this._hlView = 'closed';                        // the Highlight menu: 'closed' (one row) | 'menu' (the three items) | 'list' (an item is on)
     this._hlExtras = { stages: false, debris: false };   // Your country: "+ stages" / "+ debris" lit too
+    this._hlFamDead = null;                         // the id of the family whose "+ dead" is on (Sky 33: per family item, kept here, not in _hlExtras which is Your country's)
+    this._hlFamOpen = false;                        // the "Families" row is open (not saved)
+    this._hlShownKey = '';                          // what the family header's "shown" count was made from
+    this._hlShownItem = null;
+    this._hlShown = 0;
     this._hlItems = null;                           // the built items (cache) and what they were built from
     this._hlItemsKey = null;
     this._hlStrip = '';                             // the line under the header: the last tapped row's note
@@ -330,8 +335,8 @@ export class RealSkyCard {
     this._hasMilitary = typeof hasMilitary === 'function' ? hasMilitary : null;
   }
 
-  /** The legend's boxes again (the layer changed a kind). */
-  refreshKinds() { this._renderLegend(); }
+  /** The legend's boxes again (the layer changed a kind); a family's "shown" count follows the boxes. */
+  refreshKinds() { this._renderLegend(); this._hlRender(true); }
 
   /**
    * Wire the "reach" box at the end of the key (main.js): `isOn()` = the blue band is shown, `setOn(on)` shows or hides it. Without it the box is not shown.
@@ -439,6 +444,16 @@ export class RealSkyCard {
       const list = raw ? JSON.parse(raw) : null;
       if (Array.isArray(list)) for (const id of list) { const g = KEY_GROUPS.find((x) => x.id === id); if (g && g.open) this._open.add(id); }
     } catch (_) { /* a bad value = all closed */ }
+    this._clampOpenForTouch();
+  }
+
+  /**
+   * The iPad opens one group at a time (11 rows of 44 px do not fit): when both were saved open (from a Mac, or before this rule) only Satellites comes back
+   * (Sky 33 review c). Not saved: the saved list still holds both, so the Mac gets them back. Runs at load and when the card learns it is on touch.
+   */
+  _clampOpenForTouch() {
+    const glass = this._glass || (typeof this._isGlass === 'function' && this._isGlass() === true);
+    if (glass && this._open.size > 1) this._open = new Set([this._open.has('satellites') ? 'satellites' : [...this._open][0]]);
   }
 
   _saveOpen() {
@@ -561,7 +576,7 @@ export class RealSkyCard {
       const arrow = el('span', 'flex:none;margin-left:auto;padding:0 4px;color:#9fb0d0;font-size:11px;line-height:1', '\u25b8');
       const kids = [];
       if (g.open) {
-        row.title = `${g.hint} (tap the box to show or hide; tap the word to open or close)`;
+        row.title = `${g.hint} (tap to show or hide)`;   // Sky 33 review (d): the same plain line on the whole row as on its box (it said "tap the box ... tap the word")
         row.setAttribute('role', 'button');
         row.setAttribute('tabindex', '0');
         row.setAttribute('aria-expanded', 'false');
@@ -643,6 +658,7 @@ export class RealSkyCard {
     const arrived = f === FLOOR_GLOBE && this._floor === null;   // the globe entered from a floor without the layer (page 1 -> globe is not)
     if (g !== this._glass || f !== this._floor || !this._placed) {
       this._glass = g;
+      this._clampOpenForTouch();
       this._floor = f;
       this._place();
       this._renderLegend();                         // the chips are taller on glass
@@ -669,6 +685,7 @@ export class RealSkyCard {
       const flag = this._getFlag ? this._getFlag() : null;
       if (flag && flag !== 'USA' && this._hlItemList(L.catalogue()).some((it) => it.id === ID_COUNTRY)) id = ID_COUNTRY;
     }
+    if (!this._hlItemList(L.catalogue()).some((it) => it.id === id)) id = ID_FAMOUS;   // a family (or any item) the data no longer has: today's default
     this.hlPick(id, true);
   }
 
@@ -995,16 +1012,16 @@ export class RealSkyCard {
     const list = mk('real-sky-hl-list', 'display:none;margin-top:3px;overflow-y:auto;overflow-x:hidden;touch-action:pan-y;-webkit-overflow-scrolling:touch');
     const more = mk('real-sky-hl-more', 'display:none;margin-top:2px;font-size:10px;color:#8392b3');
     wrap.append(btn, items, head, tag, strip, list, more);
-    return { wrap, btn, items, head, nameBtn, off, tag, strip, list, more, itemEls: [], rowEls: [], listKey: '', itemsKey: '', press };
+    return { wrap, btn, items, head, nameBtn, off, tag, strip, list, more, itemEls: [], rowEls: [], listKey: '', itemsKey: '', famRow: null, press };
   }
 
-  /** The built items for the layer's data and the menu language (cached; rebuilt when the data, the language or the country extras change). */
+  /** The built items for the layer's data and the menu language (cached; rebuilt when the data, the language, the country extras, the status or a family's "+ dead" change). */
   _hlItemList(cat) {
     const L = this._layer, hl = L && typeof L.highlights === 'function' ? L.highlights() : null;
     const flag = this._getFlag ? this._getFlag() : null;
-    const key = `${flag}|${this._hlExtras.stages ? 1 : 0}${this._hlExtras.debris ? 1 : 0}`;
+    const key = `${flag}|${this._hlExtras.stages ? 1 : 0}${this._hlExtras.debris ? 1 : 0}|${this._statusJoined ? 1 : 0}|${this._hlFamDead || ''}`;
     if (!this._hlItems || this._hlItemsKey !== key || this._hlItemsCat !== cat || this._hlItemsHl !== hl) {
-      this._hlItems = buildItems(cat, hl, flag, this._hlExtras);
+      this._hlItems = buildItems(cat, hl, flag, this._hlExtras, { joined: this._statusJoined, famDead: this._hlFamDead });
       this._hlItemsKey = key; this._hlItemsCat = cat; this._hlItemsHl = hl;
     }
     return this._hlItems;
@@ -1020,10 +1037,33 @@ export class RealSkyCard {
   _hlOnLayer(h) {
     // cleared while floor 4 or page 1 still has the layer: Off or Esc (leaving the floors clears it with no floor)
     if (!h && this._layer && typeof this._layer.isActive === 'function' && this._layer.isActive()) this._hlUserOff = true;
-    if (!h) { this._hlView = 'closed'; this._hlStrip = ''; this._hlExtras = { stages: false, debris: false }; }
+    if (!h) { this._hlView = 'closed'; this._hlStrip = ''; this._hlExtras = { stages: false, debris: false }; this._hlFamDead = null; }
     else if (this._hlView === 'closed') this._hlView = 'list';
     this._hlRender();
     this._hlTick(true);
+  }
+
+  /** The header of the item that is on: a family counts how many of its lit dots are drawn ("Navigation \u00b7 289 of 642 shown"); the others keep their own. */
+  _hlHeaderOf(item) {
+    if (!item.family || item.noCount) return item.header;   // People on board counts craft, so its header is fixed ("2 stations, 3 crew ships")
+    return `${item.title} \u00b7 ${fmtInt(this._hlShownOf(item))} of ${fmtInt(item.all)} shown`;
+  }
+
+  /**
+   * How many of a family's lit dots are drawn now: the lit NORAD numbers minus those whose kind the player hid in the key (a hidden kind is not drawn
+   * and not counted; its list rows keep their "hidden" tag). Counted when the item or the hidden kinds change (the key's boxes call refreshKinds), never per frame.
+   */
+  _hlShownOf(item) {
+    const L = this._layer, rows = L && typeof L.rows === 'function' ? L.rows() : null;
+    const hid = CLASS_NAMES.map((n, k) => (this._hidden(n) ? k : -1)).filter((k) => k >= 0);
+    if (!rows || typeof L.rowOf !== 'function' || hid.length === 0) return item.litCount;
+    const key = `${item.id}|${item.litCount}|${item.famDead ? 1 : 0}|${hid.join(',')}`;
+    if (this._hlShownKey !== key || this._hlShownItem !== item) {
+      let n = 0;
+      for (const norad of item.norads) { const i = L.rowOf(norad); if (i >= 0 && !hid.includes(rows[i][2])) n++; }
+      this._hlShownKey = key; this._hlShownItem = item; this._hlShown = n;
+    }
+    return this._hlShown;
   }
 
   /** The Highlight row (closed, or an item is on and the menu is asked for) opens or closes the three items. */
@@ -1033,18 +1073,35 @@ export class RealSkyCard {
     this._hlRender();
   }
 
-  /** Turn an item on (replacing the one that is on). @param {string} id @param {boolean} [auto] the default step, not the player: it does not count as a pick @returns {boolean} */
-  hlPick(id, auto = false) {
+  /** The "Families" row opens or closes the five family rows under it (not saved). On touch the menu is taller than the panel: the opened rows are scrolled into view. */
+  _hlToggleFamilies() {
+    this._hlFamOpen = !this._hlFamOpen;
+    this._hlRender();
+    const fe = this._els.hl && this._els.hl.famRow, root = this._els.root;
+    if (this._hlFamOpen && this._glass && fe && root && typeof fe.offsetTop === 'number') root.scrollTop = Math.max(0, fe.offsetTop - 6);
+  }
+
+  /**
+   * Turn an item on (replacing the one that is on).
+   * @param {string} id @param {boolean} [auto] the default step, not the player: it does not count as a pick
+   * @param {{extras?: {stages?: boolean, debris?: boolean}, famDead?: boolean}|null} [state] the item's own state to come back with (the globe's `+` after a `-`)
+   * @returns {boolean}
+   */
+  hlPick(id, auto = false, state = null) {
     const L = this._layer;
     const cat = L && L.catalogue ? L.catalogue() : null;
     if (!cat) return false;
     const cur = L.highlight ? L.highlight() : null;
     if (cur && cur.id === id) { if (this._hlDefault && !auto) { this._hlDefault = id; this._hlPicked = true; } this._hlView = 'list'; this._hlRender(); return true; }
     if (id !== ID_COUNTRY || !cur || cur.id !== ID_COUNTRY) this._hlExtras = { stages: false, debris: false };
+    this._hlFamDead = null;
+    if (state && id === ID_COUNTRY && state.extras) this._hlExtras = { stages: state.extras.stages === true, debris: state.extras.debris === true };
+    if (state && state.famDead === true) this._hlFamDead = id;
     const it = this._hlItemList(cat).find((i) => i.id === id);
-    if (!it) return false;
+    if (!it) { this._hlFamDead = null; return false; }
     this._hlView = 'list';
     this._hlStrip = '';
+    if (it.group === 'families') this._hlFamOpen = true;   // the menu, opened again, shows the family rows so another one is one tap away
     if (this._hlDefault && !auto) { this._hlDefault = id; this._hlPicked = true; }   // the next arrival at the globe brings back the item the player last turned on
     this._hlUserOff = false;                        // a pick after an Off: the default is back
     L.setHighlight(toHighlight(it));
@@ -1055,10 +1112,43 @@ export class RealSkyCard {
   /** The "Off" button: the normal sky is back. */
   _hlOff() { if (this._layer && this._layer.clearHighlight) this._layer.clearHighlight(); }
 
+  /** A menu highlight is on (the globe's `-` turns it off first; GlobeSteps `highlight.isOn`). */
+  hlIsOn() {
+    const cur = this._layer && this._layer.highlight ? this._layer.highlight() : null;
+    return !!cur && isMenuId(cur.id);
+  }
+
+  /**
+   * The globe's `-`: turn the highlight off and hand back what is needed to put it back exactly (GlobeSteps `highlight.off`).
+   * @returns {{id: string, extras: {stages: boolean, debris: boolean}, famDead: boolean}|null} null when no menu highlight was on
+   */
+  hlTurnOff() {
+    const cur = this._layer && this._layer.highlight ? this._layer.highlight() : null;
+    if (!cur || !isMenuId(cur.id)) return null;
+    const snap = { id: cur.id, extras: { ...this._hlExtras }, famDead: this._hlFamDead === cur.id };
+    this._hlOff();
+    return snap;
+  }
+
+  /** The globe's `+` after that `-`: the same item on again, with the same extras / "+ dead" state (GlobeSteps `highlight.restore`). @param {{id: string, extras?: object, famDead?: boolean}|null} snap @returns {boolean} */
+  hlRestore(snap) {
+    if (!snap || typeof snap.id !== 'string') return false;
+    return this.hlPick(snap.id, true, snap);
+  }
+
   /** A list row: Your country's "+ stages" / "+ debris" rows add that kind; any other turns the globe to the object (the first of a group) and opens its card. */
   hlTapRow(row) {
     const L = this._layer;
     if (!L || !row) return false;
+    if (row.toggle === 'famDead') {                 // a family's "+ dead": the item's own state, kept here; the sets swap, nothing else moves
+      const cur = L.highlight ? L.highlight() : null;
+      const cat = L.catalogue ? L.catalogue() : null;
+      if (!cur || !cat) return false;
+      this._hlFamDead = this._hlFamDead === cur.id ? null : cur.id;
+      const it = this._hlItemList(cat).find((i) => i.id === cur.id);
+      if (it) L.setHighlight(toHighlight(it));
+      return true;
+    }
     if (row.toggle) {
       this._hlExtras = { ...this._hlExtras, [row.toggle]: !this._hlExtras[row.toggle] };
       const cat = L.catalogue ? L.catalogue() : null;
@@ -1175,11 +1265,12 @@ export class RealSkyCard {
     e.off.style.minWidth = glass ? '64px' : '36px';
     e.nameBtn.style.minHeight = e.head.style.minHeight;
     if (headOn) {
-      const name = mine ? mine.header : String((cur && (cur.label || cur.id)) || '');
+      const name = mine ? this._hlHeaderOf(mine) : String((cur && (cur.label || cur.id)) || '');
       const text = mine && !p1 ? `${name} \u25be` : name;
       if (e.nameBtn.textContent !== text) e.nameBtn.textContent = text;
       e.nameBtn.style.cursor = mine && !p1 ? 'pointer' : 'default';
-      const honesty = mine ? `${mine.credit} \u00b7 ${mine.honesty}` : (L && L.highlightHonesty ? L.highlightHonesty() : '');
+      // a family says what it is in one plain sentence, then how far the list can be trusted; the other items show the catalogue date and their honesty word
+      const honesty = mine ? (mine.family ? `${mine.tag} ${mine.honesty}` : `${mine.credit} \u00b7 ${mine.honesty}`) : (L && L.highlightHonesty ? L.highlightHonesty() : '');
       e.tag.textContent = honesty;
     }
     set(e.tag, headOn && !!e.tag.textContent);
@@ -1198,19 +1289,47 @@ export class RealSkyCard {
   }
 
   _hlDrawItems(e, items, cur, rowH) {
-    const key = `${items.map((i) => `${i.id}:${i.count}:${i.country ? i.country.name : ''}`).join('|')}|${cur ? cur.id : ''}|${rowH}`;
+    const top = items.filter((i) => i.group !== 'families'), fams = items.filter((i) => i.group === 'families');
+    const famOpen = fams.length > 0 && this._hlFamOpen;
+    const key = `${items.map((i) => `${i.id}:${i.count}:${i.country ? i.country.name : ''}`).join('|')}|${cur ? cur.id : ''}|${rowH}|${famOpen ? 1 : 0}`;
     if (e.itemsKey === key) return;
     e.itemsKey = key;
     e.items.textContent = '';
     e.itemEls = [];
+    e.famRow = null;
     const d = this._doc;
-    for (const it of items) {
+    for (const it of top) {
       const row = d.createElement('div');
       row.id = `real-sky-hl-item-${it.id}`;
       row.style.cssText = `display:flex;align-items:center;justify-content:space-between;gap:6px;box-sizing:border-box;padding:0 8px;margin-top:2px;min-height:${rowH};${HL_BTN_CSS}`;
       const a = d.createElement('span'); a.textContent = `${cur && cur.id === it.id ? '\u2713 ' : ''}${it.title}`;
       const b = d.createElement('span'); b.style.cssText = 'color:#8392b3;font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis'; b.textContent = it.country ? it.country.name : String(it.count);
       row.append(a, b);
+      e.press(row, () => this.hlPick(it.id));
+      e.items.append(row);
+      e.itemEls.push(row);
+    }
+    if (fams.length === 0) return;
+    // "By job" (the families; owner 11-25 "Choose another name." for "Families"): one row that opens five, indented under it ("Navigation · 289": the count of its working ones)
+    const fr = d.createElement('div');
+    fr.id = 'real-sky-hl-families';
+    fr.style.cssText = `display:flex;align-items:center;justify-content:space-between;gap:6px;box-sizing:border-box;padding:0 8px;margin-top:2px;min-height:${rowH};${HL_BTN_CSS}`;
+    const fa = d.createElement('span'); fa.textContent = 'By job';
+    const fb = d.createElement('span'); fb.style.cssText = 'color:#8392b3;font-size:10px'; fb.textContent = famOpen ? '\u25b4' : '\u25be';
+    fr.append(fa, fb);
+    fr.setAttribute('aria-expanded', famOpen ? 'true' : 'false');
+    e.press(fr, () => this._hlToggleFamilies());
+    e.items.append(fr);
+    e.itemEls.push(fr);
+    e.famRow = fr;
+    if (!famOpen) return;
+    for (const it of fams) {
+      const row = d.createElement('div');
+      row.id = `real-sky-hl-item-${it.id}`;
+      row.style.cssText = `display:flex;align-items:center;gap:6px;box-sizing:border-box;padding:0 8px;margin:2px 0 0 14px;min-height:${rowH};${HL_BTN_CSS}`;
+      const a = d.createElement('span'); a.style.cssText = 'min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis';
+      a.textContent = `${cur && cur.id === it.id ? '\u2713 ' : ''}${it.title}${it.noCount ? '' : ` \u00b7 ${fmtInt(it.count)}`}`;
+      row.append(a);
       e.press(row, () => this.hlPick(it.id));
       e.items.append(row);
       e.itemEls.push(row);

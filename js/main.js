@@ -127,7 +127,7 @@ import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController, INTRO_RIDE_MS, INTRO_DIVE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { FloorMask } from './ui/hud/FloorMask.js';
-import { GlobeSteps } from './ui/hud/GlobeSteps.js';
+import { GlobeSteps, globeStepsKinds } from './ui/hud/GlobeSteps.js';
 import { setChipsUnderDrawer } from './ui/hud/FooterChip.js';
 import { LadderViewStore } from './systems/LadderViewStore.js';
 import { LadderSfx } from './systems/LadderSfx.js';
@@ -170,7 +170,7 @@ import { CopilotVoice } from './systems/CopilotVoice.js';
 import { GestureSplash } from './ui/GestureSplash.js';
 import { TouchMapStore } from './systems/TouchMapStore.js';
 import { StrutAutoStore } from './systems/StrutAuto.js';
-import { FloorWordsStore, floorWordsToShow, FLOOR_WORDS_MS } from './systems/FloorWordsStore.js';
+import { FloorWordsStore, floorWordsToShow, railKeptOut, FLOOR_WORDS_MS } from './systems/FloorWordsStore.js';
 import { RAIL_GEOMETRY, footerBand } from './ui/RailGeometry.js';
 import { installHudScale } from './ui/HudScale.js';
 import { EdgeChrome } from './ui/EdgeChrome.js';
@@ -881,6 +881,9 @@ let _ladderLevelingPrev = false;
 // for floors ≠ 1: menu + F1 only). Last-written value, so the per-frame block writes the attribute ONLY on change.
 // null = no attribute (menu / pause → menu / ?ladder=0 → the stamp shows).
 let _ladderFloorAttr = null;
+let _introDiveAttr = false;   // body[data-intro-dive] last written: the opening dive is in flight (DECISIONS §107)
+let _railFloorPrev = null;   // the floor seen by the last frame's rail rule (a change re-reads the first-visit memory)
+let _rail4Known = false;     // this floor-4 visit began with floor 4 already taught: the rail stays hidden for the visit
 let _vitalsUnderDrawer = false;   // the meters hide under the open F1 drawer (last written)
 // Starfield's constellation MASK, the hub's one writer (owner 2026-09-09 MENU; 2026-11-21 floors 4-5: "constellations should not be
 // visible in floor 4"; floor 5 is the page row opened from it). Last-written value: Starfield is touched only on change.
@@ -2907,7 +2910,7 @@ async function init() {
     const _sidePageKeysLocked = () => !!(ladderController && ladderController.isActive() && ladderController.currentFloor() === 5);
     if (hud && hud.paneDensity) hud.paneDensity.keyLock = _sidePageKeysLocked;
     // The globe (floor 4) runs its own step stack on `-` / `+` (Sky 30, owner 2026-11-24, DECISIONS §102 rows 1 and 3): the score bar is the first `+`,
-    // then the ladder; below the arrival view each `-` hides the object panel, the time buttons, then one ticked box at a time from the bottom of
+    // then the ladder; below the arrival view each `-` turns a highlight that is on off (Sky 33), then hides the object panel, the time buttons, then one ticked box at a time from the bottom of
     // the list up. The rails stay at every step. Floors 1-3 keep the one-rung walk above. The iPad has no touch control that sends these keys (its
     // slider calls PaneDensity.setLevel directly and is not hooked).
     globeSteps = new GlobeSteps({
@@ -2922,13 +2925,10 @@ async function init() {
         isHidden: () => _globeClockHidden,
         setHidden: (h) => { _globeClockHidden = h === true; },
       },
-      kinds: {
-        // The boxes `-` and `+` count are the three groups (a group is ONE box, open or closed) and "reach" last (RealSkyCard.keyBoxes; Sky 32, §104 row 4).
-        // A group is ticked while any of its kinds is; `-` unticks it and remembers which were ticked, `+` brings exactly those back. The "military" mark
-        // is not one of them. "reach" is the orb's switch.
-        ticked: () => realSkyCard.keyBoxes().filter((n) => (n === REACH_NAME ? navcomFloor.reachOrb.isEnabled() : realSkyCard.groupState(n) !== 'off')),
-        setTicked: (n, on) => { if (n === REACH_NAME) { navcomFloor.reachOrb.setEnabled(on); realSkyCard.refreshKinds(); } else realSkyCard.setGroupTicked(n, on); },
-      },
+      // The boxes `-` and `+` count (GlobeSteps `globeStepsKinds`, one function the tests build too; Sky 33 review e): the three groups and "reach" last.
+      kinds: globeStepsKinds({ card: realSkyCard, reachName: REACH_NAME, reach: () => navcomFloor.reachOrb }),
+      // A highlight that is on goes off first (Sky 33, the review of Sky 32: its header and "Off" are in the panel the next `-` hides); `+` brings the same item back.
+      highlight: { isOn: () => realSkyCard.hlIsOn(), off: () => realSkyCard.hlTurnOff(), restore: (snap) => realSkyCard.hlRestore(snap) },
     });
     if (hud && hud.paneDensity) hud.paneDensity.stepHook = globeSteps;
     eventBus.on(Events.HUD_DENSITY_DOWN, () => {
@@ -6790,6 +6790,15 @@ function gameLoop(timestamp) {
       if (_floorAttr) document.body.setAttribute('data-ladder-floor', _floorAttr);
       else document.body.removeAttribute('data-ladder-floor');
     }
+    // The ladder rail is out of sight on floor 4 once the player has been there before (owner 2026-11-25, DECISIONS §105 row 5):
+    // floor 4 is the top floor, no rung is clickable there, and the globe is crowded. Whether floor 4 was already taught is read on
+    // the frame the floor BECOMES 4, before the floor-words block below marks it in the same frame, so the visit that teaches the
+    // word keeps the rail for its whole stay. Floors 1-3 and 5 (the pages, where rung 4 is the way back) are as ever.
+    if (_floorNow !== _railFloorPrev) {
+      _railFloorPrev = _floorNow;
+      _rail4Known = (_floorNow === 4) && !!(floorWordsStore && floorWordsStore.isTaught(4));
+    }
+    if (railIndicator && railIndicator.setSuppressed) railIndicator.setSuppressed(railKeptOut({ floor: _floorNow, taughtOnArrival: _rail4Known }));
     // The first player-chosen arrival on floor 4 / 5 says what the rail's word means, once. One call a
     // frame; the rule is pure (floorWordsToShow). Nothing is sent or marked while toasts are muted.
     if (_ladderActive && floorWordsStore && _floorNow != null && !floorWordsStore.allTaught()) {
@@ -6879,6 +6888,26 @@ function gameLoop(timestamp) {
   // enforced AT SOURCE (PlayerSatellite._danceDrivesMe gates, GameFlowManager's opening-comms and cameo gates,
   // OnboardingDirector's deferWhile).
   if (hud && hud.setToastInhibit) hud.setToastInhibit(_ladderActive && !!(ladderController && ladderController.introInFlight && ladderController.introInFlight()));
+  // No floor-1 buttons over the opening dive (owner 2026-11-25, DECISIONS §107): while the intro is in flight (the dive, the dwell,
+  // the pull) body[data-intro-dive] hides the bar and its "?" (index.html). The ride's destination is floor 1, so FloorMask shows
+  // them from the dive's first frame. When it ends they fade in with FloorMask's own arrive fade. Written only on change.
+  {
+    const dive = _ladderActive && !!(ladderController && ladderController.introInFlight && ladderController.introInFlight());
+    if (dive !== _introDiveAttr) {
+      _introDiveAttr = dive;
+      if (dive) document.body.setAttribute('data-intro-dive', '');
+      else {
+        document.body.removeAttribute('data-intro-dive');
+        for (const id of ['hud-f1-bar', 'hud-f1-help']) {
+          const el = document.getElementById(id);
+          if (!el || !el.classList) continue;
+          el.classList.remove('floor-mask-arrive');
+          void el.offsetHeight;   // restart the finite fade
+          el.classList.add('floor-mask-arrive');
+        }
+      }
+    }
+  }
 
   const currentState = gameState.currentState;
 

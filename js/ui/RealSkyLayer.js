@@ -967,6 +967,12 @@ export class RealSkyLayer {
     const was = this._selected;
     this._selected = i >= 0 && i < this._rows.length ? i : -1;
     if (this._hlCol && was !== this._selected) { this._hlRow(was); this._hlRow(this._selected); }   // the selected row is drawn in its own colour
+    // the open object's dot is always drawn (Sky 33 review (b)): when the kind of the object just left or just opened is hidden in the key,
+    // the index buffers are rebuilt (they change only here and on a key box / highlight change; every other dot of that kind stays hidden)
+    if (was !== this._selected && this._cls) {
+      const hid = (k) => k >= 0 && this._hideCls[this._cls[k]] === 1;
+      if (hid(was) || hid(this._selected)) { this._applyHiddenDraw(); this._lookReindex(); }
+    }
     if (this._card) this._card.setObject(this._selected >= 0 ? this.describe(this._selected) : null);
     if (this._selected >= 0) {
       this._lastOrbitMs = -Infinity;
@@ -1310,6 +1316,8 @@ export class RealSkyLayer {
     if (!geo || !this._cls) return;
     const N = this._rows.length, cls = this._cls, hide = this._hideCls, hh = this._hlHide;
     const lm = this._hlGlobeMask();
+    const sel = this._selected;                          // the open object keeps its dot even when its kind is hidden (select() rebuilds)
+    const selStar = sel >= 0 && cls[sel] === CLS_STARLINK;
     let any = hh !== null || lm !== null;
     for (let k = 0; k < hide.length; k++) if (hide[k] === 1) any = true;
     if (!any && this._starlink === 0) { geo.setIndex(null); geo.setDrawRange(0, Infinity); return; }
@@ -1320,9 +1328,9 @@ export class RealSkyLayer {
     for (let pass = 0; pass < 4; pass++) {
       const sl = pass < 2, litPass = (pass & 1) === 1;
       if (lm === null && litPass) continue;
-      if (sl && hide[CLS_STARLINK] === 1) continue;
+      if (sl && hide[CLS_STARLINK] === 1 && !selStar) continue;
       for (let i = 0; i < N; i++) {
-        if ((cls[i] === CLS_STARLINK) !== sl || hide[cls[i]] === 1 || (hh !== null && hh[i] === 1)) continue;
+        if ((cls[i] === CLS_STARLINK) !== sl || (hide[cls[i]] === 1 && i !== sel) || (hh !== null && hh[i] === 1)) continue;
         if (lm !== null && (lm[i] === 1) !== litPass) continue;
         arr[n++] = i;
       }
@@ -1420,7 +1428,7 @@ export class RealSkyLayer {
     this._milReindex();                                  // the military rings follow the same hidden kinds and highlight draw
     const data = this._lookData;
     if (!data || !this._cls || this._lookGroups.length === 0) return;
-    const N = this._rows.length, cls = this._cls, hide = this._hideCls, hh = this._hlHide, lm = this._hlGlobeMask();
+    const N = this._rows.length, cls = this._cls, hide = this._hideCls, hh = this._hlHide, lm = this._hlGlobeMask(), sel = this._selected;
     const bySize = new Map(this._lookGroups.filter((g) => !g.ring).map((g) => [g.size, g]));
     const counts = new Map();
     for (const g of this._lookGroups) counts.set(g, 0);
@@ -1429,7 +1437,7 @@ export class RealSkyLayer {
       const sl = pass < 2, litPass = (pass & 1) === 1;
       if (lm === null && litPass) continue;              // with no highlight: Starlink pass, then the rest, as before
       for (let i = 0; i < N; i++) {
-        if ((cls[i] === CLS_STARLINK) !== sl || hide[cls[i]] === 1 || (hh !== null && hh[i] === 1)) continue;
+        if ((cls[i] === CLS_STARLINK) !== sl || (hide[cls[i]] === 1 && i !== sel) || (hh !== null && hh[i] === 1)) continue;
         if (lm !== null && (lm[i] === 1) !== litPass) continue;   // a highlight: the faded rows first, the lit ones over them
         put(bySize.get(data.px[i]), i);
         if (this._lookRing && data.ring[i]) put(this._lookGroups[this._lookGroups.length - 1], i);

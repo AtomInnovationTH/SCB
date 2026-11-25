@@ -83,6 +83,16 @@
       "source": "https://www.space-track.org"
     }
   ],
+  "crew": {
+    "date": "2026-11-17",
+    "note": "People on board (Sky 33, DECISIONS §105 row 1): the two stations (their module lists are the Famous entries named in `stations`) and the crewed ships docked to them on this date. A hand list: GCAT's satcat (planet4589.org/space/gcat) types each of these ships PH (crewed) with status DK (docked), and Space-Track's 2026-11-17 element sets for the Soyuz and the Dragon are the ISS's own (same epoch, same 413 x 423 km), the Shenzhou's the Tiangong's (382 x 389 km). Never a cargo ship.",
+    "stations": ["iss", "tiangong"],
+    "ships": [
+      { "norad": 100057, "label": "Soyuz MS-29", "at": "ISS", "source": "https://planet4589.org/space/gcat" },
+      { "norad": 100882, "label": "Crew Dragon Grace (Crew-13)", "at": "ISS", "source": "https://planet4589.org/space/gcat" },
+      { "norad": 69180, "label": "Shenzhou 23", "at": "Tiangong", "source": "https://planet4589.org/space/gcat" }
+    ]
+  },
   "countries": {
     "USA": { "code": "US", "name": "United States" },
     "THA": { "code": "T", "name": "Thailand" },
