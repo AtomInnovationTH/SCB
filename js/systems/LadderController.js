@@ -1491,7 +1491,7 @@ export class LadderController {
       if (this._edgeChrome && typeof this._edgeChrome.sleep === 'function') this._edgeChrome.sleep(this._now());
       else if (this._rail && this._rail.hide) this._rail.hide();
     } else {
-      if (this._edgeChrome && typeof this._edgeChrome.wake === 'function') this._edgeChrome.wake(undefined, this._now());
+      if (this._edgeChrome && typeof this._edgeChrome.wake === 'function') this._wakeRailAndSlider(this._now());
       else if (this._rail && this._rail.show) this._rail.show();
     }
   }
@@ -1971,13 +1971,25 @@ export class LadderController {
     this._noteSubjectChange(floor);
   }
 
-  /** @private The FLOOR wake: all edge chrome awake for IDLE_FADE_MS, the arrival notch boxed. Absent dep → no-op. */
+  /**
+   * @private The FLOOR wake: the WHERE rail and the DETAIL slider awake for IDLE_FADE_MS, the arrival notch boxed. Not the
+   * SPECS tab (owner 2026-11-26: "in transition from floor 3 to floor 4, specs appears bottom left. don't need to sees
+   * specs"): it wakes only from a touch or hover in its own edge band; on floor 1 it is pinned awake anyway. Absent dep → no-op.
+   */
   _wakeFloorChrome() {
     const ec = this._edgeChrome;
     if (!ec) return;
     const t = this._now();
-    if (typeof ec.wake === 'function') ec.wake(undefined, t);
+    this._wakeRailAndSlider(t);
     if (typeof ec.box === 'function') ec.box('floor', t);
+  }
+
+  /** @private Wake the rail and the slider (never the SPECS tab, see _wakeFloorChrome). */
+  _wakeRailAndSlider(t) {
+    const ec = this._edgeChrome;
+    if (!ec || typeof ec.wake !== 'function') return;
+    ec.wake('rail', t);
+    ec.wake('slider', t);
   }
 
   /** @private Fire the optional subject hook, never throw. */
