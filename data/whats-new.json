@@ -1,9 +1,9 @@
 {
   "bullets": [
-    "Zoom out to the full GEO view",
-    "After zooming out, slide right to more pages",
-    "Cleaner views"
+    "View sats by mission, real day/night",
+    "Gas salvage tools for advanced missions",
+    "Improved cinematic debris view"
   ],
-  "release": "2026-11-23",
-  "version": "1.2"
+  "release": "2026-11-25",
+  "version": "1.21"
 }
