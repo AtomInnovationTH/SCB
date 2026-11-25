@@ -19,7 +19,6 @@
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { Constants } from '../core/Constants.js';
-import { ReachOrb } from './ReachOrb.js';
 import { catchableCount, heldBackCount, heldBackNote } from '../core/missionProgress.js';
 
 /** The FieldRegistry (or a getter) `ClusterIcons.nameLine` names her field from; set by `setFieldRegistry`. */
@@ -257,12 +256,13 @@ export class ClusterIcons {
   }
 
   /**
-   * The three plain lines the card under `You` shows (Sky 30, DECISIONS §102 row 2): her field (height, pieces), the debris there (count and
-   * kinds, from the registry's rows for the field), and her reach. Pure + static; reads the registry set by `setFieldRegistry`.
-   * @param {{minAltKm:number, maxAltKm:number, budgetDvMs:number}|null} env the reach envelope (ReachOrb), or null while there is none
-   * @returns {string[]} three lines, or two when the field line already names the piece count (no "Debris here" line then)
+   * The plain lines the card under `You` shows (Sky 30, DECISIONS §102 row 2): her field (height, pieces) and the debris there (count and
+   * kinds, from the registry's rows for the field). No reach line since Sky 34 G (the globe's blue band shows it). Pure + static; reads the
+   * registry set by `setFieldRegistry`.
+   * @param {object|null} [env] unused since Sky 34 G (callers still pass the reach envelope)
+   * @returns {string[]} two lines, or one when the field line already names the piece count (no "Debris here" line then)
    */
-  static shipInfoLines(env) {
+  static shipInfoLines(env) {   // eslint-disable-line no-unused-vars
     const reg = _fieldRegistry();
     let field = 'Field: not known';
     let debris = 'Debris here: not known';
@@ -292,8 +292,9 @@ export class ClusterIcons {
         }
       }
     }
-    const reach = env ? ReachOrb.plainReach(env) : '';
-    return [field, debris, reach || 'Reach: not known yet'].filter((t) => t != null);
+    // Sky 34 G (owner 2026-11-25: ""Range: 180–1,311 km" that is confusing ... what does player need to know. ... Think more"): no reach line.
+    // The card says where she is and what is here; the blue band on the globe already shows where her gas can take her.
+    return [field, debris].filter((t) => t != null);
   }
 
   /**
