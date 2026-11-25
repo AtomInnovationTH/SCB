@@ -89,9 +89,9 @@ export function groupState(kinds, isHidden) {
  * The last box of the key: the blue see-through band around Earth (ReachOrb). Its name in `legendDrawOrder()`, its word, its swatch (the band's
  * own cyan, ReachOrb `_paint` rgba(0,204,255)) and its hover text (owner 2026-11-24, DECISIONS §103 row 5).
  */
-export const REACH_NAME = 'reach';
+export const REACH_NAME = 'range';
 export const REACH_COLOR = '#00ccff';
-export const REACH_HINT = 'reach: the band of heights your gas can take you to';
+export const REACH_HINT = 'range: the band of heights your gas can take you to';
 
 /**
  * The one small credit line: every source the full credit names, in a few words. Built from the full text (never typed
@@ -182,17 +182,14 @@ const HL_TICK_MS = 400;
  * right"): it sits where the radio box (`#hud-comms-panel`) sits on floor 2, flush at the top and right edges (measured 1728 x 1117 and 1366 x 1024:
  * top 0, right 0), SKY_CLOCK_H_PX tall (measured 70 px on both screens: 5 px top padding, the 12 px caption, 2 px gap, 44 px buttons, 6 px padding,
  * 1 px bottom border; `MapClockSlider` BUTTON_MIN_PX). The object panel stands directly under it, on the Mac and the iPad alike, sharing its
- * bottom border (SKY_CLOCK_OVERLAP_PX), flush right like it, and is 16 px wider than the box (SKY_COLUMN_EXTRA_PX; Sky 34, owner 2026-11-25: "slightly wider than
- * speed buttons pane for a nice visual cascade", the box measured at write time, `_syncColumnWidth`); the radio box and
- * right column dodge under the panel, or under the buttons when no panel is up.
+ * bottom border (SKY_CLOCK_OVERLAP_PX), flush right like it, and is SKY_PANEL_W_PX wide whatever the box's width (Sky 34, owner 2026-11-25: "why is it still
+ * so wide"); the radio box and right column dodge under the panel, or under the buttons when no panel is up.
  */
 export const SKY_CLOCK_EDGE_PX = 0;
 export const SKY_CLOCK_H_PX = 70;
 export const SKY_CLOCK_OVERLAP_PX = 1;
-/** How much wider the panel is than the time buttons' box, px (the box's left edge shows as a step). */
-export const SKY_COLUMN_EXTRA_PX = 16;
-/** The panel's width before the box has been measured (the four English buttons' box, measured, plus SKY_COLUMN_EXTRA_PX). */
-export const SKY_COLUMN_FALLBACK_W_PX = 250;
+/** The panel's width, px: the same on the Mac and the iPad, floors 4 and 5 (Sky 34; the old panel was 284 px, then the box + 16 = 238 px). */
+export const SKY_PANEL_W_PX = 150;
 /** The time buttons' element (MapClockSlider.MAP_CLOCK_SLIDER_ID; spelled here so the card does not import the control). */
 const CLOCK_ID = 'map-clock-slider';
 
@@ -256,7 +253,7 @@ export function skyPanelDodgePx(doc = typeof document !== 'undefined' ? document
 const HL_BTN_CSS = 'border:1px solid rgba(160,180,220,0.35);border-radius:4px;cursor:pointer;color:#e8eefc;background:rgba(40,60,100,0.35);touch-action:manipulation;font-size:11px;user-select:none;-webkit-user-select:none';
 
 const PANEL_CSS = [
-  'position:fixed', 'right:0', 'overflow:auto', `width:${SKY_COLUMN_FALLBACK_W_PX}px`, 'z-index:36', 'display:none', 'pointer-events:auto',
+  'position:fixed', 'right:0', 'overflow:auto', `width:${SKY_PANEL_W_PX}px`, 'z-index:36', 'display:none', 'pointer-events:auto',
   'box-sizing:border-box', 'padding:8px 10px', 'border-radius:6px', 'background:rgba(8,12,22,0.82)',
   'border:1px solid rgba(160,180,220,0.28)', 'color:#dbe4f5', 'font-family:var(--font-mono)', 'font-size:11px',
   'line-height:1.35', 'letter-spacing:0.02em', 'user-select:none', '-webkit-user-select:none',
@@ -314,8 +311,6 @@ export class RealSkyCard {
     this._shown = false;
     this._panelHidden = false;            // the player hid the panel (globe `-` step): nothing drawn, no dodge, no keep-out box
     this._clockShown = true;              // the time buttons are on screen (main.js: `setClockShown`); the panel stands under them
-    this._colW = NaN;                     // the panel's width written now (the time buttons' box + SKY_COLUMN_EXTRA_PX)
-    this._clockW = 0;                     // the time buttons' box's width, as last read while it showed (kept while it is hidden)
     this._built = false;
     this._info = null;
     this._credit = '';
@@ -709,7 +704,6 @@ export class RealSkyCard {
     const column = this._floor === FLOOR_GLOBE || this._floor === FLOOR_CHART;
     root.style.borderRightWidth = column ? '0' : '1px';
     root.style.borderRadius = column ? '0 0 0 6px' : '6px';
-    this._syncColumnWidth();
     // Page 1 (floor 5, Sky 20): the panel is the object card ONLY: no search box, tick boxes or credit row (the page has its own buttons and the
     // credit is in the Tech library), and nothing at all while no dot is picked (`_syncDisplay`).
     const page1 = this._floor === FLOOR_CHART;
@@ -724,23 +718,6 @@ export class RealSkyCard {
     this._hlRender(true);
     this._renderLegend();
     this._syncDodge();
-  }
-
-  /**
-   * The panel is SKY_COLUMN_EXTRA_PX wider than the time buttons' box above it (the box is as wide as its four buttons, so its width depends on the
-   * language's words), flush right like it, so the two read as a cascade. The box is read from the page at write moments only; while it is hidden
-   * (the globe's `-` steps) the last width read stays. Written on change.
-   */
-  _syncColumnWidth() {
-    const root = this._els.root;
-    if (!root) return;
-    const clock = this._clockShown && this._doc && this._doc.getElementById ? this._doc.getElementById(CLOCK_ID) : null;
-    if (clock && clock.style && clock.style.display !== 'none' && typeof clock.getBoundingClientRect === 'function') {
-      const cw = clock.getBoundingClientRect().width;
-      if (cw > 0) this._clockW = Math.ceil(cw);
-    }
-    const w = this._clockW ? this._clockW + SKY_COLUMN_EXTRA_PX : SKY_COLUMN_FALLBACK_W_PX;
-    if (w !== this._colW) { this._colW = w; root.style.width = `${w}px`; }
   }
 
   /**
@@ -820,7 +797,6 @@ export class RealSkyCard {
     const root = this._els.root;
     this._syncDisplay();
     this._measure();
-    this._syncColumnWidth();
     // Page 1 shows the panel only with a card open: with none there is nothing to dodge.
     const panelUp = !!root && this._shown && this._panelHidden !== true && (this._floor === FLOOR_GLOBE || (this._floor === FLOOR_CHART && (!!this._info || !!this._hlHeadOn)));
     // Sky 30 (§102 row 7): on the globe the time buttons stand at the top right on every screen, so with no panel under them (the player hid it with `-`)
@@ -1195,7 +1171,7 @@ export class RealSkyCard {
       tag: vis(e.tag) ? e.tag.textContent : '', strip: vis(e.strip) ? e.strip.textContent : '', headTitle: e.head.title || '', list: vis(e.list), more: vis(e.more) ? e.more.textContent : '',
       offShown: vis(e.off), keyFolded: this._els.legend.style.display === 'none',
       items: e.itemEls.map((n) => n.textContent),
-      rows: e.rowEls.map((r) => ({ label: r.label, sub: r.sub, state: r.state, tag: r.tagEl.textContent, dim: r.labelEl.style.opacity === '0.45', title: r.el.title })),
+      rows: e.rowEls.map((r) => ({ label: r.label, sub: r.sub, state: r.state, dim: r.labelEl.style.opacity === '0.45', title: r.el.title })),
     };
   }
 
@@ -1221,10 +1197,9 @@ export class RealSkyCard {
       }
       if (state === r.state) continue;
       r.state = state;
-      // Sky 34 (owner 2026-11-25): "behind Earth" is no printed tag: the row's name is dimmed, and on the Mac its hover says so. The two other states keep a short tag.
-      const text = state === 'off' ? 'off screen' : state === 'hidden' ? '(hidden in the key)' : '';
-      r.tagEl.textContent = text;
-      r.labelEl.style.opacity = state === 'behind' ? '0.45' : '';
+      // Sky 34 (owner 2026-11-25: "what is this noise (hidden in the key)"): no state is printed; behind Earth, off screen and hidden in the key all dim the row's name,
+      // and on the Mac the hover says which.
+      r.labelEl.style.opacity = state ? '0.45' : '';
       const hover = state === 'behind' ? 'behind Earth, click to turn' : state === 'off' ? 'off screen, click to turn' : state === 'hidden' ? 'its kind is hidden in the key' : (r.sub || '');
       r.el.title = this._glass ? '' : hover;
     }
@@ -1267,21 +1242,21 @@ export class RealSkyCard {
     // the three items
     set(e.items, showItems);
     if (showItems) this._hlDrawItems(e, items, cur, rowH);
-    // the header: name, count, "Off"
+    // the header: name, "Off" (the count is in the header's hover)
     set(e.head, headOn, 'flex');
     e.head.style.minHeight = rowH;
     e.off.style.minHeight = glass ? `${HL_ROW_PX_GLASS}px` : '20px';
-    e.off.style.minWidth = glass ? '64px' : '36px';
+    e.off.style.minWidth = glass ? '44px' : '36px';
     e.nameBtn.style.minHeight = e.head.style.minHeight;
     if (headOn) {
-      const name = mine ? this._hlHeaderOf(mine) : String((cur && (cur.label || cur.id)) || '');
+      const name = mine ? (mine.country ? mine.country.name : mine.title) : String((cur && (cur.label || cur.id)) || '');
       const text = mine && !p1 ? `${name} \u25be` : name;
       if (e.nameBtn.textContent !== text) e.nameBtn.textContent = text;
       e.nameBtn.style.cursor = mine && !p1 ? 'pointer' : 'default';
       // a family says what it is in one plain sentence, then how far the list can be trusted; the other items show the catalogue date and their honesty word.
-      // Sky 34 (owner 2026-11-25): that sentence and the last tapped row's note are not printed: they are the header's hover (a title).
+      // Sky 34 (owner 2026-11-25): the count ("Navigation · 289 of 642 shown"), that sentence and the last tapped row's note are not printed: they are the header's hover (a title).
       const honesty = mine ? (mine.family ? `${mine.tag} ${mine.honesty}` : `${mine.credit} \u00b7 ${mine.honesty}`) : (L && L.highlightHonesty ? L.highlightHonesty() : '');
-      const hover = [honesty, this._hlStrip].filter(Boolean).join('\n');
+      const hover = [mine ? this._hlHeaderOf(mine) : '', honesty, this._hlStrip].filter(Boolean).join('\n');
       if (e.head.title !== hover) e.head.title = hover;
     }
     set(e.tag, false);
@@ -1309,10 +1284,11 @@ export class RealSkyCard {
     for (const it of top) {
       const row = d.createElement('div');
       row.id = `real-sky-hl-item-${it.id}`;
-      row.style.cssText = `display:flex;align-items:center;justify-content:space-between;gap:6px;box-sizing:border-box;padding:0 8px;margin-top:2px;min-height:${rowH};${HL_BTN_CSS}`;
-      const a = d.createElement('span'); a.textContent = `${cur && cur.id === it.id ? '\u2713 ' : ''}${it.title}`;
-      const b = d.createElement('span'); b.style.cssText = 'color:#8392b3;font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis'; b.textContent = it.country ? it.country.name : String(it.count);
-      row.append(a, b);
+      row.style.cssText = `display:flex;align-items:center;justify-content:space-between;gap:6px;box-sizing:border-box;padding:3px 8px;margin-top:2px;min-height:${rowH};${HL_BTN_CSS}`;
+      // Sky 34 (owner 2026-11-25): the title only, wrapped onto a second line when long; the count and the country are the row's hover.
+      row.title = it.country ? `${it.country.name} \u00b7 ${fmtInt(it.count)}` : fmtInt(it.count);
+      const a = d.createElement('span'); a.style.cssText = 'min-width:0;white-space:normal;overflow-wrap:anywhere'; a.textContent = `${cur && cur.id === it.id ? '\u2713 ' : ''}${it.title}`;
+      row.append(a);
       e.press(row, () => this.hlPick(it.id));
       e.items.append(row);
       e.itemEls.push(row);
@@ -1334,9 +1310,10 @@ export class RealSkyCard {
     for (const it of fams) {
       const row = d.createElement('div');
       row.id = `real-sky-hl-item-${it.id}`;
-      row.style.cssText = `display:flex;align-items:center;gap:6px;box-sizing:border-box;padding:0 8px;margin:2px 0 0 14px;min-height:${rowH};${HL_BTN_CSS}`;
-      const a = d.createElement('span'); a.style.cssText = 'min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis';
-      a.textContent = `${cur && cur.id === it.id ? '\u2713 ' : ''}${it.title}${it.noCount ? '' : ` \u00b7 ${fmtInt(it.count)}`}`;
+      row.style.cssText = `display:flex;align-items:center;gap:6px;box-sizing:border-box;padding:3px 8px;margin:2px 0 0 14px;min-height:${rowH};${HL_BTN_CSS}`;
+      if (!it.noCount) row.title = fmtInt(it.count);
+      const a = d.createElement('span'); a.style.cssText = 'min-width:0;white-space:normal;overflow-wrap:anywhere';
+      a.textContent = `${cur && cur.id === it.id ? '\u2713 ' : ''}${it.title}`;
       row.append(a);
       e.press(row, () => this.hlPick(it.id));
       e.items.append(row);
@@ -1355,18 +1332,17 @@ export class RealSkyCard {
       e.rowEls = [];
       const d = this._doc;
       for (const row of item.rows) {
-        // Sky 34 (owner 2026-11-25): one line per row on both screens: the short name when the data has one ("ISS"), the tag only for "off screen" / "hidden"; the grey note under a
-        // row is gone (the Mac shows it as the row's hover; on touch the card shows the story when the row is tapped).
+        // Sky 34 (owner 2026-11-25): a row is its name and nothing else, on both screens: the short name when the data has one ("ISS"); a row that is behind Earth, off screen or hidden
+        // in the key is dimmed (`_hlTick`); the grey note under a row is gone (the Mac shows it as the row's hover; on touch the card shows the story when the row is tapped).
         const el = d.createElement('div');
         el.style.cssText = `display:flex;align-items:center;box-sizing:border-box;min-height:${rowPx}px;padding:0 6px;border-radius:3px;cursor:pointer;touch-action:manipulation;line-height:18px;`;
         el.title = glass ? '' : (row.sub || '');
         const labelText = row.short || row.label;
-        const label = d.createElement('span'); label.style.cssText = 'flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#e8eefc'; label.textContent = labelText;
-        const tagEl = d.createElement('span'); tagEl.style.cssText = 'flex:none;margin-left:6px;font-size:9px;color:#ffb06b';
-        el.append(label, tagEl);
+        const label = d.createElement('span'); label.style.cssText = 'flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere;color:#e8eefc'; label.textContent = labelText;
+        el.append(label);
         e.press(el, () => this.hlTapRow(row));
         e.list.append(el);
-        e.rowEls.push({ el, tagEl, labelEl: label, label: labelText, sub: row.sub || '', first: row.first, norads: row.norads || null, toggle: row.toggle || null, state: '' });
+        e.rowEls.push({ el, labelEl: label, label: labelText, sub: row.sub || '', first: row.first, norads: row.norads || null, toggle: row.toggle || null, state: '' });
       }
     this._hlTickMs = -Infinity;
     this._hlHeadOn = false;                         // the Highlight header shows (an item is on): page 1 then shows the panel with no card
@@ -1387,26 +1363,24 @@ export class RealSkyCard {
     if (!i) { this._syncDodge(); return; }
     e.dot.style.background = CLASS_COLORS[i.cls] || CLASS_COLORS[5];
     e.nameEl.textContent = i.name;
-    // Sky 34 (owner 2026-11-25): the card prints the story, kind, mass, launch year and height; the rest is the name's hover.
+    // Sky 34 (owner 2026-11-25): the card prints the story, then the values only, one per line (kind, height, mass, "launched <year>"), no label column; the rest is the name's hover.
     if (e.titleEl) e.titleEl.title = [`number ${i.norad}`, `tilt ${i.tilt}`, `size ${i.size}`, i.sizeNote, i.asOf].filter(Boolean).join('\n');
     const rows = [
       i.story ? [null, i.story, true] : null,          // a Famous object's line (HighlightItems.famousStory), full width, quiet
-      ['kind', i.kind], i.mass ? ['mass', i.mass] : null,
-      i.launched ? ['launched', i.launched] : null, ['height', i.height],
+      i.kind, i.height, i.mass || null,
+      i.launched ? `launched ${i.launched}` : null,
     ].filter(Boolean);
     e.body.textContent = '';
-    for (const [k, v, quiet] of rows) {
+    for (const r of rows) {
       const line = this._doc.createElement('div');
-      if (k === null) {                                // the story, full width
+      if (Array.isArray(r)) {                          // the story
+        const [, v, quiet] = r;
         line.style.cssText = quiet ? 'margin-top:1px;margin-bottom:3px;color:#c9d6ef;font-size:10px;line-height:1.3' : 'margin-top:2px;color:#ffb06b;font-size:10px';
         line.textContent = v;
-        e.body.append(line);
-        continue;
+      } else {
+        line.style.cssText = 'overflow-wrap:anywhere';
+        line.textContent = r;
       }
-      line.style.cssText = 'display:flex;gap:8px';
-      const a = this._doc.createElement('span'); a.style.cssText = 'flex:0 0 62px;color:#8392b3'; a.textContent = k;
-      const b = this._doc.createElement('span'); b.style.cssText = 'flex:1'; b.textContent = v;
-      line.append(a, b);
       e.body.append(line);
     }
     this._syncDodge();                              // a card opened or closed: the panel's bottom moved
