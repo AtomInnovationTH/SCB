@@ -2,14 +2,15 @@
  * MapClockSlider.js — the map clock slider on floors 4 and 5 (owner 2026-11-18: "Floors 4-5 open at real speed (dots creep a
  * pixel or so a second). A slider sets pause / real / 10x / 100x / 1000x on the game's one clock, so everything stays in step").
  *
- * One row of five buttons (a stepped slider; each at least 44 px high and wide on every device): Pause, Real, 10x, 100x, 1000x.
+ * One row of four buttons (a stepped slider; each at least 44 px high and wide on every device): Real, 10x, 100x, 1000x (no Pause button since
+ * 2026-11-25; the P key still pauses the game).
  * The chosen step is lit. It owns no time: a pick calls `onPick(stepIndex)` and main.js's time block writes it into
  * `MapClock`, which feeds the TimeAuthority target. While a transfer trip sets the clock itself (burning), the row is dimmed and
  * cannot be picked, and the caption shows the trip's current speed instead (a trip never slows to real time). While a daughter is
  * NEAR her piece (from 400 m out until she holds it) the clock runs at real speed (DECISIONS §70 row 10): Real is lit, 10x / 100x /
  * 1000x are dimmed and cannot be picked (title "Real speed near a daughter's piece"). While one is out but none is near the clock runs at
- * the field's speed, 10x at most: her step or 10x is lit, 100x / 1000x are dimmed (title "Field speed while a daughter is out"). Pause
- * can always be picked; the choice is kept and lights again when she is home. The two titles are in `mapClockText.js` (7 languages).
+ * the field's speed, 10x at most: her step or 10x is lit, 100x / 1000x are dimmed (title "Field speed while a daughter is out"). The choice
+ * is kept and lights again when she is home. The two titles are in `mapClockText.js` (7 languages).
  *
  * Shown on floors 4 and 5 only (`setShown`). Placement is set by `setLayout({ floor, glass, radio })` from main.js; it takes
  * pointer events itself and keeps them from the game under it. DOM-guarded: with no document every method is inert. Styles are
@@ -24,10 +25,12 @@ export const MAP_CLOCK_SLIDER_ID = 'map-clock-slider';
 /** Hit-box minimum in CSS px (DECISIONS §32: touch targets at least 44 px). */
 export const BUTTON_MIN_PX = 44;
 
-/** What a step button says. Pause and Real are words (translated); the rest are numbers. */
-const STEP_LABELS = ['@pause', '@real', '10\u00d7', '100\u00d7', '1000\u00d7'];
+/** What a step button says. Real is a word (translated); the rest are numbers. There is no Pause button (owner 2026-11-25: "Realtime is already so slow, maybe stop is not needed, 4 buttons are enough"). */
+const STEP_LABELS = ['@real', '10\u00d7', '100\u00d7', '1000\u00d7'];
+/** The MapClock step (`FloorContract.TIME_RULES.MAP_CLOCK_STEPS` index) of the first button: step 0 is the contract's pause row, which no button picks. */
+export const FIRST_STEP = 1;
 
-/** The steps above this one are dimmed and cannot be picked while a daughter is near her piece (index 1 = Real). */
+/** The steps above this one are dimmed and cannot be picked while a daughter is near her piece (step 1 = Real, the first button). */
 export const NEAR_MAX_STEP = 1;
 /** The steps above this one are dimmed while a daughter is out but none is near (index 2 = 10x: the field's rate, `TimeAuthority.FIELD_CAP`). */
 export const OUT_MAX_STEP = 2;
@@ -50,8 +53,6 @@ export function speedText(rate, baseScale = 10) {
 
 /** The left-edge spot's inset from the window edge (px; floor 5 elsewhere). The top-right corner has none: see `sliderPlacement`. */
 export const EDGE_PX = 12;
-/** The least width of the box in the top-right corner (px; the English row is about 281 wide): the object panel under it is exactly as wide (RealSkyCard SKY_COLUMN_MIN_W_PX, the same number). */
-export const CORNER_MIN_W_PX = 284;
 
 /**
  * Where the row sits. Sky 30 (owner 2026-11-24, DECISIONS §102 row 7: "consider moving time buttons to top right on all 3 screens. consistent"): the globe (floor 4)
@@ -106,7 +107,7 @@ export class MapClockSlider {
   isLocked() { return this._locked; }
   /** @returns {boolean} a daughter is out: the faster steps are dimmed and cannot be picked */
   isDaughterOut() { return this._out && !this._locked; }
-  /** @returns {boolean} a daughter is near her piece: only Pause and Real can be picked */
+  /** @returns {boolean} a daughter is near her piece: only Real can be picked */
   isDaughterNear() { return this._out && this._near && !this._locked; }
 
   /** @param {boolean} on show on floors 4-5, hide elsewhere (write-on-change) */
@@ -125,8 +126,8 @@ export class MapClockSlider {
    * @param {number} step the MapClock choice
    * @param {boolean} locked a transfer trip is burning
    * @param {string} [tripSpeed] the trip's current speed text ("100x"), shown as the caption while locked
-   * @param {boolean} [daughterOut] a daughter is out: steps above 10x are dimmed and cannot be picked (her step or 10x is lit); Pause
-   *   still can. Her choice is not changed: it returns when she is home. A burning trip wins.
+   * @param {boolean} [daughterOut] a daughter is out: steps above 10x are dimmed and cannot be picked (her step or 10x is lit).
+   *   Her choice is not changed: it returns when she is home. A burning trip wins.
    * @param {boolean} [daughterNear] a daughter is near her piece (implies out): the clock is at real speed, Real is lit and the steps above
    *   it are dimmed
    */
@@ -156,13 +157,12 @@ export class MapClockSlider {
     this._root.style.right = pl.right;
     this._root.style.bottom = pl.bottom;
     // The corner form touches two screen edges: no border or round corner there (the radio box does the same); the 1 px of top border comes back as padding,
-    // so the row stays as tall as before (RealSkyCard SKY_CLOCK_H_PX). It is never narrower than the panel under it.
+    // so the row stays as tall as before (RealSkyCard SKY_CLOCK_H_PX). It is as wide as its four buttons (the object panel under it is 16 px wider: RealSkyCard `_syncColumnWidth`).
     const s = this._root.style;
     s.borderTopWidth = pl.corner ? '0' : '1px';
     s.borderRightWidth = pl.corner ? '0' : '1px';
     s.paddingTop = pl.corner ? '5px' : '4px';
     s.borderRadius = pl.corner ? '0' : '8px';
-    s.minWidth = pl.corner ? `${CORNER_MIN_W_PX}px` : '';
   }
 
   /** Language read again (the menu's picker can change it between games). */
@@ -187,7 +187,7 @@ export class MapClockSlider {
       const b = doc.createElement('button');
       b.setAttribute('type', 'button');
       b.setAttribute('tabindex', '-1');                        // a focused button would take Space / Enter from the game
-      b.setAttribute('data-step', String(i));
+      b.setAttribute('data-step', String(i + FIRST_STEP));
       b.style.cssText = `min-width:${BUTTON_MIN_PX}px;min-height:${BUTTON_MIN_PX}px;box-sizing:border-box;padding:0 8px;`
         + 'font:inherit;font-size:12px;font-weight:700;cursor:pointer;border-radius:6px;white-space:nowrap;'
         + 'background:rgba(20,30,50,0.9);color:#dbe4f5;border:1px solid rgba(160,180,220,0.35);';
@@ -195,8 +195,8 @@ export class MapClockSlider {
       b.addEventListener('click', (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
         if (this._locked) return;
-        if (i > this.maxStep()) return;   // a daughter is out: the clock is real speed near her piece (10x at most on the far leg), the faster steps wait for her
-        if (this._onPick) this._onPick(i);
+        if (i + FIRST_STEP > this.maxStep()) return;   // a daughter is out: the clock is real speed near her piece (10x at most on the far leg), the faster steps wait for her
+        if (this._onPick) this._onPick(i + FIRST_STEP);
       });
       row.appendChild(b);
       return b;
@@ -224,7 +224,7 @@ export class MapClockSlider {
     }
     this._buttons.forEach((b, i) => {
       const lab = STEP_LABELS[i];
-      const text = lab === '@pause' ? t.pause : lab === '@real' ? t.real : lab;
+      const text = lab === '@real' ? t.real : lab;
       if (b.textContent !== text) b.textContent = text;
       this._titles[i] = lab === '@real' ? t.realTitle : '';
     });
@@ -242,8 +242,9 @@ export class MapClockSlider {
     this._root.style.opacity = this._locked ? '0.5' : '1';
     const lit = this.litStep();
     this._buttons.forEach((b, i) => {
-      const on = i === lit;
-      const wait = i > maxStep;   // dimmed and not clickable while a daughter is out (above Real near a piece, above 10x on the far leg)
+      const step = i + FIRST_STEP;
+      const on = step === lit;
+      const wait = step > maxStep;   // dimmed and not clickable while a daughter is out (above Real near a piece, above 10x on the far leg)
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
       b.disabled = this._locked || wait;
       b.style.opacity = wait ? '0.4' : '';

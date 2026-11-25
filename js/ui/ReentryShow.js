@@ -28,7 +28,7 @@
  *   139 small pieces of 0.02-0.5 t, "debris"
  *   the 1,239 non-stage pieces total 832.0 t (1,757.4 - 925.4); each group is scaled so the totals are exact.
  * One loop is LOOP_S = 60 s: each piece starts once, evenly spread (about 26 per second). A year in a minute. Only the real-time clock moves them: the
- * time buttons' Pause (and a paused game) freezes them, every other speed leaves the loop alone.
+ * a paused game freezes them, every other speed leaves the loop alone.
  *
  * No allocation per frame: the pieces are typed arrays built once (seeded, so the show is the same every time), the active list is a preallocated
  * Int16Array, and the drawing uses constant colour strings with `globalAlpha` (no gradients). Constructible and testable in Node (no DOM: `frame`
@@ -261,7 +261,7 @@ export class ReentryShow {
   /**
    * One frame: move the loop clock by the real time since the last call (none while paused), and draw when something moved or the chart's place changed.
    * @param {{cx:number, cy:number, rEarth:number, pxPerKm:number}} geom the chart's centre, Earth's radius and the px per km of its honest LEO scale (CSS px)
-   * @param {boolean} [paused] true freezes the show (the time buttons' Pause, a paused game)
+   * @param {boolean} [paused] true freezes the show (a paused game)
    * @returns {boolean} true when it drew (or would have, headless)
    */
   frame(geom, paused = false) {

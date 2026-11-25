@@ -172,6 +172,8 @@ export class RealSkyLayer {
     this._storage = deps.storage !== undefined ? deps.storage : (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (_) { return null; } })();
     this._hideCls = new Uint8Array(CLASS_NAMES.length);   // 1 = that kind is switched off (index = class number); read from storage now
     this._loadHiddenKinds();
+    this._hideReal = this._hideCls;     // the player's saved ticks; `_hideCls` (what the draw reads) is swapped for an all-zero array while the opening dive shows every kind
+    this._showAll = false;
     this._milOn = false;                // the "military" box inside Satellites is ticked (rings drawn); saved, off by default
     this._loadMilitary();
     this._mil = null;                   // Uint8Array(N): 1 = a military satellite row (data/sky.json `mil`); null when the data has no such field
@@ -1163,11 +1165,27 @@ export class RealSkyLayer {
   /** True when the legend box of this kind (a name from CLASS_NAMES) is switched off. */
   isKindHidden(name) {
     const k = CLASS_NAMES.indexOf(name);
-    return k >= 0 && this._hideCls[k] === 1;
+    return k >= 0 && this._hideReal[k] === 1;
   }
 
-  /** The kinds switched off now (CLASS_NAMES order). */
-  hiddenKinds() { return CLASS_NAMES.filter((n, k) => this._hideCls[k] === 1); }
+  /** The kinds switched off now (CLASS_NAMES order): the saved ticks, also while the opening dive draws everything. */
+  hiddenKinds() { return CLASS_NAMES.filter((n, k) => this._hideReal[k] === 1); }
+
+  /**
+   * The opening dive from the menu (owner 2026-11-25): while on, every kind is drawn as in the all-ticked look, whatever the saved ticks.
+   * The ticks themselves are not touched (key, storage, `isKindHidden` still tell the truth) and apply again the moment this goes off.
+   * @param {boolean} on @returns {boolean} the state now
+   */
+  setShowAllKinds(on) {
+    const o = !!on;
+    if (o === this._showAll) return o;
+    this._showAll = o;
+    this._hideCls = o ? new Uint8Array(CLASS_NAMES.length) : this._hideReal;
+    this._applyHiddenDraw();
+    this._lookReindex();
+    this._lastPaintMs = -Infinity;
+    return o;
+  }
 
   /**
    * Switch a kind off or on: not drawn on floors 4 and 5 and not pickable while off; saved. Switching off the kind of the object
@@ -1178,8 +1196,9 @@ export class RealSkyLayer {
     const k = CLASS_NAMES.indexOf(name);
     if (k < 0) return false;
     const h = hide ? 1 : 0;
-    if (this._hideCls[k] === h) return h === 1;
-    this._hideCls[k] = h;
+    if (this._hideReal[k] === h) return h === 1;
+    this._hideReal[k] = h;
+    if (this._showAll) { this._saveHiddenKinds(); return h === 1; }   // mid-dive: saved now, drawn when the dive ends
     this._saveHiddenKinds();
     this._applyHiddenDraw();
     this._lookReindex();

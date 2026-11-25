@@ -2162,8 +2162,8 @@ async function init() {
     satSource: () => catalogLoader.getAllActiveSats(),
     realSkySource: () => catalogLoader.getRealSky(),
     kessler: kesslerSystem,
-    // the page 1 falling pieces stand still on the time buttons' Pause (map clock step 'pause') and in a paused game (Sky 31, DECISIONS §103 row 3)
-    isPaused: () => mapClock.stepRow().id === 'pause' || !!(gameFlowManager && gameFlowManager.paused),
+    // the page 1 falling pieces stand still in a paused game (Sky 31, DECISIONS §103 row 3; the time buttons' Pause button is gone since Sky 34, owner 2026-11-25)
+    isPaused: () => !!(gameFlowManager && gameFlowManager.paused),
   });
   // The page row (plan sky-top-1121): floor 4 is the top floor and floor 5 is "the row is open". PAGE LIST: page 1 = the debris
   // chart (an adapter over sdaFloor), page 2 = the air chart (systems/AirPage.js: her height and today's Sun, no game state of its own).
@@ -6793,7 +6793,8 @@ function gameLoop(timestamp) {
     // The ladder rail is out of sight on floor 4 once the player has been there before (owner 2026-11-25, DECISIONS §105 row 5):
     // floor 4 is the top floor, no rung is clickable there, and the globe is crowded. Whether floor 4 was already taught is read on
     // the frame the floor BECOMES 4, before the floor-words block below marks it in the same frame, so the visit that teaches the
-    // word keeps the rail for its whole stay. Floors 1-3 and 5 (the pages, where rung 4 is the way back) are as ever.
+    // word keeps the rail for its whole stay. Floors 2 and 3 never show it (owner 2026-11-25, Sky 34); floors 1 and 5 (the pages,
+    // where rung 4 is the way back) are as ever.
     if (_floorNow !== _railFloorPrev) {
       _railFloorPrev = _floorNow;
       _rail4Known = (_floorNow === 4) && !!(floorWordsStore && floorWordsStore.isTaught(4));
@@ -6894,6 +6895,9 @@ function gameLoop(timestamp) {
   // just returns (its edge-chrome opacity is inline, and the arrive fade's fill would pin it at 1). Written only on change.
   {
     const dive = _ladderActive && !!(ladderController && ladderController.introInFlight && ladderController.introInFlight());
+    // The dive shows every kind of dot, whatever the player unticked on floor 4 (owner 2026-11-25); the saved ticks are untouched and
+    // apply again when it ends. Called every tick (a no-op unless it changes) so a layer built after the dive began is caught too.
+    if (realSkyLayer && realSkyLayer.setShowAllKinds) realSkyLayer.setShowAllKinds(dive);
     if (dive !== _introDiveAttr) {
       _introDiveAttr = dive;
       if (dive) document.body.setAttribute('data-intro-dive', '');

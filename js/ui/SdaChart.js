@@ -741,7 +741,7 @@ export class SdaChart {
     this._lensButtons = new Map();
     /** A press on a lens button calls this with 'VALUE' | 'THREAT' (SdaFloor sets it to its own setLens); unset: the chart's own. */
     this.onLens = null;
-    /** () => true while the falling pieces must stand still (the time buttons' Pause, a paused game); SdaFloor sets it; unset: never paused. */
+    /** () => true while the falling pieces must stand still (a paused game); SdaFloor sets it; unset: never paused. */
     this.isPaused = null;
     /** The falling pieces (Sky 31, DECISIONS §103 row 3): their own canvas, drawn every frame while the chart shows (the chart's own canvas stays write-on-change). */
     this._reentry = new ReentryShow({ now: this._now });

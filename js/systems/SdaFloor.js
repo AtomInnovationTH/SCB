@@ -50,7 +50,7 @@ export class SdaFloor {
    * @param {function} [deps.realSkySource] - () => data/real-sky.json summary or null (CatalogLoader.getRealSky())
    * @param {function} [deps.now] - monotonic ms clock (tests)
    * @param {object} [deps.realSkyLayer] - RealSkyLayer (show(5) / hide(5)); absent = no real dots
-   * @param {function():boolean} [deps.isPaused] - true while the falling pieces must stand still (the map clock's Pause step, a paused game)
+   * @param {function():boolean} [deps.isPaused] - true while the falling pieces must stand still (a paused game)
    */
   constructor(deps = {}) {
     this._clusterSource = deps.clusterSource || null;
@@ -60,7 +60,7 @@ export class SdaFloor {
     this._chart = deps.chart || new SdaChart();
     // The chart's two lens buttons (Tonnes / Danger) set the lens through this floor, like the endings ride does.
     if ('onLens' in this._chart) this._chart.onLens = (lens) => this.setLens(lens);
-    // The falling pieces stand still while this says so (the time buttons' Pause, a paused game): main.js passes it (Sky 31, DECISIONS §103 row 3).
+    // The falling pieces stand still while this says so (a paused game): main.js passes it (Sky 31, DECISIONS §103 row 3).
     if ('isPaused' in this._chart && typeof deps.isPaused === 'function') this._chart.isPaused = deps.isPaused;
     this._now = deps.now || _nowMs;
     this._realSkyLayer = deps.realSkyLayer || null;   // the real-catalogue dots (ui/RealSkyLayer.js, plan sky-1116): show(5) / hide(5)

@@ -121,7 +121,7 @@ export function buildFamous(cat, hl) {
     if (ns.length === 0) continue;
     for (const n of ns) norads.add(n);
     names.set(ns[0], shortName(f.id, f.label, f.short));
-    rows.push({ key: f.id, label: f.label, sub: f.line || '', norads: ns, first: ns[0], count: ns.length });
+    rows.push({ key: f.id, label: f.label, short: shortName(f.id, f.label, f.short), sub: f.line || '', norads: ns, first: ns[0], count: ns.length });
   }
   if (rows.length === 0) return null;
   return {

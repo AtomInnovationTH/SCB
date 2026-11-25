@@ -37,13 +37,14 @@ export function floorWordsToShow({ floor, riding, intro, quiet, taught }) {
 
 /**
  * Should the ladder rail be kept out of sight on this floor? (DECISIONS §105 row 5, owner 2026-11-25: "probably not needed after
- * first visit to top floor".) Pure. Only floor 4, and only when floor 4's word was ALREADY taught on the frame this visit began
- * (the visit that teaches it keeps the rail). Floors 1-3 and floor 5 (the pages: rung 4 is the way back) always show it.
+ * first visit to top floor".) Pure. Floor 4 only when floor 4's word was ALREADY taught on the frame this visit began (the visit that
+ * teaches it keeps the rail). Floors 2 and 3: always (owner 2026-11-25, Sky 34: "the floor ladder is not needed on screen 2, or
+ * screen 3"). Floor 1 and floor 5 (the pages: rung 4 is the way back) always show it.
  * @param {{floor: (number|null), taughtOnArrival: boolean}} p
  * @returns {boolean}
  */
 export function railKeptOut({ floor, taughtOnArrival }) {
-  return floor === 4 && !!taughtOnArrival;
+  return floor === 2 || floor === 3 || (floor === 4 && !!taughtOnArrival);
 }
 
 /** @private default storage: the global localStorage when present. */
