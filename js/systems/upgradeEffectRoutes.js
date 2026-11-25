@@ -126,6 +126,9 @@ export const EFFECT_ROUTES = {
   tetherTier: [ARM_MANAGER],
 
   // ── Salvage → runtime-checked (no apply-time mutation) ──
+  // ── Gas tools (DECISIONS §106; port plug, line tap, tank drill) → PlayerSatellite: a set of owned tool ids (idempotent: the
+  // save-restore replay re-applies it) whose mass rides the mass budget; GameFlowManager reads ownership by `_hasUpgrade` at the catch ──
+  gasTool: [PLAYER],
   hazmatRecovery: [RUNTIME],
   refineryEfficiency: [RUNTIME],
 

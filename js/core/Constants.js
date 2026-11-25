@@ -21,7 +21,7 @@ export const Constants = {
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as ?v=<DATA_VERSION>). Deliberately SEPARATE
   // from VERSION: a curated-content edit must invalidate cached JSON without moving the release number. Bump it on
   // every ./data/ content change; leave VERSION for actual releases.
-  DATA_VERSION: '1126',   // Sky 32 (11-25): data/sky.json `mil` field (GCAT payload Class D) (was 1125: Sky 28, data/highlights.json Famous 11 entries, `short`, `names`)
+  DATA_VERSION: '1127',   // Reality 13 G4 (11-25): data/codex.json gas text (a bought gas tool takes a catch's gas, not instant) (was 1126: Sky 32 (11-25): data/sky.json `mil` field (GCAT payload Class D) (was 1125: Sky 28, data/highlights.json Famous 11 entries, `short`, `names`))
   // owner 2026-09-08: the T1 nose-collar card is the DOCKING COLLAR card (docking_berthing.hardwareNames). The DAUGHTER
   // STRUTS card (daughter cradle struts callout) was appended to that list later, no entries added: DECISIONS §13 r4.
 
@@ -1300,7 +1300,9 @@ export const Constants = {
     // Re-derived 2026-11-02 (laser-1101 L4): +2000 for long_despin_laser (47930 -> 49930). The taper thresholds move with it.
     // Re-derived 2026-11-04 (laser round 2 S1): +1200 relay_mirrors, +1500 weaver_laser (49930 -> 52630). The taper (CAPTURE_CREDITS_TAPER,
     // multiples of this) now starts at 1.5 x 52630 = 78,945 cr of capture earnings (was 74,895) and approaches 2.5 x = 131,575 cr (was 124,825).
-    CATALOG_TOTAL_CR: 52630,
+    // Re-derived 2026-11-25 (Reality 13 G2): +1010 gas_port_plug, +1550 gas_line_tap, +2060 gas_tank_drill (52630 -> 57250). The taper now starts at
+    // 1.5 x 57250 = 85,875 cr of capture earnings and approaches 2.5 x = 143,125 cr.
+    CATALOG_TOTAL_CR: 57250,
     // Ordered recommendation preference for the starter highlight. The shop
     // marks the first item here that is un-owned and currently affordable. 'capture_net' left it 2026-11-07 (net-odds-1107 D5:
     // the row is not sold, its effect was never wired).
@@ -2937,6 +2939,41 @@ export const Constants = {
   SALVAGE_HYDRAZINE_MIN: 2,           // kg
   SALVAGE_HYDRAZINE_MAX: 10,          // kg
   SALVAGE_HYDRAZINE_COLDGAS_RATIO: 0.6, // 60% conversion to cold gas equivalent
+  // Gas tools for dead craft (DECISIONS §106; Reality 13 G1; research docs/research/2026-11-gas-tools.md §2-5). A caught dead satellite's
+  // leftover gas is taken by a BOUGHT tool, as a timed job at the mother after the catch (js/systems/GasJobs.js owns the math).
+  // Price = mass x launch price per kg + premium, rounded to 10 cr (`gasToolPriceCr`): 1,010 / 1,550 / 2,060 cr. `kg` is hardware mass
+  // that counts in hers. `phases`: `min` game minutes at `w` watts, or the transfer phase (`ratePerMin` kg per game minute at `w` watts).
+  GAS_TOOLS: {
+    // The fit: each piece hashes its id to u in [0,1): u < port 'port' (a fuel port), u < line 'line' (a reachable fuel line), else
+    // 'tank' (sealed). The plug fits 'port'; the tap 'port' and 'line'; the drill all three.
+    ACCESS: { port: 0.05, line: 0.40 },
+    MIN_BATTERY_FRAC: 0.2,   // below this share of her current battery max a job pauses until the sun charges it
+    RESUME_BATTERY_FRAC: 0.25,   // a paused job goes on only above this share, so a battery held near the floor can't flip it every frame
+    ORDER: ['gas_port_plug', 'gas_line_tap', 'gas_tank_drill'],   // fastest first; bought in this order, each needs the one before
+    TOOLS: {
+      gas_port_plug: {
+        name: 'Port plug', kg: 3, premiumCr: 800, trl: 5, fits: ['port'],
+        phases: [
+          { name: 'clamp', min: 5, w: 10 }, { name: 'open', min: 5, w: 10 },
+          { name: 'transfer', ratePerMin: 0.5, w: 25 }, { name: 'seal', min: 5, w: 10 },
+        ],
+      },
+      gas_line_tap: {
+        name: 'Line tap', kg: 5, premiumCr: 1200, trl: 3, fits: ['port', 'line'],
+        phases: [
+          { name: 'clamp', min: 10, w: 10 }, { name: 'pierce', min: 10, w: 30 }, { name: 'warm', min: 15, w: 40 },
+          { name: 'transfer', ratePerMin: 0.2, w: 10 }, { name: 'seal', min: 10, w: 10 },
+        ],
+      },
+      gas_tank_drill: {
+        name: 'Tank drill', kg: 8, premiumCr: 1500, trl: 2, fits: ['port', 'line', 'tank'],
+        phases: [
+          { name: 'clamp', min: 15, w: 10 }, { name: 'drill', min: 60, w: 80 }, { name: 'warm', min: 30, w: 60 },
+          { name: 'transfer', ratePerMin: 0.1, w: 10 }, { name: 'seal', min: 15, w: 10 },
+        ],
+      },
+    },
+  },
   SALVAGE_LITHIUM_MIN: 5,               // units (F16: MPD thruster propellant)
   SALVAGE_LITHIUM_MAX: 15,              // units (reasonable for 100 capacity)
 

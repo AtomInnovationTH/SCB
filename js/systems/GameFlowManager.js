@@ -12,6 +12,8 @@ import { gameState, GameStates } from '../core/GameState.js';
 import { getMissionProgress, isGuidedChapterNumber, missionName } from '../core/missionProgress.js';
 import timerManager from './TimerManager.js';
 import { isTrainingNow } from './TrainingHintGate.js';
+import { TimeAuthority } from './TimeAuthority.js';
+import { gasAccess, bestTool, toolDef, toolFits, createJob, advanceJob, jobMovedKg } from './GasJobs.js';
 import { CameraViews } from './CameraSystem.js';
 import { scoringSystem, computeSaleValue } from './ScoringSystem.js';
 import { audioSystem } from './AudioSystem.js';
@@ -108,6 +110,8 @@ const BAG_DRIFT_KMS = 0.0005;
 const BAG_GONE_S = 8;
 /** A kept piece never falls below this when its salvage moves into her stores (kg): a small positive floor, not a zero-mass body. */
 const HELD_PIECE_MIN_KG = 0.01;
+/** @private A gas job's piece must read "not aboard" this many real seconds in a row before the job ends early: a hand-off between the nose and a rack clears the pin flags for a frame or two (DECISIONS §106). */
+const GAS_JOB_GONE_GRACE_S = 1.5;
 /** @private P34 L3-fix3: a holder that has not reached her burn-lift pose this many real seconds after the time she needs to get there is given up on (`_meltLiftTimeout`). */
 const LIFT_SETTLE_EXTRA_S = 2;
 
@@ -982,6 +986,7 @@ export class GameFlowManager {
       this._meltFinals = [];                // no melted piece waits to be let go, no save is owed
       this._meltBallsReset();               // no tip waits for its sun oven to fold, no receiver glows
       this._goneBags = [];                  // no let-go bag is left to take off the field
+      this._gasJobs = null;                 // no gas job runs or waits (DECISIONS §106 rule 8; the tools come back with the upgrade replay below)
       this._meltSaveOwed = false;
 
       // Reset game counters but keep gameState.currentState at GAME_OVER for valid → SHOP transition
@@ -1327,24 +1332,19 @@ export class GameFlowManager {
         if (hasSalvage) {
           const salvage = debris.salvage;
           const refineryMult = this._hasUpgrade('refinery_arm') ? 1.5 : 1.0;
-          // Every kg of this body's salvage that lands in a store her mass budget weighs (engine gas, cold gas, indium store, the hold) is read
+          // Every kg of this body's salvage that lands in a store her mass budget weighs (cold gas, indium store, the hold; engine gas lands
+          // later, at the end of a gas job: `_finishGasJob` does its own before/after) is read
           // off these stores before and after (below), so a kept piece gives up what moved and the kg count once.
           const storesBefore = this._weighedStoresKg();
 
-          // Xenon → main satellite fuel. Salvaged gas is MASS: today's argon amount in kg, loaded as kg of the gas IN the
-          // tank (the resupply path, clamped to free space), named for the real gas and the real kg.
-          if (salvage.xenon > 0 && resourceSystem) {
-            const wantKg = salvageGasKg(salvage.xenon) * refineryMult;
-            const gotKg = resourceSystem.resupplyEngineGas(wantKg, { source: 'salvage' });    // the range map's "catches gave" counts this path only
-            const gasName = (Constants.FUELS[resourceSystem.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL]).name;
-            eventBus.emit(Events.COMMS_MESSAGE, {
-              text: gotKg > 0
-                ? `\u26CF Salvaged ${gotKg.toFixed(1)} kg ${gasName} \u2014 \u0394V extended!`
-                : `\u26CF Salvaged ${wantKg.toFixed(1)} kg ${gasName} \u2014 engine tank already full`,
-              priority: 'good', _result: true,   // a result (kg salvaged): the panel queue cap spares it (t14 P)
-            });
+          // Engine gas (xenon pool units) and hydrazine are NOT given at the catch any more (DECISIONS §99 row 3, §106: "gas from dead
+          // satellites is near-tech"). A bought gas tool takes them as a timed job at the mother, while she holds the piece (below,
+          // `_offerGasJob`): the gas lands in the tank at the job's end, hydrazine as cold gas with the Hazmat Handler. The refinery
+          // no longer multiplies either. In training 1-3 no job starts and nothing is said: the gas stays on the piece. A catch that
+          // is not kept ({ parked } false: a furnace feed-end, flag off as shipped) is gone at once, so it offers no job either.
+          if ((salvage.xenon > 0 || salvage.hydrazine > 0) && resourceSystem && data.parked && outerDebris && !isTrainingNow()) {
+            this._offerGasJob(debris, outerDebris, salvage);
           }
-
           // Indium → the mother's indium store (DECISIONS §4 "Docked servicing": salvaged indium goes to a mother-side store,
           // never straight into a daughter tank; a daughter's tank only fills through a docked cartridge swap). What does not
           // fit the store is lost, and one plain line says so.
@@ -1378,24 +1378,12 @@ export class GameFlowManager {
             });
           }
 
-          if (salvage.hydrazine > 0 && resourceSystem) {
-            const hasHazmat = this._hasUpgrade('hazmat_handler');
-            if (hasHazmat) {
-              // The salvaged kg go into the tank AS kg (the pool is 20 units = 6 kg); the line reports what fit
-              const coldGasKg = salvage.hydrazine * refineryMult * Constants.SALVAGE_HYDRAZINE_COLDGAS_RATIO;
-              const poolBefore = resourceSystem.coldGas;
-              resourceSystem.replenish('coldGas', coldGasKgToPool(coldGasKg));
-              const gotKg = coldGasPoolToKg(resourceSystem.coldGas - poolBefore);
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `\u26A0 Hazmat: ${salvage.hydrazine.toFixed(1)} kg N\u2082H\u2084 \u2192 ${gotKg.toFixed(1)} kg cold gas`,
-                priority: 'warning',
-              });
-            } else {
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `\u26A0 N\u2082H\u2084 detected but no Hazmat Handler \u2014 discarded safely`,
-                priority: 'warning',
-              });
-            }
+          if (salvage.hydrazine > 0 && resourceSystem && !this._hasUpgrade('hazmat_handler')) {
+            // With the Hazmat Handler the hydrazine rides the gas job (`_offerGasJob`); without it, it is discarded at the catch as before
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              text: `\u26A0 N\u2082H\u2084 detected but no Hazmat Handler \u2014 discarded safely`,
+              priority: 'warning',
+            });
           }
 
           // Lithium → MPD thruster propellant
@@ -1410,7 +1398,7 @@ export class GameFlowManager {
 
           // --- Metal cargo storage ---
           // A kept catch ({ parked: true }: at the nose collar or on a rack) stays aboard at its full mass while its salvage goes into stores
-          // that now weigh (the hold's metal, engine gas, cold gas, the indium store); the kg that moved into them leave the piece (plan
+          // that now weigh (the hold's metal, the indium store; the engine and cold gas of a gas job follow at its end); the kg that moved into them leave the piece (plan
           // hold-mass-1106 H5b, review extension): the kg count once.
           const metalSalvage = (salvage.metals || []).filter(s => s.type === 'metal');
           for (const metal of metalSalvage) {
@@ -1952,6 +1940,7 @@ export class GameFlowManager {
     this._meltFinals = [];                  // no melted piece waits to be let go, no save is owed
     this._meltBallsReset();                 // no tip waits for its sun oven to fold, no receiver glows
     this._goneBags = [];                    // no let-go bag is left to take off the field
+    this._gasJobs = null;                   // no gas job runs or waits (DECISIONS §106 rule 8: jobs live in memory only)
     this._meltSaveOwed = false;
 
     // Notify self-resetting systems (CommsSystem, KesslerSystem, TutorialSystem, TrawlManager)
@@ -3168,7 +3157,7 @@ export class GameFlowManager {
 
   /**
    * @private Kg in the stores her mass budget weighs and a catch's salvage can fill: engine gas, cold gas, the indium store and the hold's
-   * metal (`ArmManager.getMassBudget`). A kept catch gives up the kg that moved into these (CATCH_PROCESSED salvage pass).
+   * metal (`ArmManager.getMassBudget`). A kept catch gives up the kg that moved into these (CATCH_PROCESSED salvage pass; a gas job's end).
    * @returns {number}
    */
   _weighedStoresKg() {
@@ -4707,6 +4696,7 @@ export class GameFlowManager {
     // the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
     this._trip.update(dt);
     this._demoWatchBurn();                                        // demo mode: the first burn's engine swing ends the demo (DemoEnd.js)
+    this._gasJobsFrame(dt);                                       // the gas tool's job at the mother (DECISIONS §106): before the early return below, which is taken on almost every frame
     const p = this._pendingMissionStart;
     if (!p) return;
     if (!(dt > 0) || !gameState.isGameplay()) return;
@@ -5197,6 +5187,209 @@ export class GameFlowManager {
     this.saveGame();
     persistenceManager.setCeremonyFlag('FIRST_DEPOT_VISITED', true);
     return true;
+  }
+
+  // ── Gas jobs (DECISIONS §99 row 3, §106; Reality 13; math in GasJobs.js, numbers in Constants.GAS_TOOLS) ──────────────────────────────────
+  // A caught dead craft's leftover gas is taken by a BOUGHT tool, as a timed job at the mother while she holds the piece: it draws her
+  // battery and ends with one award into the tank. One job runs at a time (one tool kit aboard), the rest wait in catch order. Jobs live
+  // in memory only: a small held piece is not saved, so a reload has no piece to finish on (`resetGame` and `GAMEOVER_CONTINUE` clear them).
+
+  /** @private The jobs' state, made on first use: `{ running, queue, pausedSaid }`. */
+  _gj() {
+    if (!this._gasJobs) this._gasJobs = { running: null, queue: [], pausedSaid: false };
+    return this._gasJobs;
+  }
+
+  /** @private The gas tools she owns, fastest first. @returns {string[]} */
+  _ownedGasTools() {
+    return Constants.GAS_TOOLS.ORDER.filter((id) => this._hasUpgrade(id));
+  }
+
+  /** @private The name of the gas in the engine tank (the default gas without a resource system). */
+  _tankGasName() {
+    const rs = this._refs && this._refs.resourceSystem;
+    return (Constants.FUELS[rs && rs.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL]).name;
+  }
+
+  /** @private "1.0 kg of Argon" / "1.0 kg of Argon and 2.0 kg of hydrazine" / "2.0 kg of hydrazine". */
+  _gasWhat(gasKg, hydraKg) {
+    const parts = [];
+    if (gasKg > 0) parts.push(`${gasKg.toFixed(1)} kg of ${this._tankGasName()}`);
+    if (hydraKg > 0) parts.push(`${hydraKg.toFixed(1)} kg of hydrazine`);
+    return parts.join(' and ');
+  }
+
+  /** @private One gas-job comms line (a result, like the old salvage line: the panel queue cap spares it). */
+  _gasSay(text, priority = 'good') {
+    eventBus.emit(Events.COMMS_MESSAGE, { text, priority, _result: true });
+  }
+
+  /**
+   * @private A job's piece is still aboard: not removed from the field, and at least one of the flags that hold a piece at the nose
+   * collar, on a rack or in a tip slot is set (`_captured`, `_armPinned`, `_motherParked`: each is cleared when the piece leaves, by
+   * `CaptureNet._clearCatchPins`, `ArmUnit._releaseCapturedDebris`, `TipCargo` release). Tested on the HELD body (a scoop bag: the bag,
+   * never a member, whose own body leaves play when bagged). 'gone' = removed (melted, handed over); 'free' = no flag set (let go, or
+   * a hand-off's blip: the caller waits `GAS_JOB_GONE_GRACE_S` before it believes it).
+   * @param {{held: object, heldId: *}} e
+   * @returns {'aboard'|'free'|'gone'}
+   */
+  _gasPieceState(e) {
+    const h = e.held;
+    if (!h || h.alive === false) return 'gone';
+    const field = this._refs && this._refs.debrisField;
+    if (field && typeof field.getDebrisById === 'function' && !field.getDebrisById(e.heldId)) return 'gone';
+    return (h._captured === true || h._armPinned === true || h._motherParked === true) ? 'aboard' : 'free';
+  }
+
+  /**
+   * @private The salvage pass offers one job for one paid body (rules 1-4, 9): the best owned tool that fits it, or one line saying what
+   * holds the gas and which tool would take it. Job kg = engine gas (+ hydrazine with the Hazmat Handler); no refinery multiplier.
+   * @param {object} body the paid body (a scoop bag's member, its own gas and id) @param {object} held the body she holds (`outerDebris`)
+   * @param {object} salvage `body.salvage`
+   */
+  _offerGasJob(body, held, salvage) {
+    const gasKg = salvage.xenon > 0 ? salvageGasKg(salvage.xenon) : 0;
+    const hydraKg = salvage.hydrazine > 0 && this._hasUpgrade('hazmat_handler') ? salvage.hydrazine : 0;
+    const kg = gasKg + hydraKg;
+    if (!(kg > 0)) return;
+    const access = gasAccess(body.id);
+    const owned = this._ownedGasTools();
+    const toolId = bestTool(access, owned);
+    const say = pieceName(body);
+    const what = this._gasWhat(gasKg, hydraKg);
+    if (!toolId) {
+      if (!owned.length) {
+        this._gasSay(`${pieceNameCap(body)} holds about ${what}. Taking it needs a gas tool from the shop.`);
+      } else {
+        const need = Constants.GAS_TOOLS.ORDER.find((id) => toolFits(id, access));
+        this._gasSay(`${pieceNameCap(body)} holds about ${what}, but it has no fuel port${access === 'tank' ? ' or reachable fuel line' : ''}: the ${toolDef(need).name.toLowerCase()} can take it.`);
+      }
+      return;
+    }
+    const g = this._gj();
+    const e = { toolId, kg, gasKg, hydraKg, held, heldId: held.id, say, what, job: createJob(toolId, kg), goneS: 0 };
+    if (g.running) {
+      g.queue.push(e);
+      this._gasSay(`${toolDef(toolId).name} next for the ${say} (${what}), after the job under way.`);
+    } else {
+      this._startGasJob(e);
+    }
+  }
+
+  /** @private Make `e` the running job and say so. */
+  _startGasJob(e) {
+    const g = this._gj();
+    g.running = e;
+    g.pausedSaid = false;
+    const min = Math.round(e.job.plan.totalS / 60);
+    this._gasSay(`${toolDef(e.toolId).name} on the ${e.say}: taking about ${e.what}, about ${min} min of ship time.`);
+  }
+
+  /**
+   * @private Start the next waiting job whose piece is still aboard; one removed, or free for `GAS_JOB_GONE_GRACE_S`, is dropped without
+   * a word. A free piece waits out the grace first (a hand-off's blip, as the running job does; review 11-25).
+   * @param {number} [dt] real seconds this frame (0 from `_finishGasJob`)
+   */
+  _nextGasJob(dt = 0) {
+    const g = this._gj();
+    while (g.queue.length && !g.running) {
+      const e = g.queue[0];
+      const st = this._gasPieceState(e);
+      if (st === 'aboard') { g.queue.shift(); e.goneS = 0; this._startGasJob(e); continue; }
+      if (st === 'free' && (e.goneS += dt) < GAS_JOB_GONE_GRACE_S) return;
+      g.queue.shift();
+    }
+  }
+
+  /**
+   * @private The running job ends: at its end (`early` false, the whole load) or when its piece left (`early` true, the moved share of
+   * the transfer phase). The gas goes into the tank through `resupplyEngineGas(..., { source: 'salvage' })` (the range map's "catches
+   * gave" keeps counting it), hydrazine as cold gas; what does not fit stays in the piece (lost). A kept piece loses the kg that moved
+   * (`_weighedStoresKg` before and after, the rule the instant award used). A paying job writes a save.
+   * @param {boolean} early
+   */
+  _finishGasJob(early) {
+    const g = this._gj();
+    const e = g.running;
+    if (!e) return;
+    g.running = null;
+    const rs = this._refs && this._refs.resourceSystem;
+    const f = early ? (e.kg > 0 ? Math.min(1, jobMovedKg(e.job) / e.kg) : 0) : 1;
+    const wantGas = e.gasKg * f;
+    const wantHydra = e.hydraKg * f;
+    const tool = toolDef(e.toolId).name;
+    const gas = this._tankGasName();
+    const before = this._weighedStoresKg();
+    let gotGas = 0;
+    let gotCold = 0;
+    if (rs && wantGas > 0) gotGas = rs.resupplyEngineGas(wantGas, { source: 'salvage' });
+    if (rs && wantHydra > 0) {
+      const poolBefore = rs.coldGas;
+      rs.replenish('coldGas', coldGasKgToPool(wantHydra * Constants.SALVAGE_HYDRAZINE_COLDGAS_RATIO));
+      gotCold = coldGasPoolToKg(rs.coldGas - poolBefore);
+    }
+    if (!early) {
+      const moved = this._weighedStoresKg() - before;
+      if (moved > 0 && e.held && Number.isFinite(e.held.mass)) this._setHeldPieceMass(e.held, Math.max(HELD_PIECE_MIN_KG, e.held.mass - moved));
+      const min = Math.round(e.job.plan.totalS / 60);
+      if (e.gasKg > 0) {
+        const left = wantGas - gotGas;
+        this._gasSay(left > 1e-9
+          ? `\u26CF ${tool} done: ${gotGas.toFixed(1)} kg of ${gas} into the tank, ${left.toFixed(1)} kg left in the ${e.say}: the engine tank is full.`
+          : `\u26CF ${tool} done: ${gotGas.toFixed(1)} kg of ${gas} from the ${e.say} into the tank (${min} min of ship time).`);
+      }
+      if (e.hydraKg > 0) {
+        this._gasSay(`\u26A0 Hazmat: ${e.hydraKg.toFixed(1)} kg N\u2082H\u2084 \u2192 ${gotCold.toFixed(1)} kg cold gas`, 'warning');
+      }
+    } else {
+      const taken = gotGas > 0 ? `${gotGas.toFixed(1)} kg of ${gas} taken.`
+        : (wantGas > 1e-9 ? 'No gas taken: the engine tank is full.' : (gotCold > 0 ? '' : 'No gas taken.'));
+      const cold = gotCold > 0 ? `${taken ? ' ' : ''}${gotCold.toFixed(1)} kg cold gas taken.` : '';
+      this._gasSay(`${tool} stopped: the ${e.say} left the ship. ${taken}${cold}`.trimEnd());
+    }
+    if (gotGas > 0 || gotCold > 0) this.saveGame();
+    this._nextGasJob();
+  }
+
+  /**
+   * @private Once a frame (`update(dt)`, the same `dt` the furnace's `tipCargo.update` gets: 0 while the world is held). The running job
+   * advances `dt x TimeAuthority.fixedClockScale()` game seconds (as `TipCargo` advances the furnace) and draws the mother's battery
+   * (`watts x game s / 3600` Wh). Below `Constants.GAS_TOOLS.MIN_BATTERY_FRAC` of her current battery max, or when the battery gives less
+   * than asked, it waits (one line per wait, not per frame). A piece that left ends the job at once and pays the moved share.
+   * @param {number} dt real seconds of game time this frame
+   */
+  _gasJobsFrame(dt) {
+    const g = this._gasJobs;
+    if (!g || (!g.running && !g.queue.length)) return;
+    if (!(dt > 0) || !gameState.isGameplay()) return;
+    if (!g.running) this._nextGasJob(dt);
+    const e = g.running;
+    if (!e) return;
+    const st = this._gasPieceState(e);
+    if (st === 'gone') { this._finishGasJob(true); return; }
+    if (st === 'free') {
+      e.goneS += dt;
+      if (e.goneS >= GAS_JOB_GONE_GRACE_S) this._finishGasJob(true);
+      return;
+    }
+    e.goneS = 0;
+    const rs = this._refs && this._refs.resourceSystem;
+    if (!rs) return;
+    const T = Constants.GAS_TOOLS;
+    // Once paused it goes on only above RESUME_BATTERY_FRAC: a battery the sun holds near the floor would otherwise flip the job, and
+    // post its paused line, every few frames (review 11-25).
+    const floor = g.pausedSaid ? T.RESUME_BATTERY_FRAC : T.MIN_BATTERY_FRAC;
+    const low = !(rs.batteryMax > 0) || rs.battery < floor * rs.batteryMax;
+    const r = low ? { paused: true, done: false } : advanceJob(e.job, dt * TimeAuthority.fixedClockScale(), (wh) => rs.drawUpTo('battery', wh));
+    if (r.paused) {
+      if (!g.pausedSaid) {
+        g.pausedSaid = true;
+        this._gasSay(`${toolDef(e.toolId).name} paused: the battery is below ${Math.round(T.MIN_BATTERY_FRAC * 100)} %. It goes on as the sun charges it.`, 'info');
+      }
+      return;
+    }
+    g.pausedSaid = false;
+    if (r.done) this._finishGasJob(false);
   }
 
   /**

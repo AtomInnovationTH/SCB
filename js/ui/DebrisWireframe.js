@@ -14,6 +14,7 @@ import { DebrisTextureAtlas, getUVOffsetForType, getBaseColorForType, getEmissiv
 import { FlagDecalSystem, getUVOffsetForCountry, hasFlag } from './FlagDecalSystem.js';
 import { salvageGasKg } from '../systems/ResourceSystem.js';
 import { dossierSystem, DossierSystem, DOSSIER_TIERS, appraiseSalvage, inspectStepLines } from '../systems/DossierSystem.js';
+import { gasAccess, accessWords } from '../systems/GasJobs.js';
 import { massShown, formatMassBand } from '../systems/ScanMass.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { mono } from '../core/Typeface.js';
@@ -1928,7 +1929,7 @@ export class DebrisWireframe {
     const t = this._target;
     if (!t.hasSalvage || !t.salvage) return;
     const D = Constants.DOSSIER || {};
-    const { rows, total } = appraiseSalvage(t.salvage);
+    const { rows, total } = appraiseSalvage(t.salvage, gasAccess(t.id));
     if (rows.length === 0) return;
 
     // Typewriter: one row per PROFILE_ROW_INTERVAL_S after the survey; targets profiled earlier (re-selected) show
@@ -1988,7 +1989,7 @@ export class DebrisWireframe {
     if (hasScanner) {
       if (salvage.xenon > 0) {
         ctx.fillStyle = VisualLaw.COLORS.INFO;
-        ctx.fillText(`Gas: ~${salvageGasKg(salvage.xenon).toFixed(1)} kg`, WIRE_CX, infoY);
+        ctx.fillText(`Gas: ~${salvageGasKg(salvage.xenon).toFixed(1)} kg${accessWords(gasAccess(this._target.id))}`, WIRE_CX, infoY);
         infoY += 11;
       }
       if (salvage.indium > 0) {

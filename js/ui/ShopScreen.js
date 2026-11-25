@@ -19,6 +19,13 @@ import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GA
 import { despinReachM, drawW, beamW, relayTier, relayLegMaxM } from '../systems/DespinLaser.js';   // the laser cards read reach, draw and leg from the optics
 import { shipWear, partPriceCr, REPLACE_EFFECT_PART } from '../systems/ShipWear.js';
 import { capsuleMassKg, capsulePriceCr } from '../systems/JobsBoard.js';   // route-1107-d2 D-B3: the reentry capsule row's name and price
+import { gasToolPriceCr, jobPlan } from '../systems/GasJobs.js';   // Reality 13 G2: the three gas tools' prices and the minutes their cards quote
+
+/** Whole game minutes a gas tool's job takes for `kg` of gas (the card quotes the range at 0.42 kg and 10 kg: about 2 and 48 units of salvage). */
+function gasToolMin(id, kg) { return Math.round(jobPlan(id, kg).totalS / 60); }
+/** The `{lo}-{hi} min` a gas tool card quotes (DECISIONS §106 row 1: 16-35 / 47-95 / 124-220). */
+function gasToolRange(id) { return `${gasToolMin(id, 0.42)}-${gasToolMin(id, 10)} min`; }
+const GAS_TOOL_KG = (id) => Constants.GAS_TOOLS.TOOLS[id].kg;
 
 /** The relay-mirror card, plain words; every number is read from Constants.DESPIN_LASER.RELAY and the optics (never typed). */
 function relayMirrorsDesc() {
@@ -37,7 +44,7 @@ function weaverLaserDesc() {
 }
 
 /**
- * Upgrade definitions — 50 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 53 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins this header to them).
  * Each carries a `trl` (NASA TRL 1-9) and optional `trlRationale` for the badge. TRL is display-only — NEVER used in gating.
  * Exported for the Node test harness (test-TRL.js).
@@ -251,11 +258,29 @@ export const UPGRADES = [
     desc: `Clips onto a big piece; its magnet pushes against Earth's field so the spin slows over a day or two. Come back for the catch. One use. Its mass (${Constants.SPIN_KIT.massKg} kg) counts in yours.`,
     effect: 'spinKit', value: 1, maxLevel: Infinity, consumable: true,
     trl: 4, trlRationale: 'Magnetic detumbling by flipping dipoles is flown on small satellites (B-dot) and studied for derelicts; a clip-on kit for a tumbling stage is not yet demonstrated' },
+  // Gas tools (DECISIONS §99 row 3, §106; Reality 13): a dead craft's leftover gas is taken by a BOUGHT tool, a timed job at the mother after
+  // the catch (GasJobs.js, GameFlowManager). Bought in order (each needs the one before); the game uses the fastest that fits. Prices and
+  // minutes come from Constants.GAS_TOOLS (price = mass x launch price + premium). The tool's mass counts in hers (PlayerSatellite.getGasToolMassKg).
+  { id: 'gas_port_plug', cat: 'Daughters', name: `Port plug, ${GAS_TOOL_KG('gas_port_plug')} kg`,
+    cost: gasToolPriceCr('gas_port_plug'),
+    desc: `Plugs into a dead craft's own fuel port after the catch and takes its leftover gas: ${gasToolRange('gas_port_plug')} of ship time. Few craft have a port (about 1 in 20). Its mass (${GAS_TOOL_KG('gas_port_plug')} kg) counts in yours.`,
+    effect: 'gasTool', value: 1, maxLevel: 1,
+    trl: Constants.GAS_TOOLS.TOOLS.gas_port_plug.trl, trlRationale: 'A fuel port is flight-qualified (Orbit Fab RAFTI, 2024) and hydrazine moved between two craft in 2007 (Orbital Express); a small servicer\'s plug has not flown' },
+  { id: 'gas_line_tap', cat: 'Daughters', name: `Line tap, ${GAS_TOOL_KG('gas_line_tap')} kg`,
+    cost: gasToolPriceCr('gas_line_tap'),
+    desc: `Clamps onto a fuel line and pierces it to take the leftover gas: ${gasToolRange('gas_line_tap')} of ship time, about 4 in 10 craft. Needs the port plug. Its mass (${GAS_TOOL_KG('gas_line_tap')} kg) counts in yours.`,
+    effect: 'gasTool', value: 1, maxLevel: 1, requires: 'gas_port_plug',
+    trl: Constants.GAS_TOOLS.TOOLS.gas_line_tap.trl, trlRationale: 'Cutters and a hose tool flew on the ISS (NASA RRM, 2012-13); piercing a live propellant line has not been tested' },
+  { id: 'gas_tank_drill', cat: 'Daughters', name: `Tank drill, ${GAS_TOOL_KG('gas_tank_drill')} kg`,
+    cost: gasToolPriceCr('gas_tank_drill'),
+    desc: `Seals a cup on any tank and drills through: ${gasToolRange('gas_tank_drill')} of ship time and up to a fifth of the battery. Fits every craft with gas. Needs the line tap. Its mass (${GAS_TOOL_KG('gas_tank_drill')} kg) counts in yours.`,
+    effect: 'gasTool', value: 1, maxLevel: 1, requires: 'gas_line_tap',
+    trl: Constants.GAS_TOOLS.TOOLS.gas_tank_drill.trl, trlRationale: 'No test of drilling a propellant tank was found; the pattern is the hot-tap machine used on Earth pipes' },
   { id: 'hazmat_handler', cat: 'Daughters', name: 'Hazmat Handler', cost: 1200,
-    desc: 'Recover hydrazine → cold gas', effect: 'hazmatRecovery', value: true, maxLevel: 1,
+    desc: 'Turns hydrazine taken by a gas tool into cold gas', effect: 'hazmatRecovery', value: true, maxLevel: 1,
     trl: 2, trlRationale: 'On-orbit hazmat recovery from derelicts is fully speculative' },
   { id: 'refinery_arm', cat: 'Daughters', name: 'Micro-Refinery', cost: 1500,
-    desc: '+50% salvage yield', effect: 'refineryEfficiency', value: 1.5, maxLevel: 1,
+    desc: '+50% salvage yield (not gas)', effect: 'refineryEfficiency', value: 1.5, maxLevel: 1,
     trl: 2, trlRationale: 'Orbital micro-refinery is game-speculative; no on-orbit metal processing' },
 
   // Automation (1)

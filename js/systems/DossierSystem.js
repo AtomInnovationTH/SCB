@@ -22,6 +22,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { salvageGasKg } from './ResourceSystem.js';
+import { accessWords } from './GasJobs.js';
 import { pieceValues } from './BigPieceValues.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { RAD2DEG, degToRad, clamp } from '../core/MathUtil.js';
@@ -38,9 +39,11 @@ export const DOSSIER_TIERS = {
 /**
  * Appraise a debris salvage manifest into line items + total credits. Pure.
  * @param {object|null} salvage — debris.salvage ({xenon, indium, gaAs, battery, hydrazine, lithium, metals[]})
+ * @param {'port'|'line'|'tank'} [access] — how the piece's gas can be reached (`gasAccess(id)`, DECISIONS §106); adds ` · fuel port` /
+ *   ` · fuel line` / ` · sealed tank` to the engine-gas row. With none the label is unchanged.
  * @returns {{ rows: Array<{label:string, value:number}>, total: number }}
  */
-export function appraiseSalvage(salvage) {
+export function appraiseSalvage(salvage, access) {
   const V = (Constants.DOSSIER && Constants.DOSSIER.SALVAGE_VALUES) || {};
   const rows = [];
   if (!salvage) return { rows, total: 0 };
@@ -48,7 +51,7 @@ export function appraiseSalvage(salvage) {
     value = Math.round(value);
     if (value > 0) rows.push({ label, value });
   };
-  if (salvage.xenon > 0) push(`Engine gas ${salvageGasKg(salvage.xenon).toFixed(1)} kg`, salvage.xenon * (V.XENON_PER_KG || 0));
+  if (salvage.xenon > 0) push(`Engine gas ${salvageGasKg(salvage.xenon).toFixed(1)} kg${accessWords(access)}`, salvage.xenon * (V.XENON_PER_KG || 0));
   if (salvage.indium > 0) push(`Indium ${(salvage.indium * 1000).toFixed(0)}g`, salvage.indium * (V.INDIUM_PER_KG || 0));
   if (salvage.gaAs > 0) push(`GaAs panel ${(salvage.gaAs * 100).toFixed(0)}%`, salvage.gaAs * (V.GAAS_PER_FRAC || 0));
   if (salvage.battery > 0) push(`Battery ${salvage.battery.toFixed(0)}Wh`, salvage.battery * (V.BATTERY_PER_WH || 0));

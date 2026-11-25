@@ -3338,7 +3338,7 @@
       "i18n": {
         "title": "ΔV Is Everything",
         "shortText": "Fuel doesn't refill on its own. Every burn spends a budget you can't get back for free.",
-        "fullText": "Delta-V (ΔV), your ability to change orbit, is the master resource. Your engine-gas and cold-gas tanks do not magically refill: the engine tank tops up with gas salvaged from your catches, or with gas bought in the shop.\n\nSo fly cheap. Let autopilot pick efficient routes, and don't chase a target across the sky when a closer one will do. Run every tank dry and the mission ends, wherever you happen to be.",
+        "fullText": "Delta-V (ΔV), your ability to change orbit, is the master resource. Your engine-gas and cold-gas tanks do not magically refill: the engine tank tops up with gas salvaged from a dead satellite by a gas tool you bought (a job after the catch that takes ship time and battery), or with gas bought in the shop.\n\nSo fly cheap. Let autopilot pick efficient routes, and don't chase a target across the sky when a closer one will do. Run every tank dry and the mission ends, wherever you happen to be.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",
@@ -3425,8 +3425,8 @@
       ],
       "i18n": {
         "title": "The Salvage Economy",
-        "shortText": "Dead satellites are a gas station. Catch one, take its gas, refuel. Salvage and the shop are how you top up.",
-        "fullText": "A captured object is more than a tick on the counter. It is raw material. Salvage yields metal, and sometimes a splash of propellant or an on-the-spot panel repair.\n\nWhen a catch carries gas, it goes straight into your engine tank as real kilograms of the gas in your tank, up to the room left. Because the tanks never refill for free, that salvaged gas, topped up with gas bought in the shop, is what keeps you flying. You clean up and gas up in the same move.",
+        "shortText": "A dead satellite can still hold gas, but taking it needs a gas tool from the shop, and time. Salvaged gas and the shop are how you top up.",
+        "fullText": "A captured object is more than a tick on the counter. It is raw material. Salvage yields metal, and sometimes a splash of propellant or an on-the-spot panel repair.\n\nWhen a catch carries gas, the gas stays in the dead craft until a gas tool you bought (a port plug, a line tap or a tank drill) takes it, after the catch, while you hold the piece. The job takes ship time and battery, and at its end the gas goes into your engine tank as real kilograms of the gas in your tank, up to the room left. Because the tanks never refill for free, that salvaged gas, topped up with gas bought in the shop, is what keeps you flying. Gas is rare and expensive: the tools are not cheap, and the tank drill is slow.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",

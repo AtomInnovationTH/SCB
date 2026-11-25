@@ -502,6 +502,9 @@ export class PlayerSatellite extends THREE.Group {
     // Long-range de-spin laser (Constants.DESPIN_LASER.LONG; plan laser-1101 D2/D6): bought at the resupply stop, replayed by a
     // continued save, cleared with the run (`resetWheelState`). DespinLaser asks `hasLongLaser()`; it stores no ownership.
     this._longLaser = false;
+    // Gas tools (DECISIONS §106; Constants.GAS_TOOLS): the ids of the port plug / line tap / tank drill she has bought. Replayed by a
+    // continued save, cleared with the run (`resetWheelState`). Mass only (`getGasToolMassKg`); GameFlowManager reads ownership by `_hasUpgrade`.
+    this._gasTools = new Set();
     // Closing winch for the Large Net's neck (net-odds-1107 D13; the shop's `capture_net` row): bought at the resupply stop, replayed by
     // a continued save, cleared with the run. NetLineupOdds asks `hasNetWinch()` through a provider; it stores no ownership.
     this._netWinch = false;
@@ -3414,6 +3417,23 @@ export class PlayerSatellite extends THREE.Group {
   /** @returns {boolean} the long-range de-spin laser is aboard */
   hasLongLaser() { return this._longLaser === true; }
 
+  // GAS TOOLS (DECISIONS §106; Constants.GAS_TOOLS): the port plug, line tap and tank drill she has bought. Mass only, no inertia booking
+  // (16 kg at most for all three, coordinator's call: the long laser's 29 kg is booked, these small boxes are not).
+
+  /** @returns {string[]} the ids of the gas tools aboard */
+  getGasToolIds() { return this._gasTools ? [...this._gasTools] : []; }
+
+  /** @param {string} id a gas tool id @returns {boolean} that tool is aboard */
+  hasGasTool(id) { return !!this._gasTools && this._gasTools.has(id); }
+
+  /** The gas tools' dry mass (kg): the mass-budget carrier term `ArmManager.getMassBudget` adds; 0 with none (all three = 16 kg). */
+  getGasToolMassKg() {
+    if (!this._gasTools) return 0;
+    let kg = 0;
+    for (const id of this._gasTools) kg += Constants.GAS_TOOLS.TOOLS[id]?.kg || 0;
+    return kg;
+  }
+
   // CLOSING WINCH on the Large Net's neck (net-odds-1107 D13). A flag only: no mass or inertia is booked. NetLineupOdds reads
   // `hasNetWinch()` (never stores it), so a new run cannot inherit it.
 
@@ -3505,11 +3525,12 @@ export class PlayerSatellite extends THREE.Group {
   /** New game: the wheels stand empty (no stored spin, no unload in progress). A STANDARD kit stays aboard (it is the ship's hardware,
    *  not a purchase of the run); a kit that is not standard (`Constants.WHEELS.STANDARD` off, a bare rig that bought it) goes with the
    *  run's purchases, and a continued save's upgrade replay puts it back.
-   *  Also clears the long-range de-spin laser (same two callers, GameFlowManager :919 and :1794): a new run or a retry starts
-   *  with the close laser only. */
+   *  Also clears the long-range de-spin laser and the gas tools (same two callers, GameFlowManager `GAMEOVER_CONTINUE` and `resetGame`): a
+   *  new run or a retry starts with the close laser only and no gas tool. */
   resetWheelState() {
     // (tolerant of a ship stub built without the constructor: a test double the reset handlers are handed)
     if (this._longLaser) { this._longLaser = false; this._attitudeInertia = null; }
+    if (this._gasTools) this._gasTools.clear();
     this._netWinch = false;   // the Large Net's closing winch goes with the run's purchases (a continued save's replay refits it)
     if (this._relayMirrors || this._weaverLaser) { this._relayMirrors = false; this._weaverLaser = false; this._attitudeInertia = null; }
     if (this._wheelH) this._wheelH.set(0, 0, 0);
@@ -8529,6 +8550,14 @@ export class PlayerSatellite extends THREE.Group {
         // Long-range de-spin laser: a flag + dry mass + inertia (the cached inertia drops with it). Idempotent: the save-restore
         // replay re-applies it. DespinLaser reads hasLongLaser(); the card's reach and draw come from DESPIN_LASER.LONG.
         this._installLongLaser();
+        break;
+      case 'gasTool':
+        // A gas tool (port plug / line tap / tank drill): the id joins the set of owned tools; its mass rides getGasToolMassKg. Idempotent
+        // (a Set): the save-restore replay re-applies it. Nothing is stored beyond ownership.
+        if (data.id && Constants.GAS_TOOLS.TOOLS[data.id]) {
+          if (!this._gasTools) this._gasTools = new Set();
+          this._gasTools.add(data.id);
+        }
         break;
       case 'netWinch':
         // Large Net closing winch (net-odds-1107 D13): a flag. Idempotent: the save-restore replay re-applies it. NetLineupOdds reads

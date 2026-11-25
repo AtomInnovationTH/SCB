@@ -351,9 +351,25 @@ const FITTING_SPECS = {
     display: (row) => ({ param: 'spinKits', base: 0, unit: 'kits', op: `+${row.value}` }),
     current: (deps) => deps.resourceSystem?.spinKits,
   },
+  // the three gas tools (DECISIONS §106; Reality 13 G2): flags read from the player (the `gasTool` effect routes there); their mass rides the mass budget
+  gas_port_plug: {
+    subsystem: 'BERTHS', reads: 'player',
+    display: () => ({ param: 'gasPortPlug', base: false, unit: 'flag', op: 'ON' }),
+    current: (deps) => !!(deps.player && typeof deps.player.hasGasTool === 'function' && deps.player.hasGasTool('gas_port_plug')),
+  },
+  gas_line_tap: {
+    subsystem: 'BERTHS', reads: 'player',
+    display: () => ({ param: 'gasLineTap', base: false, unit: 'flag', op: 'ON' }),
+    current: (deps) => !!(deps.player && typeof deps.player.hasGasTool === 'function' && deps.player.hasGasTool('gas_line_tap')),
+  },
+  gas_tank_drill: {
+    subsystem: 'BERTHS', reads: 'player',
+    display: () => ({ param: 'gasTankDrill', base: false, unit: 'flag', op: 'ON' }),
+    current: (deps) => !!(deps.player && typeof deps.player.hasGasTool === 'function' && deps.player.hasGasTool('gas_tank_drill')),
+  },
   hazmat_handler: {
     subsystem: 'BERTHS', reads: 'hasUpgrade',
-    // RUNTIME route: no apply-time mutation; the live value IS ownership (GameFlowManager checks _hasUpgrade at salvage time)
+    // RUNTIME route: no apply-time mutation; the live value IS ownership (GameFlowManager checks _hasUpgrade when a gas job's tool is picked)
     display: () => ({ param: 'hazmatRecovery', base: false, unit: 'flag', op: 'ON' }),
     current: (deps) => owned(deps, 'hazmat_handler'),
   },
