@@ -323,8 +323,6 @@ function familyRows(cat) {
   return m;
 }
 
-/** "GPS · 31" (a count of 1 stays bare in People on board: "Soyuz MS-29 · 1" would say nothing). */
-const withCount = (label, n) => `${label} \u00b7 ${fmtInt(n)}`;
 
 /** One code family as an item, or null when none of its satellites is in the data. */
 function buildCodeFamily(cat, def, byCode, joined, dead) {
@@ -344,7 +342,8 @@ function buildCodeFamily(cat, def, byCode, joined, dead) {
   const pushRow = (key, label, note, list) => {
     if (list.length === 0) return;
     const ordered = [...list.filter((r) => !isRest.has(r[c.norad])), ...list.filter((r) => isRest.has(r[c.norad]))];
-    rows.push({ key, label: withCount(label, ordered.length), sub: note, norads: ordered.map((r) => r[c.norad]), first: ordered[0][c.norad], count: ordered.length });
+    // Sky 34 (owner 11-25, the 150 px panel): the count is in the hover, not the name
+    rows.push({ key, label, sub: note ? `${note} \u00b7 ${fmtInt(ordered.length)}` : fmtInt(ordered.length), norads: ordered.map((r) => r[c.norad]), first: ordered[0][c.norad], count: ordered.length });
     names.set(ordered[0][c.norad], label);
   };
   if (def.by === 'state') {
@@ -362,7 +361,7 @@ function buildCodeFamily(cat, def, byCode, joined, dead) {
   if (joined && rest.length > 0) {
     rows.push({
       key: 'extra-dead', toggle: 'famDead', on,
-      label: `${on ? '\u2713 ' : '+ '}dead (${fmtInt(rest.length)})`,
+      label: `${on ? '\u2713 ' : '+ '}dead`,
       sub: on ? 'lit too (tap to take away)' : `adds the ${fmtInt(rest.length)} that stopped working or have no report`,
       norads: rest.map((r) => r[c.norad]), first: rest[0][c.norad], count: rest.length,
     });

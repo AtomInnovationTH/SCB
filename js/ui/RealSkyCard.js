@@ -982,8 +982,8 @@ export class RealSkyCard {
     const btn = mk('real-sky-hl-btn', `display:none;align-items:center;justify-content:space-between;box-sizing:border-box;padding:0 8px;${HL_BTN_CSS}`);
     press(btn, () => this._hlToggleMenu());
     const items = mk('real-sky-hl-items', 'display:none;margin-top:3px');
-    const head = mk('real-sky-hl-head', 'display:none;align-items:center;gap:6px');
-    const nameBtn = mk('real-sky-hl-name', 'flex:1;min-width:0;display:flex;align-items:center;box-sizing:border-box;font-size:12px;line-height:15px;font-weight:bold;color:#e8eefc;cursor:pointer;touch-action:manipulation;overflow:hidden;white-space:normal;overflow-wrap:anywhere');
+    const head = mk('real-sky-hl-head', 'display:none;align-items:center;gap:4px');
+    const nameBtn = mk('real-sky-hl-name', 'flex:1;min-width:0;display:flex;align-items:center;box-sizing:border-box;font-size:11px;line-height:14px;font-weight:bold;color:#e8eefc;cursor:pointer;touch-action:manipulation;overflow:hidden;white-space:normal;overflow-wrap:anywhere');
     press(nameBtn, () => this._hlToggleMenu());
     const off = mk('real-sky-hl-off', `flex:none;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:0 10px;${HL_BTN_CSS}`);
     off.textContent = 'Off';

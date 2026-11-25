@@ -152,7 +152,7 @@ export class ReachOrb {
   static plainReach(env) {
     if (!env) return '';
     const n = (v) => Math.round(v).toLocaleString('en-US');
-    return `Reach: about ${n(env.minAltKm)}\u2013${n(env.maxAltKm)} km, budget ${n(env.budgetDvMs)} m/s`;
+    return `Range: about ${n(env.minAltKm)}\u2013${n(env.maxAltKm)} km, budget ${n(env.budgetDvMs)} m/s`;
   }
 
   _build() {
