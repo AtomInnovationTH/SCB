@@ -155,7 +155,8 @@ export function cardFields(row, heights, snapshotUtc, gcatName) {
     mass: massKg != null ? `${fmtInt(massKg)} kg` : null,
     sizeNote: gcatName && fromGcat ? `Size and mass (GCAT: ${gcatName})` : null,
     launched: year != null ? String(year) : null,
-    height: `${fmtInt(heights.perKm)}\u2013${fmtInt(heights.apoKm)} km`,
+    // Sky 34 I (owner 2026-11-25: "stop giving vague numerical ranges to busy pilots"): one number, the orbit's average height
+    height: `${fmtInt((heights.perKm + heights.apoKm) / 2)} km`,
     tilt: `${fmt1(row[11])}\u00b0`,
     asOf: `orbit as of ${dateText(snapshotUtc)}`,
     cls,

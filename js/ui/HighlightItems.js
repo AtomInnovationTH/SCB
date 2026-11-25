@@ -281,7 +281,8 @@ export function buildHeaviest(cat, hidden = []) {
   const rows = [], names = new Map();
   for (const g of groups) {
     const hi = g.list[0][c.massKg], lo = g.list[g.list.length - 1][c.massKg];
-    const kg = hi === lo ? `${fmtInt(hi)} kg` : `${fmtInt(lo)} to ${fmtInt(hi)} kg`;
+    const kg = `${fmtInt(hi)} kg`;   // Sky 34 I (owner 11-25, no number ranges): the group's heaviest; `lo` no longer shown
+    void lo;
     const kind = g.cls === CLS_STAGE ? 'stage' : g.cls === CLS_DEAD ? 'dead sat' : g.cls === CLS_DEBRIS ? 'debris' : g.cls === CLS_SATELLITE ? 'no-status sat' : g.cls === CLS_WORKING ? 'working sat' : 'object';   // Sky 32: "no report" is the key's word for this kind; Sky 34 E: "sat"
     const n = g.list.length;
     const kindMany = `${kind}s`;

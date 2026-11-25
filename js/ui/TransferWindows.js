@@ -210,7 +210,7 @@ export class TransferWindows {
   static sweepLine(sweep) {
     const d = sweep && sweep.densest;
     if (!d) return '';
-    return `FIELD DENSEST BAND ${Math.round(d.altMinKm)}\u2013${Math.round(d.altMaxKm)} km \u00b7 ${d.count} obj`;
+    return `FIELD DENSEST AT ${Math.round((d.altMinKm + d.altMaxKm) / 2)} km \u00b7 ${d.count} obj`;   // Sky 34 I (owner 11-25): one number, not a range
   }
 
   _build() {

@@ -277,7 +277,7 @@ export function placeEdgeMarks(geom, ship, model, measure) {
     if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)) continue;
     const yTop = Math.max(plot.y0, yOfKm(geom, Math.min(hi, Y_MAX_KM)));
     const yBot = Math.min(plot.y1, yOfKm(geom, Math.max(lo, Y_MIN_KM)));
-    const text = `Debris field ${lo}\u2013${hi} km`;
+    const text = `Debris field ${Math.round((lo + hi) / 2)} km`;   // Sky 34 I (owner 11-25): one number, not a range; the band shows its spread
     const mid = (yTop + yBot) / 2 + 4;
     // inside the band if there is room, else a little outside it (the words carry the heights)
     const label = place(text, mid, yTop + 1, yBot - 1) || place(text, mid, yTop - 30, yBot + 30);
