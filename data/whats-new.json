@@ -1,9 +1,9 @@
 {
   "bullets": [
-    "View sats by mission, real day/night",
-    "Gas salvage tools for advanced missions",
-    "Improved cinematic debris view"
+    "Refined sun and moon",
+    "Highlight sats by mission, by country, or the heaviest",
+    "Gas salvage tools and a better cinematic debris view"
   ],
-  "release": "2026-11-25",
-  "version": "1.21"
+  "release": "2026-11-26",
+  "version": "1.22"
 }

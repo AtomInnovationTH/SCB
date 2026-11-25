@@ -15,13 +15,13 @@ export const Constants = {
   // --- VERSION ---
   // VERSION is the raw value; VERSION_LABEL is the exact string the UI renders. NON-module consumers (e.g. sw.js
   // cache name) must be updated by hand — keep them in sync here.
-  VERSION: '1.21',
-  VERSION_LABEL: 'V1.21',
+  VERSION: '1.22',
+  VERSION_LABEL: 'V1.22',
 
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as ?v=<DATA_VERSION>). Deliberately SEPARATE
   // from VERSION: a curated-content edit must invalidate cached JSON without moving the release number. Bump it on
   // every ./data/ content change; leave VERSION for actual releases.
-  DATA_VERSION: '1130',   // Sky 34 F (11-25): data/highlights.json famous lines shortened (was 1129: V1.21 release (whats-new.json changed), owner 2026-11-25 (was 1128: Sky 33 (11-25): data/sky.json `fam` field (family code) (was 1127: Reality 13 G4 (11-25): data/codex.json gas text (a bought gas tool takes a catch's gas, not instant) (was 1126: Sky 32 (11-25): data/sky.json `mil` field (GCAT payload Class D) (was 1125: Sky 28, data/highlights.json Famous 11 entries, `short`, `names`))))
+  DATA_VERSION: '1131',   // V1.22 release (whats-new.json changed), owner 2026-11-26 (was 1130: Sky 34 F (11-25): data/highlights.json famous lines shortened (was 1129: V1.21 release (whats-new.json changed), owner 2026-11-25 (was 1128: Sky 33 (11-25): data/sky.json `fam` field (family code) (was 1127: Reality 13 G4 (11-25): data/codex.json gas text (a bought gas tool takes a catch's gas, not instant) (was 1126: Sky 32 (11-25): data/sky.json `mil` field (GCAT payload Class D) (was 1125: Sky 28, data/highlights.json Famous 11 entries, `short`, `names`))))
   // owner 2026-09-08: the T1 nose-collar card is the DOCKING COLLAR card (docking_berthing.hardwareNames). The DAUGHTER
   // STRUTS card (daughter cradle struts callout) was appended to that list later, no entries added: DECISIONS §13 r4.
 
