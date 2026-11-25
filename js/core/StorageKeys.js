@@ -50,6 +50,8 @@ export const StorageKeys = {
   REAL_SKY_GROUPS: 'sc_real_sky_groups_v1',
   /** RealSkyLayer: the "military" box inside Satellites ('1' = on, rings drawn; missing or anything else = off; Sky 32, DECISIONS §104 row 3). PLAYER-owned. */
   REAL_SKY_MIL: 'sc_real_sky_mil_v1',
+  /** RealSkyCard: the country picked in the Highlight menu's "Selected country" dropdown (a flag code: 'USA', 'RUS', 'EUR' ...; missing or unknown = the menu language's country, else USA; Sky 34 E). PLAYER-owned. */
+  REAL_SKY_COUNTRY: 'sc_real_sky_country_v1',
   /** ReachOrb: the "reach" tick box at the end of the globe's key (the blue band around Earth): '0' = switched off; missing or anything else = on
    *  (owner 2026-11-24, DECISIONS §103 row 5). PLAYER-owned: a New player reset removes it. */
   REACH_BAND: 'sc_reach_band_v1',

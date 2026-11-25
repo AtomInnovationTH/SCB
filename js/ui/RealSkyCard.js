@@ -12,7 +12,7 @@
  * @module ui/RealSkyCard
  */
 
-import { buildItems, toHighlight, isMenuId, ID_COUNTRY, ID_FAMOUS } from './HighlightItems.js';
+import { buildItems, toHighlight, isMenuId, countryChoices, ID_COUNTRY, ID_FAMOUS, ID_HEAVY } from './HighlightItems.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 
 export const CLASS_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown', 'starlink'];
@@ -264,7 +264,7 @@ export class RealSkyCard {
    * @param {object} [deps]
    * @param {Document} [deps.document]
    * @param {function} [deps.isGlass] () => touch device (bigger controls)
-   * @param {function} [deps.getFlag] () => the menu language's flag code ('USA', 'THA' ...): "Your country" in the Highlight menu (main.js passes the settings' language)
+   * @param {function} [deps.getFlag] () => the menu language's flag code ('USA', 'THA' ...): "Selected country" in the Highlight menu (the country it starts on until the player picks one; main.js passes the settings' language)
    * @param {function} [deps.onLanguage] (fn) => unsubscribe: fn runs when the menu language changes
    * @param {function} [deps.now] () => monotonic ms
    * @param {string} [deps.defaultHighlight] the Highlight menu item that is on when the globe opens (main.js: Famous; owner 2026-11-24); none without it
@@ -276,8 +276,8 @@ export class RealSkyCard {
     this._now = typeof deps.now === 'function' ? deps.now : () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
     this._layer = null;                             // the RealSkyLayer, through attachLayer (the Highlight menu calls it)
     this._hlView = 'closed';                        // the Highlight menu: 'closed' (one row) | 'menu' (the three items) | 'list' (an item is on)
-    this._hlExtras = { stages: false, debris: false };   // Your country: "+ stages" / "+ debris" lit too
-    this._hlFamDead = null;                         // the id of the family whose "+ dead" is on (Sky 33: per family item, kept here, not in _hlExtras which is Your country's)
+    this._hlExtras = { stages: false, debris: false };   // Selected country: "+ stages" / "+ debris" lit too
+    this._hlFamDead = null;                         // the id of the family whose "+ dead" is on (Sky 33: per family item, kept here, not in _hlExtras which is Selected country's)
     this._hlFamOpen = false;                        // the "Families" row is open (not saved)
     this._hlShownKey = '';                          // what the family header's "shown" count was made from
     this._hlShownItem = null;
@@ -304,6 +304,9 @@ export class RealSkyCard {
     this._hasMilitary = null;              // () => the data carries the military flag (false: the row stays out)
     this._storage = deps.storage !== undefined ? deps.storage : (() => { try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (_) { return null; } })();
     this._open = new Set();               // the key groups that are open (ids from KEY_GROUPS); saved
+    this._hlCountry = null;               // the country picked in the Selected country dropdown (a flag code); saved, null = no pick yet (the language's country, else USA)
+    try { const c = this._storage ? this._storage.getItem(StorageKeys.REAL_SKY_COUNTRY) : null; if (typeof c === 'string' && c) this._hlCountry = c; } catch (_) { /* not saved */ }
+    this._hlLitHidden = '';               // the hidden kinds Heaviest was last lit with (a tick that differs rebuilds it)
     this._loadOpen();
     this._memory = new Map();             // group id -> the kinds that were ticked when the group was unticked (a tap on the box or `-`); `+` or a tap brings them back
     this._reachSwitch = null;             // the "reach" box's switch (setReachSwitch)
@@ -335,8 +338,22 @@ export class RealSkyCard {
     this._hasMilitary = typeof hasMilitary === 'function' ? hasMilitary : null;
   }
 
-  /** The legend's boxes again (the layer changed a kind); a family's "shown" count follows the boxes. */
-  refreshKinds() { this._renderLegend(); this._hlRender(true); }
+  /** The legend's boxes again (the layer changed a kind); a family's "shown" count follows the boxes, and Heaviest (every kind the key shows) is lit again. */
+  refreshKinds() { this._hlHeavyRefresh(); this._renderLegend(); this._hlRender(true); }
+
+  /** The kinds the key lists and the player has unticked (CLASS_NAMES order): what Heaviest leaves out. */
+  _hlHiddenKinds() { return CLASS_NAMES.filter((n) => this._kindInKey(n) && this._hidden(n)); }
+
+  /** Heaviest is on and a tick changed since it was lit: build it again for the kinds shown now and swap the lit set (same id: nothing else moves). */
+  _hlHeavyRefresh() {
+    const L = this._layer, cur = L && typeof L.highlight === 'function' ? L.highlight() : null;
+    if (!cur || cur.id !== ID_HEAVY || typeof L.catalogue !== 'function' || !L.catalogue()) return;
+    if (this._hlHiddenKinds().join(',') === this._hlLitHidden) return;
+    const it = this._hlItemList(L.catalogue()).find((i) => i.id === ID_HEAVY);
+    if (!it) return;
+    this._hlLitHidden = this._hlHiddenKinds().join(',');
+    L.setHighlight(toHighlight(it));
+  }
 
   /**
    * Wire the "reach" box at the end of the key (main.js): `isOn()` = the blue band is shown, `setOn(on)` shows or hides it. Without it the box is not shown.
@@ -669,8 +686,8 @@ export class RealSkyCard {
 
   /**
    * The default highlight (owner 2026-11-24, "turn it on by default"): on each arrival at the globe the default item goes on once the catalogue is
-   * in, unless one is on already or the player turned one off since the game loaded. Until the player has picked an item, the default is Your
-   * country when the menu language (read now, it can change in the menu) is not USA and that item exists, else Famous; after a pick it is the
+   * in, unless one is on already or the player turned one off since the game loaded. Until the player has picked an item, the default is Selected
+   * country when the menu language (read now, it can change in the menu) is not USA and has a country in the dropdown, else Famous; after a pick it is the
    * item last turned on.
    */
   _hlDefaultStep(f, arrived) {
@@ -684,7 +701,7 @@ export class RealSkyCard {
     let id = this._hlDefault;
     if (!this._hlPicked) {
       const flag = this._getFlag ? this._getFlag() : null;
-      if (flag && flag !== 'USA' && this._hlItemList(L.catalogue()).some((it) => it.id === ID_COUNTRY)) id = ID_COUNTRY;
+      if (flag && flag !== 'USA' && this._hlChoiceOk(flag) && this._hlItemList(L.catalogue()).some((it) => it.id === ID_COUNTRY)) id = ID_COUNTRY;
     }
     if (!this._hlItemList(L.catalogue()).some((it) => it.id === id)) id = ID_FAMOUS;   // a family (or any item) the data no longer has: today's default
     this.hlPick(id, true);
@@ -955,7 +972,7 @@ export class RealSkyCard {
   }
 
   /* ---------------------------------------------------------------- the Highlight menu (Sky 23, lane H3; DECISIONS §95)
-   * One row "Highlight" under the search box; it opens the three items (Famous, Your country, Heaviest leftovers); an item that is on shows its
+   * One row "Highlight" under the search box; it opens the three items (Famous, Selected country, Heaviest); an item that is on shows its
    * header (name, count, "Off") and its list; a list row turns the globe to the object and opens its card. The lists come from HighlightItems,
    * the drawing (fade, rings, names) from the layer's setHighlight. With a card open the list folds to its header; on page 1 only the header and
    * "Off" show; on touch the six-kind key folds while the menu or a list is open. The panel is 342 px at most on the iPad (`panelPlacement`). */
@@ -982,7 +999,7 @@ export class RealSkyCard {
     const btn = mk('real-sky-hl-btn', `display:none;align-items:center;justify-content:space-between;box-sizing:border-box;padding:0 8px;${HL_BTN_CSS}`);
     press(btn, () => this._hlToggleMenu());
     const items = mk('real-sky-hl-items', 'display:none;margin-top:3px');
-    const head = mk('real-sky-hl-head', 'display:none;align-items:center;gap:4px');
+    const head = mk('real-sky-hl-head', 'display:none;align-items:center;gap:4px;flex-wrap:wrap');
     const nameBtn = mk('real-sky-hl-name', 'flex:1;min-width:0;display:flex;align-items:center;box-sizing:border-box;font-size:11px;line-height:14px;font-weight:bold;color:#e8eefc;cursor:pointer;touch-action:manipulation;overflow:hidden;white-space:normal;overflow-wrap:anywhere');
     press(nameBtn, () => this._hlToggleMenu());
     const off = mk('real-sky-hl-off', `flex:none;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:0 10px;${HL_BTN_CSS}`);
@@ -990,24 +1007,58 @@ export class RealSkyCard {
     off.setAttribute('aria-label', 'Turn the highlight off');
     press(off, () => this._hlOff());
     head.append(nameBtn, off);
+    // Selected country's dropdown (Sky 34 E, owner 2026-11-25): on its own line under the name while that item is on; keys typed in it never reach the game
+    const sel = this._doc.createElement('select');
+    sel.id = 'real-sky-hl-country';
+    sel.setAttribute('aria-label', 'Choose the country to highlight');
+    sel.style.cssText = 'display:none;flex:1 0 100%;box-sizing:border-box;min-width:0;padding:0 4px;border-radius:4px;border:1px solid rgba(160,180,220,0.35);background:rgba(0,0,0,0.45);color:#e8eefc;font:inherit;font-size:12px;outline:none;touch-action:manipulation';
+    for (const type of ['keydown', 'keyup', 'keypress']) sel.addEventListener(type, (ev) => ev.stopPropagation());
+    sel.addEventListener('click', (ev) => ev.stopPropagation());
+    sel.addEventListener('change', () => { this._hlSetCountry(sel.value); if (typeof sel.blur === 'function') sel.blur(); });
+    head.append(sel);
     const tag = mk('real-sky-hl-tag', 'display:none;margin-top:2px;font-size:10px;line-height:1.3;color:#8392b3');
     const strip = mk('real-sky-hl-strip', 'display:none;margin-top:3px;font-size:10px;line-height:1.3;color:#c9d6ef;min-height:13px');
     const list = mk('real-sky-hl-list', 'display:none;margin-top:3px;overflow-y:auto;overflow-x:hidden;touch-action:pan-y;-webkit-overflow-scrolling:touch');
     const more = mk('real-sky-hl-more', 'display:none;margin-top:2px;font-size:10px;color:#8392b3');
     wrap.append(btn, items, head, tag, strip, list, more);
-    return { wrap, btn, items, head, nameBtn, off, tag, strip, list, more, itemEls: [], rowEls: [], listKey: '', itemsKey: '', famRow: null, press };
+    return { wrap, btn, items, head, nameBtn, off, sel, tag, strip, list, more, itemEls: [], rowEls: [], listKey: '', itemsKey: '', selKey: '', famRow: null, press };
   }
 
-  /** The built items for the layer's data and the menu language (cached; rebuilt when the data, the language, the country extras, the status or a family's "+ dead" change). */
+  /** The built items for the layer's data, the selected country, the key's ticks and the other states (cached; rebuilt when any of them changes). */
   _hlItemList(cat) {
     const L = this._layer, hl = L && typeof L.highlights === 'function' ? L.highlights() : null;
-    const flag = this._getFlag ? this._getFlag() : null;
-    const key = `${flag}|${this._hlExtras.stages ? 1 : 0}${this._hlExtras.debris ? 1 : 0}|${this._statusJoined ? 1 : 0}|${this._hlFamDead || ''}`;
+    const flag = this._hlCountryFlag();
+    const hidden = this._hlHiddenKinds();
+    const key = `${flag}|${this._hlExtras.stages ? 1 : 0}${this._hlExtras.debris ? 1 : 0}|${this._statusJoined ? 1 : 0}|${this._hlFamDead || ''}|${hidden.join(',')}`;
     if (!this._hlItems || this._hlItemsKey !== key || this._hlItemsCat !== cat || this._hlItemsHl !== hl) {
-      this._hlItems = buildItems(cat, hl, flag, this._hlExtras, { joined: this._statusJoined, famDead: this._hlFamDead });
+      this._hlItems = buildItems(cat, hl, flag, this._hlExtras, { joined: this._statusJoined, famDead: this._hlFamDead, hidden });
       this._hlItemsKey = key; this._hlItemsCat = cat; this._hlItemsHl = hl;
     }
     return this._hlItems;
+  }
+
+  /** True when the dropdown has this flag code (its list comes from data/highlights.json and HighlightItems). */
+  _hlChoiceOk(flag) {
+    const L = this._layer, hl = L && typeof L.highlights === 'function' ? L.highlights() : null;
+    return !!flag && countryChoices(hl).some((c) => c.flag === flag);
+  }
+
+  /** The country the Selected country item shows: the player's pick (saved), else the menu language's country when the dropdown has it, else the United States. */
+  _hlCountryFlag() {
+    if (this._hlChoiceOk(this._hlCountry)) return this._hlCountry;
+    const lang = this._getFlag ? this._getFlag() : null;
+    return this._hlChoiceOk(lang) ? lang : 'USA';
+  }
+
+  /** The dropdown picked a country: saved, and the lit set swaps while Selected country is on (same id: nothing else moves). @param {string} flag */
+  _hlSetCountry(flag) {
+    if (!this._hlChoiceOk(flag)) return;
+    this._hlCountry = flag;
+    try { if (this._storage) this._storage.setItem(StorageKeys.REAL_SKY_COUNTRY, flag); } catch (_) { /* private mode: not saved */ }
+    const L = this._layer, cat = L && typeof L.catalogue === 'function' ? L.catalogue() : null, cur = L && typeof L.highlight === 'function' ? L.highlight() : null;
+    const it = cat ? this._hlItemList(cat).find((i) => i.id === ID_COUNTRY) : null;
+    if (cur && cur.id === ID_COUNTRY && it) L.setHighlight(toHighlight(it));
+    this._hlRender();
   }
 
   /** The menu's items as built now (tests and the browser probe). */
@@ -1087,6 +1138,7 @@ export class RealSkyCard {
     if (it.group === 'families') this._hlFamOpen = true;   // the menu, opened again, shows the family rows so another one is one tap away
     if (this._hlDefault && !auto) { this._hlDefault = id; this._hlPicked = true; }   // the next arrival at the globe brings back the item the player last turned on
     this._hlUserOff = false;                        // a pick after an Off: the default is back
+    this._hlLitHidden = this._hlHiddenKinds().join(',');   // Heaviest is lit for the kinds shown now
     L.setHighlight(toHighlight(it));
     this._hlRender();
     return true;
@@ -1119,7 +1171,7 @@ export class RealSkyCard {
     return this.hlPick(snap.id, true, snap);
   }
 
-  /** A list row: Your country's "+ stages" / "+ debris" rows add that kind; any other turns the globe to the object (the first of a group) and opens its card. */
+  /** A list row: Selected country's "+ stages" / "+ debris" rows add that kind; any other turns the globe to the object (the first of a group) and opens its card. */
   hlTapRow(row) {
     const L = this._layer;
     if (!L || !row) return false;
@@ -1149,7 +1201,7 @@ export class RealSkyCard {
     return true;
   }
 
-  /** The menu language changed: Your country follows it while it is on (and goes off when the new language has no list). */
+  /** The menu language changed: Selected country follows it while it is on and the player has not picked a country (a pick stays). */
   _hlLanguageChanged() {
     this._hlItems = null;
     const L = this._layer, cur = L && L.highlight ? L.highlight() : null;
@@ -1168,7 +1220,7 @@ export class RealSkyCard {
     if (!e) return { view: this._hlView, wrap: false };
     return {
       view: this._hlView, wrap: vis(e.wrap), button: vis(e.btn), buttonText: e.btn.textContent, menu: vis(e.items), head: vis(e.head), headText: e.nameBtn.textContent,
-      tag: vis(e.tag) ? e.tag.textContent : '', strip: vis(e.strip) ? e.strip.textContent : '', headTitle: e.head.title || '', list: vis(e.list), more: vis(e.more) ? e.more.textContent : '',
+      tag: vis(e.tag) ? e.tag.textContent : '', country: vis(e.sel) ? e.sel.value : '', strip: vis(e.strip) ? e.strip.textContent : '', headTitle: e.head.title || '', list: vis(e.list), more: vis(e.more) ? e.more.textContent : '',
       offShown: vis(e.off), keyFolded: this._els.legend.style.display === 'none',
       items: e.itemEls.map((n) => n.textContent),
       rows: e.rowEls.map((r) => ({ label: r.label, sub: r.sub, state: r.state, dim: r.labelEl.style.opacity === '0.45', title: r.el.title })),
@@ -1249,7 +1301,7 @@ export class RealSkyCard {
     e.off.style.minWidth = glass ? '44px' : '36px';
     e.nameBtn.style.minHeight = e.head.style.minHeight;
     if (headOn) {
-      const name = mine ? (mine.country ? mine.country.name : mine.title) : String((cur && (cur.label || cur.id)) || '');
+      const name = mine ? mine.title : String((cur && (cur.label || cur.id)) || '');
       const text = mine && !p1 ? `${name} \u25be` : name;
       if (e.nameBtn.textContent !== text) e.nameBtn.textContent = text;
       e.nameBtn.style.cursor = mine && !p1 ? 'pointer' : 'default';
@@ -1260,6 +1312,19 @@ export class RealSkyCard {
       if (e.head.title !== hover) e.head.title = hover;
     }
     set(e.tag, false);
+    // Selected country: the dropdown under the name (a list of choices from HighlightItems; 44 px tall on touch)
+    const showSel = headOn && !p1 && !!mine && mine.id === ID_COUNTRY && Array.isArray(mine.choices);
+    set(e.sel, showSel);
+    if (showSel) {
+      e.sel.style.minHeight = glass ? `${HL_ROW_PX_GLASS}px` : `${HL_ROW_PX}px`;
+      const selKey = mine.choices.map((c) => c.flag).join(',');
+      if (e.selKey !== selKey) {
+        e.selKey = selKey;
+        e.sel.textContent = '';
+        for (const c of mine.choices) { const o = this._doc.createElement('option'); o.value = c.flag; o.textContent = c.name; e.sel.append(o); }
+      }
+      if (e.sel.value !== mine.flag) e.sel.value = mine.flag;
+    }
     // the line under the header is not printed either (Sky 34): the last tapped row's note is in the header's hover, a row's own note in the row's hover
     set(e.strip, false);
     // the list
@@ -1294,11 +1359,11 @@ export class RealSkyCard {
       e.itemEls.push(row);
     }
     if (fams.length === 0) return;
-    // "By job" (the families; owner 11-25 "Choose another name." for "Families"): one row that opens five, indented under it ("Navigation · 289": the count of its working ones)
+    // "By mission" (the families; owner 11-25 "Choose another name." for "Families", then "consider changing by job to mission"): one row that opens five, indented under it ("Navigation · 289": the count of its working ones)
     const fr = d.createElement('div');
     fr.id = 'real-sky-hl-families';
     fr.style.cssText = `display:flex;align-items:center;justify-content:space-between;gap:6px;box-sizing:border-box;padding:0 8px;margin-top:2px;min-height:${rowH};${HL_BTN_CSS}`;
-    const fa = d.createElement('span'); fa.textContent = 'By job';
+    const fa = d.createElement('span'); fa.textContent = 'By mission';
     const fb = d.createElement('span'); fb.style.cssText = 'color:#8392b3;font-size:10px'; fb.textContent = famOpen ? '\u25b4' : '\u25be';
     fr.append(fa, fb);
     fr.setAttribute('aria-expanded', famOpen ? 'true' : 'false');

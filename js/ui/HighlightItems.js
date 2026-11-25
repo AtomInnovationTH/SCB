@@ -4,10 +4,11 @@
  * `layer.highlights()` (data/highlights.json); RealSkyCard draws them and hands `toHighlight(item)` to `layer.setHighlight`.
  *
  *   Famous             the hand list of data/highlights.json, one object or group a row, its plain line beside the name;
- *   Your country       the menu language's country (flag -> GCAT State code): its working, dead, "satellite" and unknown objects, Starlink
- *                      left out, listed by kind with the biggest named; "+ stages" and "+ debris" add those kinds;
- *   Heaviest leftovers `isHeavyRow` (over 1,000 kg, not working, mean height under 2,000 km): all of them lit, the heaviest 25 listed
- *                      grouped by family.
+ *   Selected country   the country picked in the dropdown in its header (Sky 34 E; default the menu language's country, else United States;
+ *                      flag -> GCAT State codes): its working, dead, "satellite" and unknown objects, Starlink left out, listed by kind with the
+ *                      biggest named; "+ stages" and "+ debris" add those kinds;
+ *   Heaviest           every object over 1,000 kg of every kind the key shows now (working included, any height; a kind unticked in the key is
+ *                      left out; Sky 34 E, not SkyLook's `isHeavyRow`): all of them lit, the heaviest 25 listed grouped by family.
  *   Families           Navigation, Weather, Internet fleets, Spy satellites (the catalogue's `fam` column), People on board (data/highlights.json
  *                      `crew`): working ones lit first, "+ dead" adds the rest (Sky 33, DECISIONS §105 rows 1-3).
  *
@@ -16,7 +17,7 @@
  * @module ui/HighlightItems
  */
 
-import { isHeavyRow } from './SkyLook.js';
+import { HEAVY_KG } from './SkyLook.js';
 
 export const ID_FAMOUS = 'menu-famous';
 export const ID_COUNTRY = 'menu-country';
@@ -25,6 +26,10 @@ export const ID_HEAVY = 'menu-heavy';
 export const ITEM_IDS = [ID_FAMOUS, ID_COUNTRY, ID_HEAVY];
 /** True for an id that is one of this menu's items, a family included (another item's highlight is not the menu's to list). */
 export const isMenuId = (id) => ITEM_IDS.includes(id) || FAMILY_IDS.includes(id);
+
+/** The key's kind names by sky.json class number (RealSkyCard CLASS_NAMES, with 'starlink' for a working row named STARLINK). */
+const KIND_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown'];
+const kindNameOf = (row, clsAt) => (isStarlink(row) ? 'starlink' : KIND_NAMES[row[clsAt]]);
 
 /** How many heavy objects the list shows (grouped by family into a few rows; all of them are lit). */
 export const HEAVY_LIST_TOP = 25;
@@ -132,9 +137,9 @@ export function buildFamous(cat, hl) {
 
 /** Kind words for the country list's rows (the card's own words for each kind). */
 const COUNTRY_KINDS = [
-  { cls: CLS_WORKING, one: 'working satellite', many: 'working satellites' },
-  { cls: CLS_DEAD, one: 'dead satellite', many: 'dead satellites' },
-  { cls: CLS_SATELLITE, one: 'satellite, no report on whether it works', many: 'satellites, no report on whether they work' },   // Sky 32: the key's "no report" kind
+  { cls: CLS_WORKING, one: 'working sat', many: 'working sats' },   // Sky 34 E (owner 11-25): "sat", not "satellite"
+  { cls: CLS_DEAD, one: 'dead sat', many: 'dead sats' },
+  { cls: CLS_SATELLITE, one: 'sat, no report on whether it works', many: 'sats, no report on whether they work' },   // Sky 32: the key's "no report" kind
   { cls: CLS_UNKNOWN, one: 'unknown object', many: 'unknown objects' },
 ];
 
@@ -144,24 +149,50 @@ function biggestFirst(c) {
     || ((b[c.lenM] != null ? b[c.lenM] : -1) - (a[c.lenM] != null ? a[c.lenM] : -1)) || (a[c.norad] - b[c.norad]);
 }
 
-/** The country entry for a flag code ('USA', 'THA' ...), or null: `{ code, name }` from data/highlights.json `countries`. */
+/**
+ * Choices the dropdown has besides data/highlights.json `countries` (flag -> { code, name }); `codes` = the GCAT State codes (data/sky.json `states`) it joins.
+ * Russia: RU and SU (the Soviet Union). Europe: the agencies ESA (I-ESA), EUMETSAT (I-EUM), the EU (I-EU) and Eutelsat (I-EUT), and the European
+ * countries' codes: F France, D Germany, UK, I Italy, E Spain, NL, P, B, L, CH, AT, DK, FI, GR, IE, N, S, PL, CZ, CSFR and CSSR (Czechoslovakia), HU, RO,
+ * BG, HR, SI, SK, EE, LT, MC, ME, UA and BY (a code the data lacks counts for nothing; ESIB and BGN are left out: not sure which country they are).
+ */
+const EXTRA_CHOICES = {
+  RUS: { codes: ['RU', 'SU'], name: 'Russia' },
+  CHN: { codes: ['CN'], name: 'China' },
+  EUR: { name: 'Europe', codes: ['I-ESA', 'I-EUM', 'I-EU', 'I-EUT', 'F', 'D', 'UK', 'I', 'E', 'NL', 'P', 'B', 'L', 'CH', 'AT', 'DK', 'FI', 'GR', 'IE', 'N', 'S', 'PL',
+    'CZ', 'CSFR', 'CSSR', 'HU', 'RO', 'BG', 'HR', 'SI', 'SK', 'EE', 'LT', 'MC', 'ME', 'UA', 'BY'] },
+};
+/** The dropdown's first seven, in order (owner 2026-11-25); the other countries of data/highlights.json follow. */
+const CHOICE_FIRST = ['USA', 'RUS', 'CHN', 'EUR', 'JPN', 'IND', 'THA'];
+
+/** The country for a flag code ('USA', 'RUS', 'EUR' ...), or null: `{ code, codes, name }` (`code` = the first of `codes`). */
 export function countryOf(hl, flag) {
   const c = hl && hl.countries && hl.countries[flag];
-  return c && c.code ? c : null;
+  if (c && c.code) return { code: c.code, codes: [c.code], name: c.name };
+  const x = EXTRA_CHOICES[flag];
+  return x ? { code: x.codes[0], codes: x.codes, name: x.name } : null;
+}
+
+/** The dropdown's choices: `[{ flag, name }]`: United States, Russia, China, Europe, Japan, India, Thailand, then the other countries of data/highlights.json. */
+export function countryChoices(hl) {
+  const out = [], seen = new Set();
+  const add = (flag) => { const c = countryOf(hl, flag); if (c && !seen.has(flag)) { seen.add(flag); out.push({ flag, name: c.name }); } };
+  for (const f of CHOICE_FIRST) add(f);
+  for (const f of Object.keys((hl && hl.countries) || {})) add(f);
+  return out;
 }
 
 /**
  * The rows of one country: `{ sats: [rows of kinds working/dead/satellite/unknown, Starlink left out], stages: [...], debris: [...] }`, each biggest first.
- * @param {{rows:Array[], fields:string[], states:string[]}} cat @param {string} code the GCAT State code
+ * @param {{rows:Array[], fields:string[], states:string[]}} cat @param {string|string[]} code the GCAT State code, or several (Russia = RU + SU)
  * @returns {{sats:Array[], stages:Array[], debris:Array[]}|null} null when the data has no State column or does not know the code
  */
 export function countryRows(cat, code) {
   const c = columns(cat);
-  const si = (cat.states || []).indexOf(code);
-  if (c.state < 0 || si < 0) return null;
+  const sis = new Set((Array.isArray(code) ? code : [code]).map((k) => (cat.states || []).indexOf(k)).filter((i) => i >= 0));
+  if (c.state < 0 || sis.size === 0) return null;
   const out = { sats: [], stages: [], debris: [] };
   for (const r of cat.rows) {
-    if (r[c.state] !== si) continue;
+    if (!sis.has(r[c.state])) continue;
     const k = r[c.cls];
     if (k === CLS_STAGE) out.stages.push(r);
     else if (k === CLS_DEBRIS) out.debris.push(r);
@@ -174,14 +205,14 @@ export function countryRows(cat, code) {
 }
 
 /**
- * Your country: the language's country. `extras` = { stages, debris } add those kinds to what is lit (the list gets a row for each).
- * @param {object} cat @param {object} hl @param {string} flag the language's flag code (Languages.js: 'USA', 'THA' ...)
+ * Selected country: the country picked in the header's dropdown. `extras` = { stages, debris } add those kinds to what is lit (the list gets a row for each).
+ * @param {object} cat @param {object} hl @param {string} flag the choice's flag code ('USA', 'THA', 'RUS', 'EUR' ...; see `countryChoices`)
  * @param {{stages?:boolean, debris?:boolean}} [extras]
  */
 export function buildCountry(cat, hl, flag, extras = {}) {
   const country = countryOf(hl, flag);
   if (!cat || !country) return null;
-  const r = countryRows(cat, country.code);
+  const r = countryRows(cat, country.codes);
   if (!r) return null;
   const c = columns(cat);
   const rows = [], names = new Map(), norads = new Set();
@@ -210,26 +241,31 @@ export function buildCountry(cat, hl, flag, extras = {}) {
     });
   }
   return {
-    id: ID_COUNTRY, title: 'Your country', count: norads.size, header: `${country.name} \u00b7 ${fmtInt(norads.size)}`, country, credit: creditLine(cat),
+    id: ID_COUNTRY, title: 'Selected country', flag, choices: countryChoices(hl), count: norads.size, header: `${country.name} \u00b7 ${fmtInt(norads.size)}`, country, credit: creditLine(cat),
     honesty: 'owner per GCAT', rows, norads, names, litCount: norads.size, extras: { stages: extras.stages === true, debris: extras.debris === true },
   };
 }
 
-/** Rows that `isHeavyRow` calls heavy, heaviest first (ties by NORAD number). */
-export function heavyRows(cat) {
+/**
+ * Rows over 1,000 kg of every kind the key shows (working included, any height), heaviest first (ties by NORAD number).
+ * @param {object} cat @param {string[]} [hidden] the kinds unticked in the key (RealSkyCard CLASS_NAMES: 'working', 'dead', 'starlink' ...): left out
+ */
+export function heavyRows(cat, hidden = []) {
   const c = columns(cat);
-  return cat.rows.filter(isHeavyRow).sort((a, b) => (b[c.massKg] - a[c.massKg]) || (a[c.norad] - b[c.norad]));
+  const off = new Set(hidden);
+  return cat.rows.filter((r) => r[c.massKg] != null && r[c.massKg] > HEAVY_KG && !(off.size && off.has(kindNameOf(r, c.cls))))
+    .sort((a, b) => (b[c.massKg] - a[c.massKg]) || (a[c.norad] - b[c.norad]));
 }
 
 /**
- * Heaviest leftovers: all heavy objects lit; the list is the heaviest 25 grouped by family (the name), each row with its kg.
- * @param {object} cat
+ * Heaviest: all heavy objects of the shown kinds lit; the list is the heaviest 25 grouped by family (the name), each row with its kg. An empty
+ * item (every kind unticked) is still an item: the card rebuilds it when a tick changes.
+ * @param {object} cat @param {string[]} [hidden] the kinds unticked in the key
  */
-export function buildHeaviest(cat) {
+export function buildHeaviest(cat, hidden = []) {
   if (!cat) return null;
   const c = columns(cat);
-  const heavy = heavyRows(cat);
-  if (heavy.length === 0) return null;
+  const heavy = heavyRows(cat, hidden);
   const norads = new Set(heavy.map((r) => r[c.norad]));
   const groups = [];
   for (const r of heavy.slice(0, HEAVY_LIST_TOP)) {
@@ -241,9 +277,9 @@ export function buildHeaviest(cat) {
   for (const g of groups) {
     const hi = g.list[0][c.massKg], lo = g.list[g.list.length - 1][c.massKg];
     const kg = hi === lo ? `${fmtInt(hi)} kg` : `${fmtInt(lo)} to ${fmtInt(hi)} kg`;
-    const kind = g.cls === CLS_STAGE ? 'stage' : g.cls === CLS_DEAD ? 'dead satellite' : g.cls === CLS_DEBRIS ? 'debris' : g.cls === CLS_SATELLITE ? 'satellite, no report' : 'object';   // Sky 32: "no report" is the key's word for this kind
+    const kind = g.cls === CLS_STAGE ? 'stage' : g.cls === CLS_DEAD ? 'dead sat' : g.cls === CLS_DEBRIS ? 'debris' : g.cls === CLS_SATELLITE ? 'sat, no report' : g.cls === CLS_WORKING ? 'working sat' : 'object';   // Sky 32: "no report" is the key's word for this kind; Sky 34 E: "sat"
     const n = g.list.length;
-    const kindMany = g.cls === CLS_SATELLITE ? 'satellites, no report' : `${kind}s`;
+    const kindMany = g.cls === CLS_SATELLITE ? 'sats, no report' : `${kind}s`;
     rows.push({
       key: `heavy-${g.list[0][c.norad]}`, label: n > 1 ? `${g.name} \u00d7 ${n}` : String(g.name), sub: `${kg} \u00b7 ${n > 1 && kind !== 'debris' ? kindMany : kind}`,
       norads: g.list.map((x) => x[c.norad]), first: g.list[0][c.norad], count: n,
@@ -251,24 +287,24 @@ export function buildHeaviest(cat) {
     names.set(g.list[0][c.norad], n > 1 ? `${g.name} \u00d7 ${n}` : String(g.name));
   }
   return {
-    id: ID_HEAVY, title: 'Heaviest leftovers', count: heavy.length, header: `Heaviest leftovers \u00b7 ${fmtInt(heavy.length)} over 1,000 kg`, credit: creditLine(cat),
+    id: ID_HEAVY, title: 'Heaviest', count: heavy.length, header: `Heaviest \u00b7 ${fmtInt(heavy.length)} over 1,000 kg`, credit: creditLine(cat),
     honesty: 'mass per GCAT; a few are estimates there', rows, norads, names, litCount: norads.size,
   };
 }
 
 /**
- * The menu's items, in order, each null-free (an item the data cannot give is left out): Famous, Your country, Heaviest leftovers, then the
- * Families (`group: 'families'`; the card draws them under a "Families" row).
- * @param {object|null} cat `layer.catalogue()` @param {object|null} hl `layer.highlights()` @param {string|null} flag the language's flag code
- * @param {{stages?:boolean, debris?:boolean}} [extras] the Your country extras now on
- * @param {{joined?:boolean, famDead?:string|null}} [opts] `joined` = the catalogue's working / dead status is trusted (default: the data's own
- *   `statusJoined`); `famDead` = the id of the family whose "+ dead" is on (the card keeps that state)
+ * The menu's items, in order, each null-free (an item the data cannot give is left out): Famous, Selected country, Heaviest, then the
+ * Families (`group: 'families'`; the card draws them under a "By mission" row).
+ * @param {object|null} cat `layer.catalogue()` @param {object|null} hl `layer.highlights()` @param {string|null} flag the selected country's flag code
+ * @param {{stages?:boolean, debris?:boolean}} [extras] the Selected country extras now on
+ * @param {{joined?:boolean, famDead?:string|null, hidden?:string[]}} [opts] `joined` = the catalogue's working / dead status is trusted (default: the data's own
+ *   `statusJoined`); `famDead` = the id of the family whose "+ dead" is on (the card keeps that state); `hidden` = the kinds unticked in the key (Heaviest leaves them out)
  * @returns {Array<object>}
  */
 export function buildItems(cat, hl, flag, extras, opts = {}) {
   if (!cat || !Array.isArray(cat.rows)) return [];
   const joined = typeof opts.joined === 'boolean' ? opts.joined : cat.statusJoined !== false;
-  return [buildFamous(cat, hl), flag ? buildCountry(cat, hl, flag, extras) : null, buildHeaviest(cat), ...buildFamilies(cat, hl, { joined, famDead: opts.famDead || null })].filter(Boolean);
+  return [buildFamous(cat, hl), flag ? buildCountry(cat, hl, flag, extras) : null, buildHeaviest(cat, opts.hidden || []), ...buildFamilies(cat, hl, { joined, famDead: opts.famDead || null })].filter(Boolean);
 }
 
 /* ---------------------------------------------------------------- Families (Sky 33, DECISIONS §105 rows 1-3)
@@ -302,10 +338,10 @@ const FAMILY_DEFS = [
       [19, 'Other navigation', 'India, Japan and older systems']] },
   { id: ID_FAM_WEATHER, title: 'Weather', honesty: HONESTY_PUBLIC, by: 'state', codes: [20],
     tag: 'Satellites that watch clouds, storms and the air for weather forecasts.' },
-  { id: ID_FAM_NET, title: 'Internet fleets', honesty: HONESTY_PUBLIC,
+  { id: ID_FAM_NET, title: 'Internet', honesty: HONESTY_PUBLIC,
     tag: 'Big fleets that carry internet and phone links from space: OneWeb, Kuiper, Qianfan, Guowang, Iridium. Starlink has its own box.',
     rows: [[31, 'OneWeb', 'a British fleet'], [32, 'Kuiper', 'Amazon\u2019s fleet'], [33, 'Qianfan', 'a Chinese fleet'], [34, 'Guowang', 'a Chinese fleet'], [35, 'Iridium', 'phone links']] },
-  { id: ID_FAM_SPY, title: 'Spy satellites', honesty: HONESTY_SPY, by: 'state', codes: [40],
+  { id: ID_FAM_SPY, title: 'Spy', honesty: HONESTY_SPY, by: 'state', codes: [40],
     tag: 'Military satellites that take pictures, listen to radio signals or watch for missile launches.' },
 ];
 for (const d of FAMILY_DEFS) if (!d.codes) d.codes = d.rows.map((r) => r[0]);
@@ -403,8 +439,8 @@ function buildCrew(cat, hl) {
   if (stations) parts.push(`${stations} ${stations === 1 ? 'station' : 'stations'}`);
   if (ships) parts.push(`${ships} crew ${ships === 1 ? 'ship' : 'ships'}`);
   return {
-    id: ID_FAM_CREW, title: 'People on board', group: 'families', family: true, noCount: true, count: norads.size, all: norads.size, joined: false,
-    header: `People on board \u00b7 ${parts.join(', ')}`, tag: `The two space stations with people living on them, and the crew ships docked to them on ${date}.`,
+    id: ID_FAM_CREW, title: 'People', group: 'families', family: true, noCount: true, count: norads.size, all: norads.size, joined: false,
+    header: `People \u00b7 ${parts.join(', ')}`, tag: `The two space stations with people living on them, and the crew ships docked to them on ${date}.`,
     credit: creditLine(cat), honesty: HONESTY_PUBLIC, rows, norads, names, litCount: norads.size, working: [...norads], rest: [], famDead: false,
   };
 }

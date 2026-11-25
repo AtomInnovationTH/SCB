@@ -2083,8 +2083,8 @@ async function init() {
   // LADDER.ENABLED is false.
   // The real catalogue (data/sky.json, fetched on the first entry to floor 4 or 5) as dots; both floors show/hide it from their
   // activate()/deactivate(). ActiveSatellites' hand-placed template orbits are hidden while it shows (nothing invented on 4-5).
-  // The Highlight menu's "Your country" follows the menu language (its flag), and rebuilds when the language changes (Sky 23 H3).
-  // Famous is on when the globe opens (owner 2026-11-24, "turn it on by default"); a non-English menu language opens on Your country until the player
+  // The Highlight menu's "Selected country" starts on the menu language's country (its flag) until the player picks one in its dropdown (Sky 23 H3, Sky 34 E).
+  // Famous is on when the globe opens (owner 2026-11-24, "turn it on by default"); a non-English menu language opens on Selected country until the player
   // picks an item (RealSkyCard._hlDefaultStep). Off or Esc keeps it off until the game reloads.
   const realSkyCard = new RealSkyCard({
     getFlag: () => settingsManager.getLanguageEntry().flag,
