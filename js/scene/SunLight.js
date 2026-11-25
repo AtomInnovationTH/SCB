@@ -49,15 +49,15 @@ export function createSunDiscTexture(size = 64) {
  * Floor 4 glare balance (dev host `?glare=b`, owner 2026-11-22): the Sun as it is in the sky. A core at the REAL angular size
  * (Constants.GLARE_B.SUN_CORE_DEG, fully bright, a soft edge) inside a small soft halo that peaks at SUN_HALO_PEAK at the core's edge,
  * falls off as a power law and is exactly 0 at the sprite's rim (SUN_HALO_DEG): no hard edge anywhere. The texture's half-width is the halo radius.
- * @param {number} size canvas pixel dimensions
+ * Half-float, not an 8-bit canvas (owner 2026-11-26: "I see 3 rings/disks in distinct bands"): the halo's faint end is only alpha 1-3 of
+ * 255 in 8 bits, and the HDR tint (SUN_HDR_PEAK) lifts each of those steps to a visible flat ring against black sky.
+ * @param {number} size texture pixel dimensions
  */
 export function createSunGlareBTexture(size = 256) {
   const G = Constants.GLARE_B;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  const img = ctx.createImageData(size, size);
+  const h = THREE.DataUtils.toHalfFloat;
+  const data = new Uint16Array(4 * size * size);
+  const R = h(1), Gc = h(252 / 255), B = h(240 / 255);
   const half = size / 2;
   const rc = (G.SUN_CORE_DEG / 2) / G.SUN_HALO_DEG;   // core radius as a fraction of the half-width (small angles: tan x ~ x)
   const ss = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -67,11 +67,14 @@ export function createSunGlareBTexture(size = 256) {
       const halo = G.SUN_HALO_PEAK * Math.pow(Math.min(1, rc / Math.max(r, 1e-6)), 1.2) * (1 - ss(0.4, 1.0, r));
       const a = r >= 1 ? 0 : halo + (1 - halo) * (1 - ss(rc * 0.7, rc * 1.3, r));
       const i = 4 * (y * size + x);
-      img.data[i] = 255; img.data[i + 1] = 252; img.data[i + 2] = 240; img.data[i + 3] = Math.round(255 * a);
+      data[i] = R; data[i + 1] = Gc; data[i + 2] = B; data[i + 3] = h(a);
     }
   }
-  ctx.putImageData(img, 0, 0);
-  return new THREE.CanvasTexture(canvas);
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.HalfFloatType);
+  tex.magFilter = THREE.LinearFilter;   // half float filters linearly on every WebGL2 device (float32 needs an extension)
+  tex.minFilter = THREE.LinearFilter;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 function createPlanetLabelTexture(text) {
