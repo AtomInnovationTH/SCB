@@ -121,6 +121,7 @@ import { persistenceManager } from './systems/PersistenceManager.js';
 import { showMode } from './systems/ShowMode.js';   // shared-iPad show mode (the side-effect import at the top ran its boot work)
 import { isHeldByAutoPlay, resetForNewPlayer, idleOverrideS, shouldFreezeMenu, menuFreezeS, MENU_FREEZE_S } from './systems/IdleReset.js';
 import { wireStillPlaying, wireIdleTimers } from './ui/StillPlayingCard.js';
+import { wireRateMission } from './ui/RateMission.js';
 import { shouldEndDemo, wireDemoEnd } from './systems/DemoEnd.js';   // demo mode: the game ends after mission 1, on the engines (owner 2026-10-29)
 import { DemoEndCard } from './ui/DemoEndCard.js';
 import { WheelRouter } from './systems/WheelRouter.js';
@@ -6319,6 +6320,8 @@ async function init() {
       };
     }
     if (hotkeyOverlay && typeof hotkeyOverlay.setPlayLog === 'function') hotkeyOverlay.setPlayLog(_playRecorder);   // the help page's button (works on the live site)
+    // The "Rate mission" button at a mission's end (dev hosts only: this Mac, or the iPad over --lan; null on the public site).
+    wireRateMission({ doc: document, win: window, gameState, recorder: _playRecorder, getInput: () => (_glassBoot ? 'touch' : 'mouse') });
     // `refs`: the game objects the scripted driver (scripts/play/drive-training.mjs) reads; the same set the old per-session drivers
     // reached through a route that appended a hook to this file. Dev host only.
     if (isDevHost()) window.__playLog = {
