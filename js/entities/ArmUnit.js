@@ -22,13 +22,13 @@ import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { strutLocalDirection, composeDockedArmQuat, bestStrutAlpha, carryDirInto, carryFinalQuatInto, carryRotFrac } from './ArmDockBasis.js';
 import { buildNoseRoute, virtualCentreInto } from './NoseRoute.js';
-import { isInspectOnlyMass, captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
+import { isInspectOnlyMass, SPIN_TOO_BIG_LINE, captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { daughterOutOfNetsLine, pressNToLine } from '../systems/netRouting.js';
 import { coldGasKgToPool, coldGasPoolToKg } from '../systems/ResourceSystem.js';   // the mother's tank is pool units, the bottle is kg
 import { placeName } from '../systems/resupplyWords.js';   // "resupply satellite" with the map on, "resupply stop" without
-import { computeToolOdds, makeNetOddsLockCache, padSpinTooFast } from '../systems/ToolOdds.js';
+import { computeToolOdds, makeNetOddsLockCache, padSpinTooFast, gripperSpinTooFast, toolSpinGasKg, toolSpinGasRefuses } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { pieceLostLine } from '../systems/PieceClaim.js';
@@ -1279,8 +1279,6 @@ export class ArmUnit {
     this._padTimer = 0;
     this._padResolvedMode = null;
     this._padOffset = null;   // scene units — her offset from the piece while the pad closes (rides with it)
-    // Per-arm UV-cure magazine (finite; runtime-only, not persisted).
-    this._padUvCureDosesRemaining = (Constants.PAD_CONTACT && Constants.PAD_CONTACT.UV_CURE_DOSES_Y0) || 10;
 
     // FEEP dual-metal system
     this._currentMetal = 'indium';
@@ -5360,7 +5358,8 @@ export class ArmUnit {
    * critically-damped wrench of the caught bundle that the tether damps over t_settle = L/τ.
    *
    * Scope (deliberate): daughter NET catches only, as _checkNetIntegrityOnReel's net-integrity doctrine. The mother
-   * lasso/berth spine, the legacy CAPTURE_NET-OFF dice path and the magnet/gripper/pad tool paths keep instant arrest.
+   * lasso/berth spine and the legacy CAPTURE_NET-OFF dice path keep instant arrest. The magnet, gripper and pad paths carry no
+   * wrench (no net to tear) but pay the same spin with her gas (DECISIONS §111 row 4: `_secureToolCatch`, `_padStopSpin`).
    * A zero/near-zero rate seeds nothing (MIN_SEED_RATE_DEG_S), which keeps scenario-pinned attitudes (main.js register
    * item 13) byte-frozen.
    * @param {object} debris — the freshly cinched catch
@@ -5512,7 +5511,7 @@ export class ArmUnit {
    * real spin it has (carried to the seat), so nothing is rewritten: it only
    * ends the carry (_carrySpin = false) and clears the settle. tumbleRate, the
    * axis and tumbleAngle are left as they are. _initialTumbleRate is deliberately untouched
-   * (E1 despin doctrine: spawn history is frozen). The one exception is the pad stop (_padStopSpin), which caps it at
+   * (E1 despin doctrine: spawn history is frozen). The one exception is a tool catch (`_secureToolCatch`), which caps it at
    * IN_SPEC_DEG so the de-spin bonus stays what it was without the stop.
    * @param {object} st — live settle state
    */
@@ -5525,8 +5524,9 @@ export class ArmUnit {
 
   /**
    * @private A caught piece's spin goes on while it is reeled in (before the seat): the angle advances at the rate the
-   * renderer would draw it free (`DebrisField._advanceTumble`'s law, which skips a pinned piece). Only a piece the net
-   * settle seeded (a daughter NET catch spinning above MIN_SEED_RATE_DEG_S) carries.
+   * renderer would draw it free (`DebrisField._advanceTumble`'s law, which skips a pinned piece). Only a piece marked
+   * `_carrySpin` carries: a daughter NET catch the net settle seeded, or a MAGNET / GRIPPER catch (`_secureToolCatch`,
+   * DECISIONS §111 row 4), spinning above MIN_SEED_RATE_DEG_S. A pad catch's spin is stopped at the grip (`_padStopSpin`).
    */
   _tickHeldSpin(dt) {
     const d = this.capturedDebris;
@@ -5543,7 +5543,7 @@ export class ArmUnit {
    * L / (lever x v_e) kg and takes L / torque seconds. She spends what the cancel needs from ALL the gas she has (no per-seat cap);
    * only if her bottle runs dry does the rest stay as spin on the catch (`tumbleRate` = the rate left, nothing deleted). The piece
    * keeps turning in her frame while it goes, its cell re-laid each frame so it never
-   * touches her. A piece that is not carrying a spin (under 0.1 deg/s, or not a net catch) costs nothing.
+   * touches her. A piece that is not carrying a spin (under 0.1 deg/s, or not a net, magnet or gripper catch) costs nothing.
    * @param {object} d the piece, in its cell on her (`_rackCell` assigned)
    * @param {THREE.Quaternion} herQ her world attitude as the piece was seeded in her frame
    * @param {THREE.Vector3|null} axisWorld the spin axis in the world frame (read BEFORE the cell's attitude overwrote it)
@@ -5915,6 +5915,22 @@ export class ArmUnit {
     return true;
   }
 
+  /**
+   * @private A catch tool (magnet, gripper, pad) takes the piece's spin with it, and her gas has to stop it at the seat (DECISIONS §111
+   * row 4): with CAPTURE_TORQUE_SETTLE on and `1.1 x toolSpinGasKg` more than the gas she has now (`ToolOdds.toolSpinGasRefuses`, the
+   * one rule the odds strip reads), the dispatch is refused before the touch. She stays at station keep.
+   * @returns {boolean} true when she refuses (and said so)
+   */
+  _toolSpinRefuses() {
+    const t = this._stationKeepTarget || this.target;
+    if (!t || !toolSpinGasRefuses(t, this.coldGasKg)) return false;
+    audioSystem.playDeny();
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: this.displayName, text: SPIN_TOO_BIG_LINE, channel: 'CMD', priority: 'warning',
+    });
+    return true;
+  }
+
   captureFromStationKeep() {
     if (this.state !== S.STATION_KEEP) return false;
     if (this._inspectOnlyRefuses()) return false;
@@ -6005,15 +6021,17 @@ export class ArmUnit {
       sizeMeter: target ? (target.sizeMeter || 0) : 0,
       debrisType: target ? (target.type || null) : null,
       ferromagnetic: !!(target && target.ferromagnetic === true),
-      hasFerrousFasteners: !!(target && target.hasFerrousFasteners === true),
       hasGrappleFixture: !!(target && target.hasGrappleFixture === true),
       netDepleted,
-      // DECISIONS §33 row 7: the rule reads the surface (material -> gecko / hooks adhesion), so the piece's material and
+      // DECISIONS §33 row 2: the rule reads the surface (material -> panel or foil), so the piece's material and
       // roughness must reach the recommender.
       material: target ? target.material : undefined,
       surfaceRoughness: target ? target.surfaceRoughness : undefined,
       // The pad refuses a piece spinning past PAD_CONTACT.SPIN_MAX_DEG (ToolOdds.padSpinTooFast), so the auto-pad pick must see the spin.
       tumbleRate: target ? relativeSpinRad(target, this.id) : undefined,   // relative to her while she circles it in step (lane M, M-d)
+      // her gas pays the piece's TRUE spin (a circled piece still passes its spin to her at the catch); the stub's tumbleRate above is the relative one
+      trueTumbleRate: target ? target.tumbleRate : undefined,
+      coldGasKg: this.coldGasKg,   // a tool whose spin her gas cannot stop scores 0 (DECISIONS §111 row 4)
     });
     this.selectedTool = rec.recommended;
     // SK entry is the lock/re-acquire seam: force the odds lock cache to rebuild even if a (pool-recycled) target
@@ -6051,8 +6069,8 @@ export class ArmUnit {
       target,
       range,
       netCount,
-      padUvDoses: this._padUvCureDosesRemaining,
       presentedWidthM,
+      coldGasKg: this.coldGasKg,   // MAGNET / GRIPPER / PAD show 0 when her gas cannot stop the piece's spin (DECISIONS §111 row 4)
       lockCache: this._toolOddsLockCache,
       spinFrameId: this.id,   // a piece she circles in step reads 0 spin to her: every spin term below judges the relative spin (lane M, M-d)
       matchOffer: tools.includes('MATCH') && target ? this._spinMatchOffer(target) : null,
@@ -6137,7 +6155,6 @@ export class ArmUnit {
     const MAG = Constants.MAGNETIC_GRAPPLE;
     if (!target || (target.mass || 0) > MAG.MAX_DEBRIS_MASS_KG) return 0;
     if (target.ferromagnetic === true) return MAG.P_GRIP_FERROUS;
-    if (target.hasFerrousFasteners === true) return MAG.P_GRIP_FASTENERS;
     return MAG.P_GRIP_NON_FERROUS;
   }
 
@@ -6149,6 +6166,7 @@ export class ArmUnit {
   magneticGrapple() {
     if (this.state !== S.STATION_KEEP) return false;
     if (this._inspectOnlyRefuses()) return false;
+    if (this._toolSpinRefuses()) return false;
     const target = this._stationKeepTarget || this.target;
     if (!target) { audioSystem.playDeny(); return false; }
 
@@ -6216,17 +6234,14 @@ export class ArmUnit {
       this._failMagneticGrip('too_heavy');
       return;
     }
-    const ferrous = target.ferromagnetic === true || target.hasFerrousFasteners === true;
-    if (!ferrous) {
-      const pNF = Constants.MAGNETIC_GRAPPLE.P_GRIP_NON_FERROUS;
-      const rollNF = (this._magRollOverride != null) ? this._magRollOverride : Math.random();
-      if (rollNF >= pNF) { this._failMagneticGrip('non_ferrous'); return; }
-    } else {
-      const p = this._magnetGripProbability(target);
-      // Test seam: `_magRollOverride` (0..1) forces a deterministic roll.
-      const roll = (this._magRollOverride != null) ? this._magRollOverride : Math.random();
-      if (roll >= p) { this._failMagneticGrip('p_roll'); return; }
-    }
+    // Backstop for the gas the close-in spent: her gas must still be able to stop the piece's spin at the seat (DECISIONS §111 row 4).
+    if (toolSpinGasRefuses(target, this.coldGasKg)) { this._failMagneticGrip('spin_gas'); return; }
+    // Steel hull only (DECISIONS §111 row 1): anything else fails at once, no roll.
+    if (target.ferromagnetic !== true) { this._failMagneticGrip('non_ferrous'); return; }
+    const p = this._magnetGripProbability(target);
+    // Test seam: `_magRollOverride` (0..1) forces a deterministic roll.
+    const roll = (this._magRollOverride != null) ? this._magRollOverride : Math.random();
+    if (roll >= p) { this._failMagneticGrip('p_roll'); return; }
 
     // Grip acquired: reuse the GRAPPLED → REELING lifecycle (net-integrity is skipped for non-NET catches via _captureToolKind).
     this._magPhase = null;
@@ -6248,15 +6263,19 @@ export class ArmUnit {
     // cause: used under REEL_HOME (outcome reeled home / held); msg: the whole line when REEL_HOME is off
     const cause = reason === 'too_heavy'
       ? 'Magnetic grapple failed: target too massive for the EPM.'
+      : reason === 'spin_gas'
+        ? SPIN_TOO_BIG_LINE
       : reason === 'non_ferrous'
-        ? 'No magnetic purchase: target is non-ferrous (try the net).'
+        ? 'No magnetic purchase: it is not steel (try the net).'
         : reason === 'standoff'
           ? 'Lost contact on approach: magnetic grapple aborted.'
           : 'Magnetic grip slipped.';
     const msg = reason === 'too_heavy'
       ? `${this.displayName}: Magnetic grapple failed. Target too massive for the EPM. Returning to reload.`
+      : reason === 'spin_gas'
+        ? `${this.displayName}: Her gas can't stop that spin. Returning; slow its spin first.`
       : reason === 'non_ferrous'
-        ? `${this.displayName}: No magnetic purchase. Target is non-ferrous. Returning; try the net.`
+        ? `${this.displayName}: No magnetic purchase. It is not steel. Returning; try the net.`
         : reason === 'standoff'
           ? `${this.displayName}: Lost contact on approach. Magnetic grapple aborted. Returning.`
           : `${this.displayName}: Magnetic grip slipped. Returning to reload. Re-attempt or try the net.`;
@@ -6277,8 +6296,26 @@ export class ArmUnit {
     return this.position.distanceTo(ref) / M;
   }
 
-  /** @private Secure a non-net catch and hand off to GRAPPLED → REELING → park-the-catch; ARM_CAPTURED is tagged with the tool. */
+  /**
+   * @private Secure a non-net catch and hand off to GRAPPLED → REELING → park-the-catch; ARM_CAPTURED is tagged with the tool.
+   * The piece's spin is paid with her gas (DECISIONS §111 row 4, billed as a net catch is): the magnet and the gripper carry it to the
+   * seat (`_carrySpin`, then `_stowHeldCatch` -> `_seatSpinBegin` -> `_tickSeatSpin` bill `toolSpinGasKg`); the pad stops it at once
+   * (`_padStopSpin`). Either way the seat / the stop zeroes the spin before scoring reads the catch, so a piece that was still above
+   * IN_SPEC_DEG at the grip has its spawn-spin memory (`_initialTumbleRate`) capped at IN_SPEC_DEG here: no de-spin bonus for a spin
+   * the player never tamed (a piece already in spec keeps its history, so a laser-tamed piece still earns its bonus).
+   */
   _secureToolCatch(target, toolKind, successMsg) {
+    const w = target.tumbleRate;
+    if (typeof w === 'number' && Math.abs(w) > 0) {
+      const inSpecRad = degToRad((Constants.NET_TUMBLE_PENALTY && Constants.NET_TUMBLE_PENALTY.IN_SPEC_DEG) || 10);
+      if (Math.abs(w) > inSpecRad && typeof target._initialTumbleRate === 'number') {
+        target._initialTumbleRate = Math.min(target._initialTumbleRate, inSpecRad);
+      }
+      if ((toolKind === 'MAGNET' || toolKind === 'GRIPPER') && Constants.isFeatureEnabled('CAPTURE_TORQUE_SETTLE')
+          && radToDeg(Math.abs(w)) >= Constants.CAPTURE_TORQUE_SETTLE.MIN_SEED_RATE_DEG_S) {
+        target._carrySpin = true;   // the spin goes home with the catch; the seat's cold-gas jet cancels it and bills the gas
+      }
+    }
     this.capturedDebris = target;
     target._captured = true;
     target._capturedByArm = this;
@@ -6605,6 +6642,7 @@ export class ArmUnit {
     if (this.state !== S.STATION_KEEP) return false;
     if (this._inspectOnlyRefuses()) return false;
     if (!Constants.isFeatureEnabled('WEAVER_GRIPPER')) return this._toolOffline('GRIPPER');
+    if (this._toolSpinRefuses()) return false;
     const target = this._stationKeepTarget || this.target;
     if (!target) { audioSystem.playDeny(); return false; }
 
@@ -6799,8 +6837,8 @@ export class ArmUnit {
 
   /**
    * The spin kit's verb (`KIT`, from STATION_KEEP; plan debris-1 lane K, DECISIONS §70 row 7): she closes in on the piece at the real latch speed
-   * (`_latchClose`, the magnet's 5 cm/s touch, timeouts and miss path), the kit snaps onto a steel spot, and she backs off to station-keep. No roll, no
-   * catch, no reel: the piece only gets its kit (`DebrisField.attachSpinKit`). A piece with no steel spot or not a big piece refuses it in place.
+   * (`_latchClose`, the magnet's 5 cm/s touch, timeouts and miss path), the kit snaps onto a steel spot or clamp point, and she backs off to station-keep. No roll, no
+   * catch, no reel: the piece only gets its kit (`DebrisField.attachSpinKit`). A piece with no steel spot or clamp point, or not a big piece, refuses it in place.
    * @returns {boolean} true when the clip-on began
    */
   kitClip() {
@@ -6809,7 +6847,7 @@ export class ArmUnit {
     const say = (text, priority = 'warning') => eventBus.emit(Events.COMMS_MESSAGE, { source: this.displayName, text, channel: 'CMD', priority });
     if (!this._kitAboard) { audioSystem.playDeny(); say('No spin kit aboard.'); return false; }
     if (!target) { audioSystem.playDeny(); return false; }
-    if (!kitHolds(target)) { audioSystem.playDeny(); say('No steel spot to hold the kit.'); return false; }
+    if (!kitHolds(target)) { audioSystem.playDeny(); say('No steel spot or clamp point for the kit.'); return false; }
     if (target.spinKit) { audioSystem.playDeny(); say(`A spin kit is already on the ${pieceName(target)}.`); return false; }
     eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'kit' });
     this._kitPhase = 'CLOSING';
@@ -6876,6 +6914,9 @@ export class ArmUnit {
   _resolveGripperLatch(target) {
     const G = Constants.GRIPPER_GRAPPLE;
     if ((target.mass || 0) > G.MAX_DEBRIS_MASS_KG) { this._failGripperGrip('oversize'); return; }
+    // The jaws take a slow piece only (3°/s, relative to her: a piece she circles in step reads 0). The same rule the odds strip reads.
+    if (gripperSpinTooFast(target, this.id)) { this._failGripperGrip('spin'); return; }
+    if (toolSpinGasRefuses(target, this.coldGasKg)) { this._failGripperGrip('spin_gas'); return; }   // backstop: the close-in spent gas (DECISIONS §111 row 4)
     const fixtured = target.hasGrappleFixture === true;
     const p = fixtured ? G.P_GRIP_FIXTURED : G.P_GRIP_UNFIXTURED;
     // Test seam: `_gripRollOverride` (0..1) forces a deterministic roll.
@@ -6898,6 +6939,10 @@ export class ArmUnit {
     }
     const cause = reason === 'oversize'
       ? 'Gripper failed: target beyond the jaw mass limit.'
+      : reason === 'spin'
+        ? `Gripper not latched: it turns faster than ${Constants.GRIPPER_GRAPPLE.SPIN_MAX_DEG}\u00B0/s. Circle it in step first.`
+      : reason === 'spin_gas'
+        ? SPIN_TOO_BIG_LINE
       : reason === 'unreached'
         ? `Gripper could not reach the piece in ${Math.round(this._gripUnreachedS || 0)} s.`
         : reason === 'no_fixture'
@@ -6905,6 +6950,10 @@ export class ArmUnit {
           : 'Gripper slipped off the fixture.';
     const msg = reason === 'oversize'
       ? `${this.displayName}: Gripper failed. Target beyond jaw mass limit. Returning to reload.`
+      : reason === 'spin'
+        ? `${this.displayName}: Gripper not latched. It turns faster than ${Constants.GRIPPER_GRAPPLE.SPIN_MAX_DEG}\u00B0/s. Returning; circle it in step first.`
+      : reason === 'spin_gas'
+        ? `${this.displayName}: Her gas can't stop that spin. Returning; slow its spin first.`
       : reason === 'unreached'
         ? `${this.displayName}: Could not reach the piece in ${Math.round(this._gripUnreachedS || 0)} s. Returning.`
         : reason === 'no_fixture'
@@ -6915,20 +6964,16 @@ export class ArmUnit {
   }
 
   /**
-   * Pad adhesion mode from target surface metadata at contact: a mode string, or null (NO_MODE: exotic surface, UV doses spent).
-   * @returns {string|null}
+   * Pad adhesion mode from the target's surface material at contact (DECISIONS §111 row 3; mirror: `ToolOdds.resolvePadModeForOdds`):
+   * steel -> magnet; aluminium, kapton, glass ceramic, solar cell -> gecko; everything else -> electrostatic.
+   * @returns {string}
    */
   _resolvePadMode(target) {
     const material = target.material;
-    const roughness = (typeof target.surfaceRoughness === 'number') ? target.surfaceRoughness : 0.5;
     if (material === 'steel' || material === 'iron_alloy') return 'magnet';
-    if (material === 'mli_mylar' || roughness > 0.7) return 'hooks';
     if (material === 'aluminum' || material === 'kapton'
         || material === 'glass_ceramic' || material === 'solar_cell') return 'gecko';  // warm window assumed at Y0
-    if (material === 'composite') return 'electrostatic';
-    // Last resort: finite UV-cure magazine; once spent, NO_MODE.
-    if ((this._padUvCureDosesRemaining || 0) > 0) return 'uv_cure';
-    return null;
+    return 'electrostatic';
   }
 
   /**
@@ -6939,6 +6984,7 @@ export class ArmUnit {
     if (this.state !== S.STATION_KEEP) return false;
     if (this._inspectOnlyRefuses()) return false;
     if (!Constants.isFeatureEnabled('SPINNER_PAD')) return this._toolOffline('PAD');
+    if (this._toolSpinRefuses()) return false;
     const target = this._stationKeepTarget || this.target;
     if (!target) { audioSystem.playDeny(); return false; }
 
@@ -7034,16 +7080,13 @@ export class ArmUnit {
     // Spin gate (owner 2026-11-01): past PAD_CONTACT.SPIN_MAX_DEG the pad slips, no roll. Same rule as the shown odds
     // (ToolOdds.computePadOdds calls the same padSpinTooFast), so the % on the HUD is the % rolled.
     if (padSpinTooFast(target, this.id)) { this._failPadContact('spin'); return; }   // her id: a piece she circles in step is judged at its spin relative to her (lane M)
+    if (toolSpinGasRefuses(target, this.coldGasKg)) { this._failPadContact('spin_gas'); return; }   // backstop: the close-in spent gas (DECISIONS §111 row 4)
     const p = mode ? (P.P_GRIP_BY_MODE[mode] ?? P.P_GRIP_NO_MODE) : P.P_GRIP_NO_MODE;
     // Test seam: `_padRollOverride` (0..1) forces a deterministic roll.
     const roll = (this._padRollOverride != null) ? this._padRollOverride : Math.random();
     if (roll >= p) { this._failPadContact(mode ? 'p_roll' : 'no_mode'); return; }
 
-    // Success — decrement the UV-cure magazine IFF that mode actually adhered.
-    if (mode === 'uv_cure') {
-      this._padUvCureDosesRemaining = Math.max(0, (this._padUvCureDosesRemaining || 0) - 1);
-      eventBus.emit(Events.PAD_UV_DOSE_USED, { armId: this.id, dosesRemaining: this._padUvCureDosesRemaining });
-    }
+    // Success: the pad adhered.
     this._padPhase = null;
     eventBus.emit(Events.PAD_ADHERED, { armId: this.id, targetId: target.id, mode });
     this._secureToolCatch(target, 'PAD',
@@ -7052,19 +7095,22 @@ export class ArmUnit {
   }
 
   /**
-   * @private The pad has the piece: its spin stops (the daughter takes it), so the catch reels home still. Scoring reads the
+   * @private The pad has the piece: its spin stops (the daughter takes it), so the catch reels home still. The stop is paid with
+   * her gas at once (DECISIONS §111 row 4): `min(coldGasKg, toolSpinGasKg(target))` comes out of her bottle (CAPTURE_TORQUE_SETTLE
+   * on; off = the legacy free stop, no bill). At most 5.6 g of the small daughter's 200 g on the pad's range. Scoring reads the
    * piece's rate when the catch is PROCESSED (`ScoringSystem.calculateScore`, after the reel), not at the grip, so zeroing the
-   * rate here would pay the de-spin bonus (spawned above IN_SPEC_DEG, in spec at capture) for a spin the player never tamed.
-   * To keep the bonus exactly as it was (paid only when the spin was tamed BEFORE the catch), a piece that was still above
-   * IN_SPEC_DEG at the grip has its spawn-spin memory (`_initialTumbleRate`) capped at IN_SPEC_DEG: no bonus, as before.
-   * A piece already in spec at the grip keeps its history untouched (a laser-tamed piece still earns its bonus).
+   * rate here would pay the de-spin bonus for a spin the player never tamed; `_secureToolCatch` caps the spawn-spin memory
+   * (`_initialTumbleRate`) at IN_SPEC_DEG for that, before this runs.
    */
   _padStopSpin(target) {
     const w = target.tumbleRate;
     if (typeof w !== 'number' || !(Math.abs(w) > 0)) return;
-    const inSpecRad = degToRad((Constants.NET_TUMBLE_PENALTY && Constants.NET_TUMBLE_PENALTY.IN_SPEC_DEG) || 10);
-    if (Math.abs(w) > inSpecRad && typeof target._initialTumbleRate === 'number') {
-      target._initialTumbleRate = Math.min(target._initialTumbleRate, inSpecRad);
+    if (Constants.isFeatureEnabled('CAPTURE_TORQUE_SETTLE')) {
+      const kg = Math.min(Math.max(0, this.coldGasKg), toolSpinGasKg(target));
+      if (kg > 0) {
+        this.coldGasKg = Math.max(0, this.coldGasKg - kg);
+        this.power.markGas();   // the valves open while the jet fires (DaughterPower bills them once per frame)
+      }
     }
     target.tumbleRate = 0;
   }
@@ -7081,6 +7127,8 @@ export class ArmUnit {
       ? 'Pad bounced: contact too fast.'
       : reason === 'spin'
         ? 'Pad slipped: the piece is spinning too fast for the pad.'
+      : reason === 'spin_gas'
+        ? SPIN_TOO_BIG_LINE
       : reason === 'timeout'
         ? 'Pad could not reach it.'
         : reason === 'no_mode'
@@ -7090,6 +7138,8 @@ export class ArmUnit {
       ? `${this.displayName}: Pad bounced: contact too fast. Returning.`
       : reason === 'spin'
         ? `${this.displayName}: Pad slipped: the piece is spinning too fast for the pad. Returning.`
+      : reason === 'spin_gas'
+        ? `${this.displayName}: Her gas can't stop that spin. Returning; slow its spin first.`
       : reason === 'timeout'
         ? `${this.displayName}: Pad could not reach it. Returning.`
       : reason === 'no_mode'
@@ -7644,6 +7694,10 @@ export class ArmUnit {
   _releaseCapturedDebris({ keepPinned = false } = {}) {
     const debris = this.capturedDebris;
     if (!debris) return null;
+    // Read the verb first: a tool catch (magnet / gripper / pad) carried its spin for the seat (`_secureToolCatch`); released, the
+    // piece keeps its real spin as a free piece (the net settle ends the carry itself, `_resumeTumbleFromRemainder`).
+    const wasToolCatch = !!this._captureToolKind && this._captureToolKind !== 'NET';
+    if (wasToolCatch) debris._carrySpin = false;
     debris._netted = true;
     debris._captured = false;          // re-targetable by the next daughter
     debris._isStationKeepTarget = false;
@@ -11680,7 +11734,7 @@ export class ArmUnit {
     if (isInspectOnlyMass(t.mass) || (t.mass || 0) > (Constants.SPINNER_MAX_CAPTURE_MASS ?? 50)) return { padWorks: false };
     const padChosen = this.selectedTool === 'PAD';
     if (!padChosen && this.availableTools().length <= 1) return { padWorks: false };               // no tool change to make
-    const pad = computeToolOdds({ armType: this.type, toolset: ['PAD'], target: t, padUvDoses: this._padUvCureDosesRemaining }).PAD;
+    const pad = computeToolOdds({ armType: this.type, toolset: ['PAD'], target: t, coldGasKg: this.coldGasKg }).PAD;
     if (!(!!pad && pad.p > 0 && pad.blocker == null)) return { padWorks: false };
     const holds = holdsStation || this.state === S.STATION_KEEP;
     const flown = this.isManual();

@@ -6398,7 +6398,7 @@ export class ArmManager {
 
   /**
    * Plan debris-1 lane K (DECISIONS §70 row 7): wrap the launch so the daughter takes one spin kit from the mother's stock at the spring, when she
-   * carries a magnet and a gripper, her target is a big piece with a steel spot (`kitHolds`) with no kit on it yet, and the stock has one. The kit
+   * carries a magnet and a gripper, her target is a big piece with a steel spot or clamp point (`kitHolds`) with no kit on it yet, and the stock has one. The kit
    * is her kilogram from then (`ArmUnit._massKg`), the mother's minus one; a launch that does not fire gives it back. Other modes and targets: no kit.
    * @returns {() => boolean} `fire`, or `fire` wrapped
    */
@@ -6434,7 +6434,7 @@ export class ArmManager {
     if (i < 0) return !!fire();
     const claimed = (mode === 'target' || mode === 'ceremony') && target ? target : null;
     arm._claimTarget = claimed;
-    fire = this._takeKitAtLaunch(arm, mode, target, fire);   // lane K: a daughter with magnet and gripper takes a spin kit for a big steel piece, at the spring
+    fire = this._takeKitAtLaunch(arm, mode, target, fire);   // lane K: a daughter with magnet and gripper takes a spin kit for a big piece with steel or a clamp point, at the spring
     const guarded = !claimed ? fire : () => {
       const why = this._releaseBlock(arm, claimed);
       if (why) {

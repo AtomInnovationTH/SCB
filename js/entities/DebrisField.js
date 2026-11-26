@@ -1405,7 +1405,7 @@ export class DebrisField {
       salvage,
       hasSalvage,
       metalMassKg,
-      // Capture-recommender inputs (ferromagnetic / hasFerrousFasteners, hasGrappleFixture, surfaceRoughness).
+      // Capture-recommender inputs (ferromagnetic, hasGrappleFixture, surfaceRoughness).
       // SSOT: debrisFerrous.js.
       ...deriveCaptureFlags(material, type, mass),
       // Visual data for atlas system
@@ -5369,8 +5369,8 @@ export class DebrisField {
       debris.mass = mass / actualCount;
       // `_createDebrisData` drew the material from the DISCARDED type's MATERIAL_WEIGHTS_BY_TYPE row (a shard drawn AS a
       // rocketBody carried 45/23/22 aluminium/titanium/steel, never mli_mylar or solar_cell; the fragment row intends
-      // 34/20/29.5 with ~6 % each MLI/PV) and its capture flags (measured: 27 % of shards had hasFerrousFasteners +
-      // hasGrappleFixture, both intact-only). Redraw the material from the fragment row BEFORE the salvage regen reads
+      // 34/20/29.5 with ~6 % each MLI/PV) and its capture flags (measured: 27 % of shards had a grapple fixture, an
+      // intact-only flag; the since-removed steel-fasteners flag was set the same way). Redraw the material from the fragment row BEFORE the salvage regen reads
       // it, and re-derive the flags from the shipped triple. Brittleness is a type-blind uniform roll in
       // _createDebrisData; re-rolled here for provenance.
       debris.material = weightedMaterial(debris.type);

@@ -4,7 +4,7 @@
  * recommendation and star scores (archive/DAUGHTER_MULTITOOL_SPEC.md §7).
  *
  *   • PURE + Node-safe: no THREE, no DOM, no eventBus.
- *   • Graceful degradation: when `ferromagnetic` / `hasFerrousFasteners` are absent the magnet fork is skipped and the
+ *   • Graceful degradation: when `ferromagnetic` is absent the magnet fork is skipped and the
  *     net-first recommendation stands.
  *   • Phase-gated: GRIPPER and PAD are only scored when their FEATURE_FLAGS are ON, so an unbuilt verb is never
  *     recommended.
@@ -31,10 +31,11 @@ import { computeToolOdds, computeBestTool } from './ToolOdds.js';
  * @param {number}  [opts.mass=0]                      - target mass (kg)
  * @param {number}  [opts.sizeMeter=0]                 - target max width (m)
  * @param {string}  [opts.debrisType]                  - 'rocketBody'|'defunctSat'|'fragment'|...
- * @param {boolean} [opts.ferromagnetic=false]         - pure-steel hull (direct EPM grip)
- * @param {boolean} [opts.hasFerrousFasteners=false]   - steel bolts/brackets (bolt-latch)
+ * @param {boolean} [opts.ferromagnetic=false]         - pure-steel hull (direct EPM grip; the magnet takes steel only)
  * @param {boolean} [opts.hasGrappleFixture=false]      - protruding fixture for the gripper (P3)
  * @param {boolean} [opts.netDepleted=false]            - this arm's net magazine is empty
+ * @param {number}  [opts.coldGasKg]                    - her cold gas now (kg); a tool whose spin her gas cannot stop scores 0 (absent = no check)
+ * @param {number}  [opts.trueTumbleRate]               - the piece's own spin (rad/s) when `tumbleRate` is the relative one
  * @returns {ToolRecommendation}
  */
 export function recommendArmTool(opts = {}) {
@@ -43,7 +44,6 @@ export function recommendArmTool(opts = {}) {
   const sizeM    = Number.isFinite(opts.sizeMeter) ? opts.sizeMeter : 0;
   const dType    = opts.debrisType || null;
   const ferro    = opts.ferromagnetic === true;
-  const fasten   = opts.hasFerrousFasteners === true;
   const fixture  = opts.hasGrappleFixture === true;
   const netGone  = opts.netDepleted === true;
 
@@ -94,16 +94,16 @@ export function recommendArmTool(opts = {}) {
         : (armType === 'spinner' ? 'too big — send a Large Daughter' : 'oversize for this net');
     } else {
       // A pure ferrous HULL is better grabbed directly by the EPM, so the net self-demotes to "viable but not
-      // preferred" (magnet wins the ▶); fastener-only / non-ferrous targets keep the net primary.
+      // preferred" (magnet wins the ▶); non-ferrous targets keep the net primary.
       scores.NET = ferro ? 2 : 3;
       hints.NET = armType === 'weaver' ? 'Large LD-NET' : 'Small SD-NET';
     }
   }
 
-  // MAGNET fork (§13 Q2 + Q4): both classes, fastener-driven
-  if ('MAGNET' in scores && (ferro || fasten) && !tooHeavyForMagnet) {
-    scores.MAGNET = ferro ? 3 : 2;
-    hints.MAGNET  = ferro ? 'ferrous hull. Direct grip' : 'ferrous fasteners. Bolt-latch';
+  // MAGNET fork (§13 Q2, DECISIONS §111 row 1): both classes, steel hull only
+  if ('MAGNET' in scores && ferro && !tooHeavyForMagnet) {
+    scores.MAGNET = 3;
+    hints.MAGNET  = 'ferrous hull. Direct grip';
   }
 
   // GRIPPER fork (§13 Q1, flag-gated): oversize / too-wide / awkward / fixture
@@ -134,25 +134,29 @@ export function recommendArmTool(opts = {}) {
       sizeMeter: sizeM,
       type: dType,
       ferromagnetic: ferro,
-      hasFerrousFasteners: fasten,
       hasGrappleFixture: fixture,
       tumbleRate: (typeof opts.tumbleRate === 'number') ? opts.tumbleRate : undefined,
+      // her gas pays the piece's TRUE spin even while she circles it in step (the stub's tumbleRate is the relative spin)
+      trueTumbleRate: (typeof opts.trueTumbleRate === 'number') ? opts.trueTumbleRate : undefined,
       surfaceRoughness: opts.surfaceRoughness,
       material: opts.material,
     },
     range: (typeof opts.range === 'number') ? opts.range : undefined,
     netClass,
     netCount: netGone ? 0 : undefined,
+    coldGasKg: (typeof opts.coldGasKg === 'number') ? opts.coldGasKg : undefined,
   });
   let recommended = computeBestTool(odds, toolset);
 
-  // DECISIONS §33 row 7: the small daughter picks her pad by herself when it suits the piece: PAD is in her toolset,
-  // the pad is on, the piece is within her rating (SPINNER_MAX_CAPTURE_MASS) and the surface gives gecko or hooks
-  // adhesion (odds.PAD.mode, the pure ToolOdds mirror of ArmUnit._resolvePadMode: no third copy). Otherwise the net.
-  // The tool cycle (backtick) still lets the player change it.
+  // DECISIONS §33 row 2: the small daughter uses her pad by herself "on panels and foil": PAD is in her toolset, the pad is
+  // on, the piece is within her rating (SPINNER_MAX_CAPTURE_MASS) and the surface is a panel (gecko adhesion: aluminium,
+  // solar cells; odds.PAD.mode, the pure ToolOdds mirror of ArmUnit._resolvePadMode) or foil (mli_mylar, now a 70 %
+  // static-charge grip, DECISIONS §111 row 3). A refused pad (her gas cannot stop the spin) has mode null and is never
+  // picked. Otherwise the odds pick stands. The tool cycle (backtick) still lets the player change it.
   const padMode = odds.PAD ? odds.PAD.mode : null;
+  const foil = opts.material === 'mli_mylar' && padMode === 'electrostatic';
   if ('PAD' in scores && padOn && mass <= (Constants.SPINNER_MAX_CAPTURE_MASS ?? 50)
-      && (padMode === 'gecko' || padMode === 'hooks')) {
+      && (padMode === 'gecko' || foil)) {
     scores.PAD = 3; hints.PAD = `${padMode} pad. Stick it on`;
     recommended = 'PAD';
   }

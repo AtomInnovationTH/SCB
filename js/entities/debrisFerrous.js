@@ -10,9 +10,6 @@
 /** Materials whose hull is directly grabbable by the EPM (pure-steel). */
 export const FERROUS_HULL_MATERIALS = ['steel', 'iron_alloy'];
 
-/** Debris types that carry steel bolts/brackets even on Al/Ti hulls (§13 Q4). */
-export const FERROUS_FASTENER_TYPES = ['rocketBody', 'defunctSat'];
-
 /** Types likely to expose a grapple fixture (antenna stub / docking adapter). */
 export const FIXTURE_TYPES = ['rocketBody', 'defunctSat'];
 
@@ -32,13 +29,11 @@ const SURFACE_ROUGHNESS_FALLBACK = 0.5;
 
 /**
  * Derive every capture-relevant flag for one debris object (`material` tag, internal DEBRIS_TYPES key `type`, `mass` in kg).
- * @returns {{ ferromagnetic: boolean, hasFerrousFasteners: boolean,
- *            hasGrappleFixture: boolean, surfaceRoughness: number }}
+ * @returns {{ ferromagnetic: boolean, hasGrappleFixture: boolean, surfaceRoughness: number }}
  */
 export function deriveCaptureFlags(material, type, mass) {
   return {
     ferromagnetic: FERROUS_HULL_MATERIALS.includes(material),
-    hasFerrousFasteners: FERROUS_FASTENER_TYPES.includes(type),
     hasGrappleFixture: FIXTURE_TYPES.includes(type) && (mass || 0) >= FIXTURE_MIN_MASS_KG,
     surfaceRoughness: (material in SURFACE_ROUGHNESS_BY_MATERIAL)
       ? SURFACE_ROUGHNESS_BY_MATERIAL[material]

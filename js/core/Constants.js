@@ -21,7 +21,7 @@ export const Constants = {
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as ?v=<DATA_VERSION>). Deliberately SEPARATE
   // from VERSION: a curated-content edit must invalidate cached JSON without moving the release number. Bump it on
   // every ./data/ content change; leave VERSION for actual releases.
-  DATA_VERSION: '1133',   // Sky 39 (11-27): data/sky.json dropped components (GCAT Type C: drop tanks, kick motors) at their dry mass (was 1132: V1.22 what's-new lines 2-3 in the owner's words, 2026-11-26 (was 1131: V1.22 release (whats-new.json changed), owner 2026-11-26 (was 1130: Sky 34 F (11-25): data/highlights.json famous lines shortened (was 1129: V1.21 release (whats-new.json changed), owner 2026-11-25 (was 1128: Sky 33 (11-25): data/sky.json `fam` field (family code) (was 1127: Reality 13 G4 (11-25): data/codex.json gas text (a bought gas tool takes a catch's gas, not instant) (was 1126: Sky 32 (11-25): data/sky.json `mil` field (GCAT payload Class D) (was 1125: Sky 28, data/highlights.json Famous 11 entries, `short`, `names`))))
+  DATA_VERSION: '1134',   // Reality 16 T (11-27): data/codex.json magnet, gripper and pad texts (§111) (was 1133: Sky 39 (11-27): data/sky.json dropped components (GCAT Type C: drop tanks, kick motors) at their dry mass (was 1132: V1.22 what's-new lines 2-3 in the owner's words, 2026-11-26 (was 1131: V1.22 release (whats-new.json changed), owner 2026-11-26 (was 1130: Sky 34 F (11-25): data/highlights.json famous lines shortened (was 1129: V1.21 release (whats-new.json changed), owner 2026-11-25 (was 1128: Sky 33 (11-25): data/sky.json `fam` field (family code) (was 1127: Reality 13 G4 (11-25): data/codex.json gas text (a bought gas tool takes a catch's gas, not instant) (was 1126: Sky 32 (11-25): data/sky.json `mil` field (GCAT payload Class D) (was 1125: Sky 28, data/highlights.json Famous 11 entries, `short`, `names`)))))
   // owner 2026-09-08: the T1 nose-collar card is the DOCKING COLLAR card (docking_berthing.hardwareNames). The DAUGHTER
   // STRUTS card (daughter cradle struts callout) was appended to that list later, no entries added: DECISIONS §13 r4.
 
@@ -1023,8 +1023,8 @@ export const Constants = {
     spinner: ['NET', 'PAD'],                 // DECISIONS §33 row 2 / u18 D7: four nets + a sticky pad, no magnet (the large daughter keeps hers)
   },
 
-  // EPM magnetic-grapple tuning (archive/EPIC10_DEEP_ANALYSIS.md). Heterogeneous-spacecraft model (§13 Q4):
-  // real sats / rocket bodies have steel bolts / brackets even when the hull is Al or Ti.
+  // EPM magnetic-grapple tuning (archive/EPIC10_DEEP_ANALYSIS.md). The magnet takes a steel hull only (DECISIONS §111 row 1):
+  // the few steel bolts on an aluminium satellite are not enough for a real magnet.
   MAGNETIC_GRAPPLE: {
     CONTACT_RANGE_M:        0.5,    // legacy EPM contact window to the piece's CENTRE; no longer read (contact is the piece's surface, see HEAD_OFFSET_M)
     HOLD_FORCE_N:           50,     // EPIC10
@@ -1041,8 +1041,7 @@ export const Constants = {
     TIMEOUT_PAD_S:          5,
     GRIP_DWELL_S:           0.4,    // dwell on contact before the P_GRIP roll
     P_GRIP_FERROUS:         0.95,   // pure-ferromagnetic target (steel hull)
-    P_GRIP_FASTENERS:       0.40,   // §13 Q4 — heterogeneous target latches onto bolts/brackets
-    P_GRIP_NON_FERROUS:     0.05,   // all-Al fragment / composite — residual flux only
+    P_GRIP_NON_FERROUS:     0,      // anything that is not a steel hull: the magnet takes steel only (DECISIONS §111 row 1)
   },
 
   // 3-jaw gripper tuning (reserved; archive/V3 Octopus.md).
@@ -1057,6 +1056,9 @@ export const Constants = {
     P_GRIP_FIXTURED:    0.90,   // target has docking port / strut / antenna stub
     P_GRIP_UNFIXTURED:  0.10,   // target lacks protrusion — should not be selected
     MAX_DEBRIS_MASS_KG: 2000,   // mechanical limit; doc-aspirational
+    // The jaws take a piece turning slower than this (DECISIONS §111 row 2; source: ClearSpace-1's design figure, docs/research/2026-11-catching-tools.md).
+    // Judged on the spin RELATIVE to her (0 while she circles it in step): ToolOdds.gripperSpinTooFast, read by the odds and ArmUnit._resolveGripperLatch.
+    SPIN_MAX_DEG:       3,      // °/s
   },
 
   // Multi-modal pad tuning (reserved; archive/V3 Octopus.md).
@@ -1080,23 +1082,19 @@ export const Constants = {
     RELEASE_PULSE_S:     0.2,
     GECKO_TEMP_MIN_C:    -40,
     GECKO_TEMP_MAX_C:    80,
-    UV_CURE_DOSES_Y0:    10,      // per-arm magazine (§13 Q3 — hard cap; 0 ⇒ uv_cure removed)
-    ADHESION_MODES: ['gecko', 'hooks', 'electrostatic', 'magnet', 'uv_cure'],
-    // Auto-resolved on contact by surface metadata (archive/V3 Octopus.md):
+    ADHESION_MODES: ['gecko', 'electrostatic', 'magnet'],
+    // Auto-resolved on contact by the surface material (DECISIONS §111 row 3; ToolOdds.resolvePadModeForOdds, ArmUnit._resolvePadMode):
     //  1. material ∈ {steel,iron_alloy}                          → magnet
-    //  2. material ∈ {mli_mylar} OR roughness > 0.7              → hooks
-    //  3. material ∈ {aluminum,kapton,glass_ceramic,solar_cell}  → gecko (warm window)
-    //  4. material ∈ {composite}                                 → electrostatic
-    //  5. else                                                   → uv_cure (finite doses)
+    //  2. material ∈ {aluminum,kapton,glass_ceramic,solar_cell}  → gecko (warm window)
+    //  3. else (composite, titanium, mli_mylar, unknown)         → electrostatic
+    // No hooks, no UV cure: a real pad has neither.
     P_GRIP_BY_MODE: {
       gecko:         0.90,
-      hooks:         0.95,
       electrostatic: 0.70,
       magnet:        0.95,
-      uv_cure:       0.98,
     },
-    P_GRIP_NO_MODE:  0.05,        // contact happened but no mode resolved
-    MODE_GLYPHS: { gecko: 'g', hooks: 'h', electrostatic: 'e', magnet: 'm', uv_cure: 'u' },
+    P_GRIP_NO_MODE:  0.05,        // contact happened but no mode resolved (defensive: the picker always returns a mode now)
+    MODE_GLYPHS: { gecko: 'g', electrostatic: 'e', magnet: 'm' },
   },
 
   // P34 sun-oven balls (plan p34-ball-furnace, 2026-10-29; owner 2026-10-29 "2 m ball"; DECISIONS "Furnaces" row): one

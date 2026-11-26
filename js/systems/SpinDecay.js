@@ -199,13 +199,13 @@ export function kitAgedRate(rate, days, kitDays, piece, altKm, incDeg, dipole = 
 }
 
 /**
- * Does the kit hold on this piece: a big piece (a HIGH_FIELD stage or satellite with an owner, not a bag) with a steel spot (a steel hull
- * or steel fasteners: `debrisFerrous`)? Same test the arm, the odds strip and the buy path use. The map-on gate of `isBigPiece` is
- * implied: only the high-field spawn sets an owner.
+ * Does the kit hold on this piece: a big piece (a HIGH_FIELD stage or satellite with an owner, not a bag) with a steel hull or a
+ * clamp point (a grapple fixture: `debrisFerrous`; DECISIONS §111 row 5, §70 row 7)? Same test the arm, the odds strip and the buy
+ * path use. The map-on gate of `isBigPiece` is implied: only the high-field spawn sets an owner.
  * @param {object|null} piece @returns {boolean}
  */
 export function kitHolds(piece) {
   if (!piece || piece.isBag === true) return false;
-  if (!(piece.ferromagnetic === true || piece.hasFerrousFasteners === true)) return false;
+  if (!(piece.ferromagnetic === true || piece.hasGrappleFixture === true)) return false;
   return bigBodiesOf(piece).length > 0;
 }

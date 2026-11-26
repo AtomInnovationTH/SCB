@@ -252,7 +252,7 @@ export const UPGRADES = [
     effect: 'reentryCapsule', value: 1, maxLevel: Infinity, consumable: true,
     trl: 7, trlRationale: 'Stardust\'s 46 kg capsule returned its samples in 2006; the STAR 6B is a catalogue solid motor; this pairing has not flown as one unit.' },
   // Spin kit (DECISIONS §70 row 7, plan debris-1 lane K): a count in her stock (ResourceSystem.spinKits); its mass is part of her live mass; a
-  // daughter with a magnet and a gripper takes one at launch for a big piece with a steel spot. Offered (the sail row beside it is not sold).
+  // daughter with a magnet and a gripper takes one at launch for a big piece with steel or a clamp point. Offered (the sail row beside it is not sold).
   { id: 'spin_kit', cat: 'Daughters', name: `Spin kit, ${Constants.SPIN_KIT.massKg} kg`,
     cost: Constants.SPIN_KIT.priceCr,
     desc: `Clips onto a big piece; its magnet pushes against Earth's field so the spin slows over a day or two. Come back for the catch. One use. Its mass (${Constants.SPIN_KIT.massKg} kg) counts in yours.`,

@@ -876,7 +876,7 @@ export class TargetPanel {
       target: t,
       range,
       netCount,
-      padUvDoses: arm._padUvCureDosesRemaining,
+      coldGasKg: arm.coldGasKg,   // a tool whose spin her gas cannot stop shows 0 (DECISIONS §111 row 4)
       spinFrameId: arm.id,   // a piece she circles in step reads 0 spin to her, the same as her odds strip (lane M)
     });
     const best = computeBestTool(odds, toolset);

@@ -855,9 +855,6 @@ export class DockingReticle {
       // Label row: ▶ on selected, ·n magazine count on NET
       let label = this._oddsColLabel(kind);
       if (kind === 'NET') label += `\u00B7${netCount}`;
-      else if (kind === 'PAD' && typeof arm._padUvCureDosesRemaining === 'number') {
-        label += `\u00B7${arm._padUvCureDosesRemaining}`;
-      }
       ctx.font = `${isSel ? 'bold ' : ''}${HUD.LABEL_FONT_PX || 9}px ${FONT}`;
       ctx.fillStyle = isSel
         ? (HUD.HIGHLIGHT_COLOR || '#ffd166')

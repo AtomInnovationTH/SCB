@@ -94,20 +94,17 @@ export function resolveCaptureModeForOdds(target) {
 }
 
 /**
- * Pure mirror of ArmUnit._resolvePadMode: deterministic adhesion-mode pick from surface metadata (§5.3 priority).
- * @returns {string|null} mode or null (NO_MODE)
+ * Pure mirror of ArmUnit._resolvePadMode: deterministic adhesion-mode pick from the surface material (DECISIONS §111 row 3):
+ * steel / iron alloy -> magnet; aluminium, kapton, glass ceramic, solar cell -> gecko; everything else (composite, titanium,
+ * mli_mylar, unknown) -> electrostatic. No hooks, no UV cure: a real pad has neither.
+ * @returns {string} mode
  */
-export function resolvePadModeForOdds(target, uvDosesRemaining) {
+export function resolvePadModeForOdds(target) {
   const material = target ? target.material : undefined;
-  const roughness = (target && typeof target.surfaceRoughness === 'number')
-    ? target.surfaceRoughness : 0.5;
   if (material === 'steel' || material === 'iron_alloy') return 'magnet';
-  if (material === 'mli_mylar' || roughness > 0.7) return 'hooks';
   if (material === 'aluminum' || material === 'kapton'
       || material === 'glass_ceramic' || material === 'solar_cell') return 'gecko';
-  if (material === 'composite') return 'electrostatic';
-  if ((uvDosesRemaining || 0) > 0) return 'uv_cure';
-  return null;
+  return 'electrostatic';
 }
 
 /**
@@ -357,28 +354,85 @@ function computeNetOdds(opts) {
   };
 }
 
+/**
+ * The gas (kg) her cold-gas jet needs to stop the piece's spin at the seat: `INERTIA_COEFF · m · d² · |w| / (SEAT_LEVER_M · ISP_S ·
+ * SEAT_G0)`, the same number `ArmUnit._seatSpinBegin` bills with a full bottle (DECISIONS §111 row 4; a test pins them equal). `w` is
+ * the piece's TRUE spin: a piece she circles in step still passes its spin to her at the catch, so `target.trueTumbleRate` (the
+ * recommender's stub, whose `tumbleRate` is the relative spin) wins over `tumbleRate` when it is a number. 0 below `MIN_SEED_RATE_DEG_S`.
+ * @param {{mass?: number, sizeMeter?: number, tumbleRate?: number, trueTumbleRate?: number}|null} target spin in rad/s
+ * @returns {number} kg
+ */
+export function toolSpinGasKg(target) {
+  const CTS = Constants.CAPTURE_TORQUE_SETTLE;
+  if (!CTS || !target) return 0;
+  const w = Number.isFinite(target.trueTumbleRate) ? target.trueTumbleRate : target.tumbleRate;
+  if (typeof w !== 'number' || !Number.isFinite(w)) return 0;
+  if (Math.abs(w) * RAD2DEG < (CTS.MIN_SEED_RATE_DEG_S ?? 0.1)) return 0;
+  const m = target.mass > 0 ? target.mass : 0;
+  const d = target.sizeMeter > 0 ? target.sizeMeter : 0;
+  const I = CTS.INERTIA_COEFF * m * d * d;
+  const CG = Constants.DAUGHTER_COLD_GAS || {};
+  const ve = (CG.ISP_S ?? 60) * (CTS.SEAT_G0 ?? Constants.G0);
+  return I * Math.abs(w) / ((CTS.SEAT_LEVER_M ?? 0.10) * ve);
+}
+
+/** The mother's 10 % margin on the gas a spin needs (DECISIONS §90 row 2, `PlayerSatellite.spinHandOverPeek`). */
+const TOOL_SPIN_GAS_MARGIN = 1.1;
+
+/**
+ * True when her gas now cannot stop the piece's spin (DECISIONS §111 row 4): `1.1 × toolSpinGasKg(target) > coldGasKg`. The ONE rule:
+ * `computeToolOdds` (MAGNET / GRIPPER / PAD, given `opts.coldGasKg`) shows 0 for it, `ArmUnit._toolSpinRefuses` refuses the
+ * dispatch with it and the touch resolvers fail the attempt with it. Only with CAPTURE_TORQUE_SETTLE on (off = the legacy free arrest).
+ * @param {object|null} target
+ * @param {number} [coldGasKg] her gas now; absent or non-finite = no check
+ * @returns {boolean}
+ */
+export function toolSpinGasRefuses(target, coldGasKg) {
+  if (typeof coldGasKg !== 'number' || !Number.isFinite(coldGasKg)) return false;
+  if (Constants.isFeatureEnabled && !Constants.isFeatureEnabled('CAPTURE_TORQUE_SETTLE')) return false;
+  const need = toolSpinGasKg(target);
+  return need > 0 && TOOL_SPIN_GAS_MARGIN * need > coldGasKg;
+}
+
+const SPIN_GAS_HINT = 'slow its spin first';
+
 /** MAGNET odds — mirrors ArmUnit._magnetGripProbability/_resolveMagnetGrip. @private */
-function computeMagnetOdds(target) {
+function computeMagnetOdds(target, opts = {}) {
   const MAG = Constants.MAGNETIC_GRAPPLE || {};
   const mass = (target && target.mass) || 0;
   if (mass > (MAG.MAX_DEBRIS_MASS_KG || 500)) {
     return { p: 0, blocker: 'HEAVY', hint: 'beyond EPM mass limit' };
   }
+  if (toolSpinGasRefuses(target, opts.coldGasKg)) {
+    return { p: 0, blocker: 'SPIN', hint: SPIN_GAS_HINT };
+  }
   if (target && target.ferromagnetic === true) {
     return { p: MAG.P_GRIP_FERROUS ?? 0.95, blocker: null, hint: 'ferrous hull. Direct grip' };
   }
-  if (target && target.hasFerrousFasteners === true) {
-    return { p: MAG.P_GRIP_FASTENERS ?? 0.40, blocker: null, hint: 'ferrous fasteners. Bolt-latch' };
-  }
   return {
-    p: MAG.P_GRIP_NON_FERROUS ?? 0.05,
+    p: MAG.P_GRIP_NON_FERROUS ?? 0,
     blocker: 'NON-FERR',
-    hint: 'non-ferrous. Residual flux only',
+    hint: 'not steel. A magnet cannot hold it',
   };
 }
 
+/**
+ * True when the piece spins faster than the gripper's jaws can take (`GRIPPER_GRAPPLE.SPIN_MAX_DEG`, 3°/s; DECISIONS §111 row 2,
+ * ClearSpace-1's design figure). The ONE rule: `computeGripperOdds` shows 0 for it and `ArmUnit._resolveGripperLatch` fails the
+ * latch with it. Judged on the spin relative to her, like `padSpinTooFast`: a piece she circles in step reads 0.
+ * @param {{tumbleRate?: number}|null} target tumbleRate in rad/s (absent or non-finite = not spinning)
+ * @param {*} [frameId] the daughter judging it (see `padSpinTooFast`)
+ * @returns {boolean}
+ */
+export function gripperSpinTooFast(target, frameId) {
+  const maxDeg = (Constants.GRIPPER_GRAPPLE && Constants.GRIPPER_GRAPPLE.SPIN_MAX_DEG);
+  const w = relativeSpinRad(target, frameId);
+  if (!(maxDeg >= 0) || !target || typeof w !== 'number' || !Number.isFinite(w)) return false;
+  return Math.abs(w) * RAD2DEG > maxDeg + 1e-9;   // 3°/s exactly still holds
+}
+
 /** GRIPPER odds — mirrors ArmUnit._resolveGripperLatch. @private */
-function computeGripperOdds(target) {
+function computeGripperOdds(target, opts = {}) {
   if (Constants.isFeatureEnabled && !Constants.isFeatureEnabled('WEAVER_GRIPPER')) {
     return { p: null, blocker: 'OFFLINE', hint: 'not yet equipped' };
   }
@@ -386,6 +440,12 @@ function computeGripperOdds(target) {
   const mass = (target && target.mass) || 0;
   if (mass > (G.MAX_DEBRIS_MASS_KG || 2000)) {
     return { p: 0, blocker: 'HEAVY', hint: 'beyond jaw mass limit' };
+  }
+  if (gripperSpinTooFast(target, opts.spinFrameId)) {
+    return { p: 0, blocker: 'SPIN', hint: `over ${G.SPIN_MAX_DEG}\u00B0/s. Circle it first` };
+  }
+  if (toolSpinGasRefuses(target, opts.coldGasKg)) {
+    return { p: 0, blocker: 'SPIN', hint: SPIN_GAS_HINT };
   }
   if (target && target.hasGrappleFixture === true) {
     return { p: G.P_GRIP_FIXTURED ?? 0.90, blocker: null, hint: 'fixture latch' };
@@ -425,8 +485,10 @@ function computePadOdds(target, opts) {
   if (padSpinTooFast(target, opts.spinFrameId)) {
     return { p: 0, blocker: 'SPIN', hint: 'spinning too fast for the pad', mode: null };
   }
-  const uvDoses = (typeof opts.padUvDoses === 'number') ? opts.padUvDoses : (P.UV_CURE_DOSES_Y0 || 0);
-  const mode = resolvePadModeForOdds(target, uvDoses);
+  if (toolSpinGasRefuses(target, opts.coldGasKg)) {
+    return { p: 0, blocker: 'SPIN', hint: SPIN_GAS_HINT, mode: null };
+  }
+  const mode = resolvePadModeForOdds(target);
   if (!mode) {
     return {
       p: P.P_GRIP_NO_MODE ?? 0.05,
@@ -440,7 +502,7 @@ function computePadOdds(target, opts) {
   return {
     p,
     blocker: null,
-    hint: mode === 'uv_cure' ? `uv-cure \u00B7${uvDoses} doses` : `${mode} adhesion`,
+    hint: `${mode} adhesion`,
     mode,
   };
 }
@@ -470,11 +532,12 @@ function computeMatchOdds(offer, running) {
  * @param {'weaver'|'spinner'|'mother'} [opts.armType='weaver'] platform class
  * @param {string[]} [opts.toolset] verbs to score (default: class toolset)
  * @param {object|null} [opts.target] debris ({mass, sizeMeter, tumbleRate, surfaceRoughness, material, ferromagnetic,
- *   hasFerrousFasteners, hasGrappleFixture, fragility, ...})
+ *   hasGrappleFixture, fragility, ...})
  * @param {number} [opts.range=50] metres to target
  * @param {object} [opts.netClass] net class override (e.g. CN.LARGE for mother)
  * @param {number} [opts.netCount] net magazine count (0 → '--' EMPTY)
- * @param {number} [opts.padUvDoses] UV-cure doses remaining
+ * @param {number} [opts.coldGasKg] her cold gas now (kg): MAGNET / GRIPPER / PAD show 0 (blocker SPIN, "slow its spin first") when
+ *   `1.1 × toolSpinGasKg(target)` is more than this (`toolSpinGasRefuses`); absent = no gas check (pure tests, the mother's rows)
  * @param {*} [opts.spinFrameId] the daughter whose catch this is: a piece she circles in step (`piece._spinMatchedBy`) reads 0 spin to her (lane M)
  * @param {object|null} [opts.matchOffer] `SpinMatch.spinMatchOffer` for the MATCH column (ArmUnit computes it; omitted = no column data)
  * @param {boolean} [opts.matchRunning] she is circling the piece now
@@ -519,18 +582,18 @@ export function computeToolOdds(opts = {}) {
         });
         break;
       case 'MAGNET':
-        odds.MAGNET = computeMagnetOdds(target);
+        odds.MAGNET = computeMagnetOdds(target, opts);
         break;
       case 'GRIPPER':
-        odds.GRIPPER = computeGripperOdds(target);
+        odds.GRIPPER = computeGripperOdds(target, opts);
         break;
       case 'PAD':
         odds.PAD = computePadOdds(target, opts);
         break;
-      case 'KIT':   // the spin kit (plan debris-1 lane K): no roll; it holds on a steel spot of a big piece (SpinDecay.kitHolds), never recommended (not in TOOL_PREF_ORDER)
+      case 'KIT':   // the spin kit (plan debris-1 lane K): no roll; it holds on a steel hull or clamp point of a big piece (SpinDecay.kitHolds), never recommended (not in TOOL_PREF_ORDER)
         odds.KIT = kitHolds(target)
           ? { p: 1, blocker: null, hint: 'clips on, no roll. Slows the spin over days' }
-          : { p: 0, blocker: 'NO STEEL', hint: 'big pieces with a steel spot only' };
+          : { p: 0, blocker: 'NO STEEL', hint: 'big pieces with steel or a clamp point' };
         break;
       case 'MATCH':   // match spin (plan debris-1 lane M): no roll; it circles the piece in step, so the catch tools see no spin. ArmUnit hands the offer in; never recommended
         odds.MATCH = computeMatchOdds(opts.matchOffer, opts.matchRunning === true);
@@ -543,10 +606,9 @@ export function computeToolOdds(opts = {}) {
 }
 
 /**
- * ▶ recommendation = argmax p with two stabilisers:
+ * ▶ recommendation = argmax p with one stabiliser:
  *   • RECOMMEND_MARGIN (relative): a later-preference tool only takes the ▶ when it beats the incumbent by more than the
  *     margin (no flip-flopping on noise; NET stays primary on near-ties).
- *   • uv_cure-resolved PAD never takes the ▶ (finite consumable, last resort; its honest % still displays).
  * @param {Object<string, {p:number|null, mode?:string}>} odds
  * @param {string[]} [toolset] fallback order (first entry wins when nothing is rollable)
  * @returns {string} recommended tool kind
@@ -558,7 +620,6 @@ export function computeBestTool(odds, toolset) {
   for (const kind of TOOL_PREF_ORDER) {
     const o = odds[kind];
     if (!o || o.p == null) continue;
-    if (kind === 'PAD' && o.mode === 'uv_cure') continue;  // last-resort consumable
     if (best === null ? o.p > 0 : o.p > bestP * (1 + margin)) {
       best = kind;
       bestP = o.p;
@@ -568,4 +629,4 @@ export function computeBestTool(odds, toolset) {
   return (toolset && toolset[0]) || 'NET';
 }
 
-export default { computeToolOdds, computeBestTool, computeStrainFailProbability, estimateSpinFractionAtContact, resolveCaptureModeForOdds, resolvePadModeForOdds, padSpinTooFast, toolShortLabel, makeNetOddsLockCache, TOOL_PREF_ORDER };
+export default { computeToolOdds, computeBestTool, computeStrainFailProbability, estimateSpinFractionAtContact, resolveCaptureModeForOdds, resolvePadModeForOdds, padSpinTooFast, gripperSpinTooFast, toolSpinGasKg, toolSpinGasRefuses, toolShortLabel, makeNetOddsLockCache, TOOL_PREF_ORDER };
