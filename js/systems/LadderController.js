@@ -1866,6 +1866,9 @@ export class LadderController {
     if (!f) return;
     // The opening dive (switch on): floor 1's block with the far plane of floor 5, and `floor: 5` only because
     // SceneManager keys the camera-following star shell on floor >= 4 (a world-fixed shell would be seen from outside at 800 u).
+    // `dive` tells SunLight to keep the game's sun on Earth (SceneManager.isLadderDiving): `floor: 5` alone turned on the floor 4-5
+    // real Sun, so the day/night line swept up to 49° across the globe as the dive began and swept back over the ship after it
+    // landed (Sky 38, measured tmp/sky38-dive/probe.mjs).
     const dive = this._diveClip && floor === WORKBENCH_FLOOR;
     this._sceneManager.setLadderFloorFidelity({
       nearField: f.fidelity.nearField,
@@ -1873,6 +1876,7 @@ export class LadderController {
       far: dive ? Math.max(f.camera.far, INTRO_DIVE_FAR_U) : f.camera.far,
       debrisMode: f.fidelity.debrisMode,
       floor: dive ? 5 : floor,
+      dive,
     });
   }
 

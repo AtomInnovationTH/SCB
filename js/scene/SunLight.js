@@ -1358,11 +1358,14 @@ export class SunLight {
    * the ride) or leaves floor 5. Floors 4 <-> 5 keep the real Sun. It refreshes the real Sun ITSELF before anything reads it
    * (`update` draws the disc before `_updateMoon` ever refreshes it, and `_realSunDir` starts as (1,0,0)). While the slide back runs
    * the real Sun keeps being refreshed (the clock keeps ticking); with no clock, or no finite date, the seen sun stays the stylized one.
-   * Allocation-free. Floors 0-3 with no slide running: an exact copy of `sunDirection` (a test pins it).
+   * Allocation-free. Floors 0-3 with no slide running: an exact copy of `sunDirection` (a test pins it). The opening dive
+   * (`isLadderDiving`) keeps the stylized sun although its sky follows the camera: it lands on floor 1 in that light (Sky 38).
    * @param {number} realDt real seconds since the last frame (0 = hold the slide)
    */
   _updateSeenSun(realDt) {
-    const follow = this._followsCamera();
+    const sm = this._sceneManager;
+    const diving = !!(sm && typeof sm.isLadderDiving === 'function' && sm.isLadderDiving());
+    const follow = this._followsCamera() && !diving;
     const realOk = (follow || this._seenP > 0) ? this._refreshRealSun() : false;
     const target = (follow && realOk) ? 1 : 0;
     const step = Number.isFinite(realDt) && realDt > 0 ? realDt / SEEN_SLIDE_S : 0;

@@ -609,11 +609,19 @@ export class SceneManager {
   }
 
   /**
+   * True while the opening dive flies (LadderController sends floor 1's block with `floor: 5` for the star shell and `dive: true`).
+   * SunLight keeps the game's sun on Earth then: the dive lands in the game's light, so no real-Sun turn starts and ends on screen.
+   */
+  isLadderDiving() {
+    return !!(this._ladderFidelity && this._ladderFidelity.dive);
+  }
+
+  /**
    * Zoom Ladder per-floor render block setter. LadderController calls it on floor
    * arrival with the FloorContract fidelity + clip planes, or with `null` on
    * disengage, which RESTORES the shipped block (near-field on, camera.near/far back
    * to Constants.CAMERA_NEAR/FAR).
-   * @param {{nearField:boolean, near:?number, far:?number, debrisMode:?string, floor:?number}|null} fid
+   * @param {{nearField:boolean, near:?number, far:?number, debrisMode:?string, floor:?number, dive?:boolean}|null} fid
    */
   setLadderFloorFidelity(fid) {
     if (!fid) {
