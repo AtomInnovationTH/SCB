@@ -925,7 +925,7 @@ export class RealSkyLayer {
     const lp = this._lookData && this._lookData.id !== '0' ? this._lookData.px : null;
     const lb = this._lookGlass ? DOT_PX_GLASS : DOT_PX;
     for (let i = 0; i < N; i++) {
-      if (hide[cls[i]] === 1) continue;                // a switched-off kind is not drawn, so it is not pickable
+      if (hide[cls[i]] === 1 && !this._shownAt(i)) continue;   // a switched-off kind is not drawn, so it is not pickable (a lit row of a Starlink layer is: `showHidden`)
       if (hh !== null && hh[i] === 1) continue;        // nor is a row a highlight's overlay draws instead (hideBase)
       const px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
       const w = m[3] * px + m[7] * py + m[11] * pz + m[15];
@@ -974,7 +974,7 @@ export class RealSkyLayer {
     // the open object's dot is always drawn (Sky 33 review (b)): when the kind of the object just left or just opened is hidden in the key,
     // the index buffers are rebuilt (they change only here and on a key box / highlight change; every other dot of that kind stays hidden)
     if (was !== this._selected && this._cls) {
-      const hid = (k) => k >= 0 && this._hideCls[this._cls[k]] === 1;
+      const hid = (k) => k >= 0 && !this._shownAt(k);
       if (hid(was) || hid(this._selected)) { this._applyHiddenDraw(); this._lookReindex(); }
     }
     if (this._card) this._card.setObject(this._selected >= 0 ? this.describe(this._selected) : null);
@@ -1255,15 +1255,18 @@ export class RealSkyLayer {
   militaryRingRows() {
     const out = [];
     if (!this._mil || !this._milOn || !this._cls) return out;
-    const hh = this._hlHide, lm = this._hlGlobeMask();
+    const hh = this._hlHide, lm = this._milMask();
     for (let i = 0; i < this._mil.length; i++) if (this._milRings(i, hh, lm)) out.push(i);
     return out;
   }
 
+  /** The lit mask the rings follow: none when the highlight lights no row (Starlink "Planned" draws rings only and fades nothing; Sky 39 review), so the rings stay. */
+  _milMask() { return this._hlLit && this._hlLit.length > 0 ? this._hlGlobeMask() : null; }
+
   /** With a Highlight on the globe only its lit rows keep their rings (a dimmed dot gets none; Sky 32 review), else rows a highlight leaves out of the draw get none. */
   _milRings(i, hh, lm) {
     const c = this._cls[i];
-    return this._mil[i] === 1 && MIL_RING_CLS.includes(c) && this._hideCls[c] !== 1 && (lm ? lm[i] === 1 : (hh === null || hh[i] !== 1));
+    return this._mil[i] === 1 && MIL_RING_CLS.includes(c) && this._shownAt(i) && (lm ? lm[i] === 1 : (hh === null || hh[i] !== 1));
   }
 
   /** A row's ring diameter, CSS px: its dot's size (the look's, or today's plain dot) plus the margin. */
@@ -1305,7 +1308,7 @@ export class RealSkyLayer {
   /** Which rows each ring Points draws; called with every change of the hidden kinds or a highlight's draw. */
   _milReindex() {
     if (this._milGroups.length === 0 || !this._mil || !this._cls) return;
-    const N = this._rows.length, hh = this._hlHide, lm = this._hlGlobeMask();
+    const N = this._rows.length, hh = this._hlHide, lm = this._milMask();
     const bySize = new Map(this._milGroups.map((g) => [g.size, g]));
     for (const g of this._milGroups) g.n = 0;
     for (let i = 0; i < N; i++) {
@@ -1349,9 +1352,9 @@ export class RealSkyLayer {
     for (let pass = 0; pass < 4; pass++) {
       const sl = pass < 2, litPass = (pass & 1) === 1;
       if (lm === null && litPass) continue;
-      if (sl && hide[CLS_STARLINK] === 1 && !selStar) continue;
+      if (sl && hide[CLS_STARLINK] === 1 && !selStar && !this._hlShowHidden()) continue;   // lit rows of a hidden kind are drawn (Starlink layers): the pass is not skipped for them
       for (let i = 0; i < N; i++) {
-        if ((cls[i] === CLS_STARLINK) !== sl || (hide[cls[i]] === 1 && i !== sel) || (hh !== null && hh[i] === 1)) continue;
+        if ((cls[i] === CLS_STARLINK) !== sl || (hide[cls[i]] === 1 && i !== sel && !this._shownAt(i)) || (hh !== null && hh[i] === 1)) continue;
         if (lm !== null && (lm[i] === 1) !== litPass) continue;
         arr[n++] = i;
       }
@@ -1458,7 +1461,7 @@ export class RealSkyLayer {
       const sl = pass < 2, litPass = (pass & 1) === 1;
       if (lm === null && litPass) continue;              // with no highlight: Starlink pass, then the rest, as before
       for (let i = 0; i < N; i++) {
-        if ((cls[i] === CLS_STARLINK) !== sl || (hide[cls[i]] === 1 && i !== sel) || (hh !== null && hh[i] === 1)) continue;
+        if ((cls[i] === CLS_STARLINK) !== sl || (hide[cls[i]] === 1 && i !== sel && !this._shownAt(i)) || (hh !== null && hh[i] === 1)) continue;
         if (lm !== null && (lm[i] === 1) !== litPass) continue;   // a highlight: the faded rows first, the lit ones over them
         put(bySize.get(data.px[i]), i);
         if (this._lookRing && data.ring[i]) put(this._lookGroups[this._lookGroups.length - 1], i);
@@ -1628,6 +1631,19 @@ export class RealSkyLayer {
   /** The mask the globe's dot order and colours use (null when no highlight draws on the globe). */
   _hlGlobeMask() { return this._hl && this._hlMask && this._hl.stage !== 'chart' ? this._hlMask : null; }
 
+  /**
+   * Whether row i is drawn on the globe as far as the key's ticks go: its kind is shown, or the highlight on says `showHidden` (the Starlink layers, Sky 37) and
+   * the row is lit. The one copy of that rule: every globe site that skips a hidden kind asks here. A faded row of a hidden kind stays hidden; the ticks are never touched.
+   */
+  _shownAt(i) {
+    if (this._hideCls[this._cls[i]] !== 1) return true;
+    const lm = this._hlGlobeMask();
+    return lm !== null && this._hl.showHidden === true && lm[i] === 1;
+  }
+
+  /** The highlight on draws its lit rows even when the key hides their kind (`showHidden`, on the globe). */
+  _hlShowHidden() { return this._hlGlobeMask() !== null && this._hl.showHidden === true; }
+
   /** The colours the current look draws (linear, 3 per row): the look's own array, else today's palette. */
   _hlSource() { return this._lookData && this._lookData.col ? this._lookData.col : this._lookBaseCol; }
 
@@ -1717,7 +1733,7 @@ export class RealSkyLayer {
    * screen and not behind Earth. `m` = the view-projection elements, `cp` the camera position.
    */
   _hlProject(i, m, cp, W, H) {
-    if (this._hideCls[this._cls[i]] === 1) return false;                 // a hidden kind stays hidden, lit or not
+    if (!this._shownAt(i)) return false;                                 // a hidden kind stays hidden, lit or not (unless the highlight says `showHidden`)
     if (this._hlHide !== null && this._hlHide[i] === 1) return false;
     const pos = this._pos, px = pos[3 * i], py = pos[3 * i + 1], pz = pos[3 * i + 2];
     const w = m[3] * px + m[7] * py + m[11] * pz + m[15];
@@ -1941,7 +1957,7 @@ export class RealSkyLayer {
    */
   rowView(i) {
     if (this._floor !== FLOOR_NAVCOM || !this._pos || !this._cls || !(i >= 0 && i < this._rows.length)) return '';
-    if (this._hideCls[this._cls[i]] === 1) return 'hidden';
+    if (!this._shownAt(i)) return 'hidden';
     const cam = this._viewProj();
     if (!cam) return '';
     const v = this._getViewport(), W = v.w, H = v.h, m = this._vp.elements, cp = cam.position;

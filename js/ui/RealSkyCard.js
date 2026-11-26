@@ -12,7 +12,8 @@
  * @module ui/RealSkyCard
  */
 
-import { buildItems, toHighlight, isMenuId, countryChoices, ID_COUNTRY, ID_FAMOUS, ID_HEAVY } from './HighlightItems.js';
+import { buildItems, toHighlight, isMenuId, countryChoices, starlinkOpenerHover, ID_COUNTRY, ID_FAMOUS, ID_HEAVY, ID_SL_PLANNED, STARLINK_IDS } from './HighlightItems.js';
+import { YEAR_MIN, YEAR_MAX, STARLINK_PLANS } from '../systems/StarlinkLayers.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 
 export const CLASS_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown', 'starlink'];
@@ -176,6 +177,15 @@ export const HL_LIST_ROW_PX = 18, HL_LIST_ROW_PX_GLASS = 44;
 export const HL_LIST_ROWS = 8, HL_LIST_ROWS_GLASS = 4;
 /** How often the list re-reads where its objects are (behind Earth or not), ms. */
 const HL_TICK_MS = 400;
+/** The Highlight menu's openers: a row that opens the rows of one group under it, indented. `group` = the items' `group` field. */
+const HL_OPENERS = Object.freeze([
+  Object.freeze({ group: 'families', id: 'real-sky-hl-families', word: 'By mission' }),
+  Object.freeze({ group: 'starlink', id: 'real-sky-hl-starlink', word: 'Starlink layers' }),
+]);
+/** Play steps the "Launched by" year this often, ms (Sky 37 M task 6). */
+const SL_PLAY_MS = 1200;
+/** The "Launched by" row's hover on the Mac: it shows survivors only (the catalogue holds only satellites that still fly). */
+const SL_YEAR_HOVER = 'Only satellites still flying today: the catalogue has none that came down.';
 
 /**
  * The time buttons' box in the top-right corner (Sky 30 F, owner 2026-11-24 14:45Z: "comms pane is really top right. all the way top, all the way
@@ -268,6 +278,9 @@ export class RealSkyCard {
    * @param {function} [deps.onLanguage] (fn) => unsubscribe: fn runs when the menu language changes
    * @param {function} [deps.now] () => monotonic ms
    * @param {string} [deps.defaultHighlight] the Highlight menu item that is on when the globe opens (main.js: Famous; owner 2026-11-24); none without it
+   * @param {function} [deps.starlinkRims] (opts) => the rings overlay of a Starlink layer (StarlinkRims `createStarlinkRims`; main.js binds the viewport); without it the layers light with no rings
+   * @param {function} [deps.reducedMotion] () => the player asked for less motion: the "Launched by" Play row is left out (default: the browser's setting)
+   * @param {{set: function, clear: function}} [deps.timers] Play's timer (default `setInterval` / `clearInterval`)
    */
   constructor(deps = {}) {
     this._doc = deps.document !== undefined ? deps.document : (typeof document !== 'undefined' ? document : null);
@@ -278,7 +291,15 @@ export class RealSkyCard {
     this._hlView = 'closed';                        // the Highlight menu: 'closed' (one row) | 'menu' (the three items) | 'list' (an item is on)
     this._hlExtras = { stages: false, debris: false };   // Selected country: "+ stages" / "+ debris" lit too
     this._hlFamDead = null;                         // the id of the family whose "+ dead" is on (Sky 33: per family item, kept here, not in _hlExtras which is Selected country's)
-    this._hlFamOpen = false;                        // the "Families" row is open (not saved)
+    this._hlOpen = { families: false, starlink: false };   // which openers ("By mission", "Starlink layers") are open (not saved)
+    this._starlinkRims = typeof deps.starlinkRims === 'function' ? deps.starlinkRims : null;
+    this._reducedMotion = typeof deps.reducedMotion === 'function' ? deps.reducedMotion : () => { try { return typeof matchMedia === 'function' && !!matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; } };
+    this._timers = deps.timers && typeof deps.timers.set === 'function' && typeof deps.timers.clear === 'function' ? deps.timers : { set: (fn, ms) => setInterval(fn, ms), clear: (id) => clearInterval(id) };
+    this._slYear = YEAR_MAX;                        // the Starlink layers' "Launched by" year (not saved)
+    this._slPlan = STARLINK_PLANS[0].id;            // the filing Planned draws (not saved)
+    this._slOverlay = null;                         // the rings overlay the layer holds for the Starlink item that is on
+    this._slTimer = null;                           // Play's timer id, null when not playing
+    this._slLastId = null;                          // the highlight's id the last time the layer told us
     this._hlShownKey = '';                          // what the family header's "shown" count was made from
     this._hlShownItem = null;
     this._hlShown = 0;
@@ -677,7 +698,9 @@ export class RealSkyCard {
     if (g !== this._glass || f !== this._floor || !this._placed) {
       this._glass = g;
       this._clampOpenForTouch();
+      this._hlClampOpenersForTouch();
       this._floor = f;
+      if (f !== FLOOR_GLOBE && this._slTimer !== null) this._slStop();   // leaving the globe (page 1 included): Play stops
       this._place();
       this._renderLegend();                         // the chips are taller on glass
     }
@@ -1020,8 +1043,24 @@ export class RealSkyCard {
     const strip = mk('real-sky-hl-strip', 'display:none;margin-top:3px;font-size:10px;line-height:1.3;color:#c9d6ef;min-height:13px');
     const list = mk('real-sky-hl-list', 'display:none;margin-top:3px;overflow-y:auto;overflow-x:hidden;touch-action:pan-y;-webkit-overflow-scrolling:touch');
     const more = mk('real-sky-hl-more', 'display:none;margin-top:2px;font-size:10px;color:#8392b3');
-    wrap.append(btn, items, head, tag, strip, list, more);
-    return { wrap, btn, items, head, nameBtn, off, sel, tag, strip, list, more, itemEls: [], rowEls: [], listKey: '', itemsKey: '', selKey: '', famRow: null, press };
+    // The Starlink layers' "Launched by" control (Sky 37 M task 6): row 1 "◀ 2026 ▶", row 2 a full-width Play button; the card's own element, below the (empty) list
+    const years = mk('real-sky-hl-years', 'display:none;margin-top:4px');
+    const yrRow = mk('real-sky-hl-yrrow', 'display:flex;align-items:center;justify-content:space-between;gap:4px');
+    const yBtn = (id, text, label, fn) => {
+      const b = mk(id, `flex:none;display:flex;align-items:center;justify-content:center;box-sizing:border-box;${HL_BTN_CSS}`);
+      b.textContent = text; b.setAttribute('aria-label', label); press(b, fn);
+      return b;
+    };
+    const yPrev = yBtn('real-sky-hl-yprev', '\u25c0', 'An earlier launch year', () => this._slStep(-1));
+    const yText = mk('real-sky-hl-year', 'flex:1;min-width:0;text-align:center;color:#e8eefc;font-size:12px');
+    const yNext = yBtn('real-sky-hl-ynext', '\u25b6', 'A later launch year', () => this._slStep(1));
+    yrRow.append(yPrev, yText, yNext);
+    const play = mk('real-sky-hl-play', `display:flex;align-items:center;justify-content:center;box-sizing:border-box;margin-top:3px;${HL_BTN_CSS}`);
+    play.textContent = 'Play';
+    press(play, () => this._slPlay());
+    years.append(yrRow, play);
+    wrap.append(btn, items, head, tag, strip, list, years, more);
+    return { wrap, btn, items, head, nameBtn, off, sel, tag, strip, list, more, years, yPrev, yText, yNext, play, itemEls: [], rowEls: [], listKey: '', itemsKey: '', selKey: '', openerRows: {}, press };
   }
 
   /** The built items for the layer's data, the selected country, the key's ticks and the other states (cached; rebuilt when any of them changes). */
@@ -1029,9 +1068,9 @@ export class RealSkyCard {
     const L = this._layer, hl = L && typeof L.highlights === 'function' ? L.highlights() : null;
     const flag = this._hlCountryFlag();
     const hidden = this._hlHiddenKinds();
-    const key = `${flag}|${this._hlExtras.stages ? 1 : 0}${this._hlExtras.debris ? 1 : 0}|${this._statusJoined ? 1 : 0}|${this._hlFamDead || ''}|${hidden.join(',')}`;
+    const key = `${flag}|${this._hlExtras.stages ? 1 : 0}${this._hlExtras.debris ? 1 : 0}|${this._statusJoined ? 1 : 0}|${this._hlFamDead || ''}|${hidden.join(',')}|${this._slYear}|${this._slPlan}`;
     if (!this._hlItems || this._hlItemsKey !== key || this._hlItemsCat !== cat || this._hlItemsHl !== hl) {
-      this._hlItems = buildItems(cat, hl, flag, this._hlExtras, { joined: this._statusJoined, famDead: this._hlFamDead, hidden });
+      this._hlItems = buildItems(cat, hl, flag, this._hlExtras, { joined: this._statusJoined, famDead: this._hlFamDead, hidden, slYear: this._slYear, slPlan: this._slPlan });
       this._hlItemsKey = key; this._hlItemsCat = cat; this._hlItemsHl = hl;
     }
     return this._hlItems;
@@ -1073,6 +1112,12 @@ export class RealSkyCard {
     if (!h && this._layer && typeof this._layer.isActive === 'function' && this._layer.isActive()) this._hlUserOff = true;
     if (!h) { this._hlView = 'closed'; this._hlStrip = ''; this._hlExtras = { stages: false, debris: false }; this._hlFamDead = null; }
     else if (this._hlView === 'closed') this._hlView = 'list';
+    // Starlink layers: Play stops when the item changes or goes off; once no Starlink item is on, the year, the filing and the held rings overlay are forgotten
+    // (the layer disposed the overlay itself, :1588-1592 / :1614); the openers stay as they were
+    const sl = !!h && STARLINK_IDS.includes(h.id);
+    if (!h || h.id !== this._slLastId) this._slStop();
+    this._slLastId = h ? h.id : null;
+    if (!sl) { this._slYear = YEAR_MAX; this._slPlan = STARLINK_PLANS[0].id; this._slOverlay = null; }
     this._hlRender();
     this._hlTick(true);
   }
@@ -1107,18 +1152,36 @@ export class RealSkyCard {
     this._hlRender();
   }
 
-  /** The "Families" row opens or closes the five family rows under it (not saved). On touch the menu is taller than the panel: the opened rows are scrolled into view. */
-  _hlToggleFamilies() {
-    this._hlFamOpen = !this._hlFamOpen;
+  /**
+   * An opener row ("By mission", "Starlink layers") opens or closes the rows under it (not saved). On the Mac both may be open; on touch opening one closes the
+   * other (the key's groups do the same on touch: the menu is taller than the 342 px panel) and the opened rows are scrolled into view.
+   * @param {string} group an HL_OPENERS group
+   */
+  _hlToggleOpener(group) {
+    this._hlSetOpener(group, !this._hlOpen[group]);
+    const fe = this._els.hl && this._els.hl.openerRows[group], root = this._els.root;
+    if (this._hlOpen[group] && this._glass && fe && root && typeof fe.offsetTop === 'number') root.scrollTop = Math.max(0, fe.offsetTop - 6);
+  }
+
+  /** Open or close one opener's rows; with a touch screen opening one closes the others. @param {string} group @param {boolean} open */
+  _hlSetOpener(group, open) {
+    if (!(group in this._hlOpen)) return;
+    if (open && this._glass) for (const o of HL_OPENERS) if (o.group !== group) this._hlOpen[o.group] = false;
+    this._hlOpen[group] = open;
     this._hlRender();
-    const fe = this._els.hl && this._els.hl.famRow, root = this._els.root;
-    if (this._hlFamOpen && this._glass && fe && root && typeof fe.offsetTop === 'number') root.scrollTop = Math.max(0, fe.offsetTop - 6);
+  }
+
+  /** A change to touch with both openers open: keep the first open only (the iPad's 44 px rows do not fit both). */
+  _hlClampOpenersForTouch() {
+    if (!this._glass) return;
+    let seen = false;
+    for (const o of HL_OPENERS) { if (this._hlOpen[o.group]) { if (seen) this._hlOpen[o.group] = false; seen = true; } }
   }
 
   /**
    * Turn an item on (replacing the one that is on).
    * @param {string} id @param {boolean} [auto] the default step, not the player: it does not count as a pick
-   * @param {{extras?: {stages?: boolean, debris?: boolean}, famDead?: boolean}|null} [state] the item's own state to come back with (the globe's `+` after a `-`)
+   * @param {{extras?: {stages?: boolean, debris?: boolean}, famDead?: boolean, slYear?: number, slPlan?: string}|null} [state] the item's own state to come back with (the globe's `+` after a `-`)
    * @returns {boolean}
    */
   hlPick(id, auto = false, state = null) {
@@ -1131,15 +1194,21 @@ export class RealSkyCard {
     this._hlFamDead = null;
     if (state && id === ID_COUNTRY && state.extras) this._hlExtras = { stages: state.extras.stages === true, debris: state.extras.debris === true };
     if (state && state.famDead === true) this._hlFamDead = id;
+    if (state && STARLINK_IDS.includes(id)) {         // the globe's `+`: the year and the filing come back (Play does not resume)
+      if (Number.isFinite(state.slYear)) this._slYear = Math.min(YEAR_MAX, Math.max(YEAR_MIN, state.slYear));
+      if (STARLINK_PLANS.some((p) => p.id === state.slPlan)) this._slPlan = state.slPlan;
+    }
     const it = this._hlItemList(cat).find((i) => i.id === id);
     if (!it) { this._hlFamDead = null; return false; }
     this._hlView = 'list';
     this._hlStrip = '';
-    if (it.group === 'families') this._hlFamOpen = true;   // the menu, opened again, shows the family rows so another one is one tap away
+    if (it.group && it.group in this._hlOpen) this._hlSetOpener(it.group, true);   // the menu, opened again, shows the group's rows so another one is one tap away
     if (this._hlDefault && !auto) { this._hlDefault = id; this._hlPicked = true; }   // the next arrival at the globe brings back the item the player last turned on
     this._hlUserOff = false;                        // a pick after an Off: the default is back
     this._hlLitHidden = this._hlHiddenKinds().join(',');   // Heaviest is lit for the kinds shown now
-    L.setHighlight(toHighlight(it));
+    const h = toHighlight(it);
+    if (it.group === 'starlink') h.overlay = this._slOverlayNew(it);   // a new Starlink item: its own rings overlay (the layer disposes the old one)
+    L.setHighlight(h);
     this._hlRender();
     return true;
   }
@@ -1155,26 +1224,100 @@ export class RealSkyCard {
 
   /**
    * The globe's `-`: turn the highlight off and hand back what is needed to put it back exactly (GlobeSteps `highlight.off`).
-   * @returns {{id: string, extras: {stages: boolean, debris: boolean}, famDead: boolean}|null} null when no menu highlight was on
+   * @returns {{id: string, extras: {stages: boolean, debris: boolean}, famDead: boolean, slYear: number, slPlan: string}|null} null when no menu highlight was on
    */
   hlTurnOff() {
     const cur = this._layer && this._layer.highlight ? this._layer.highlight() : null;
     if (!cur || !isMenuId(cur.id)) return null;
-    const snap = { id: cur.id, extras: { ...this._hlExtras }, famDead: this._hlFamDead === cur.id };
+    const snap = { id: cur.id, extras: { ...this._hlExtras }, famDead: this._hlFamDead === cur.id, slYear: this._slYear, slPlan: this._slPlan };
     this._hlOff();
     return snap;
   }
 
-  /** The globe's `+` after that `-`: the same item on again, with the same extras / "+ dead" state (GlobeSteps `highlight.restore`). @param {{id: string, extras?: object, famDead?: boolean}|null} snap @returns {boolean} */
+  /** The globe's `+` after that `-`: the same item on again, with the same extras / "+ dead" state / year / filing (GlobeSteps `highlight.restore`). @param {{id: string, extras?: object, famDead?: boolean, slYear?: number, slPlan?: string}|null} snap @returns {boolean} */
   hlRestore(snap) {
     if (!snap || typeof snap.id !== 'string') return false;
     return this.hlPick(snap.id, true, snap);
   }
 
-  /** A list row: Selected country's "+ stages" / "+ debris" rows add that kind; any other turns the globe to the object (the first of a group) and opens its card. */
+  /* ---- Starlink layers: the rings overlay, the "Launched by" year and the filing (Sky 37 M tasks 4 and 6; none of it saved) ---- */
+
+  /** A rings overlay for a Starlink item just picked: the `starlinkRims` dep is called once, its spec set; null without the dep. */
+  _slOverlayNew(it) {
+    this._slOverlay = null;
+    if (!this._starlinkRims) return null;
+    const ov = this._starlinkRims({ isGlass: () => this._glass, isOn: () => this._floor === FLOOR_GLOBE });
+    if (ov && typeof ov.setSpec === 'function') ov.setSpec(it.rims);
+    this._slOverlay = ov || null;
+    return this._slOverlay;
+  }
+
+  /**
+   * The Starlink item that is on, built again for the year and the filing now: the same id goes to the layer (the sets swap), and the held overlay gets the
+   * new spec and is handed back as the same object (a new one would be disposed and rebuilt, RealSkyLayer.setHighlight).
+   */
+  _slReissue() {
+    const L = this._layer, cat = L && typeof L.catalogue === 'function' ? L.catalogue() : null, cur = L && typeof L.highlight === 'function' ? L.highlight() : null;
+    if (!cat || !cur || !STARLINK_IDS.includes(cur.id)) return;
+    const it = this._hlItemList(cat).find((i) => i.id === cur.id);
+    if (!it) return;
+    const h = toHighlight(it);
+    if (this._slOverlay) { if (typeof this._slOverlay.setSpec === 'function') this._slOverlay.setSpec(it.rims); h.overlay = this._slOverlay; }
+    L.setHighlight(h);
+    this._hlRender();
+  }
+
+  /** Whether the "Launched by" Play row is left out (the player asked for less motion). */
+  _slReduced() { try { return this._reducedMotion() === true; } catch (_) { return false; } }
+
+  /** A hand step of the year (the arrows): Play stops. @param {number} d -1 or 1 */
+  _slStep(d) {
+    this._slStop();
+    const y = Math.min(YEAR_MAX, Math.max(YEAR_MIN, this._slYear + d));
+    if (y === this._slYear) { this._hlRender(); return; }
+    this._slYear = y;
+    this._slReissue();
+  }
+
+  /** Play: from 2019, a year every 1.2 s, stops at the last year; a tap while playing stops it. No timer under reduced motion. */
+  _slPlay() {
+    if (this._slReduced()) return;
+    if (this._slTimer !== null) { this._slStop(); this._hlRender(); return; }
+    this._slYear = YEAR_MIN;
+    this._slTimer = this._timers.set(() => this._slTick(), SL_PLAY_MS);
+    this._slReissue();
+  }
+
+  _slTick() {
+    if (this._slYear >= YEAR_MAX) { this._slStop(); this._hlRender(); return; }
+    this._slYear += 1;
+    if (this._slYear >= YEAR_MAX) this._slStop();
+    this._slReissue();
+  }
+
+  /** Stop Play (a no-op when it is not playing). */
+  _slStop() {
+    if (this._slTimer === null) return;
+    const id = this._slTimer;
+    this._slTimer = null;
+    this._timers.clear(id);
+  }
+
+  /** The year and the filing now, and whether Play runs (tests and the browser probe). */
+  slState() { return { year: this._slYear, plan: this._slPlan, playing: this._slTimer !== null, overlay: this._slOverlay }; }
+
+  /** A list row: Selected country's "+ stages" / "+ debris" rows add that kind; a filing row of Planned picks that filing; any other turns the globe to the object (the first of a group) and opens its card. */
   hlTapRow(row) {
     const L = this._layer;
     if (!L || !row) return false;
+    if (row.plan) {                                  // Planned's filing rows: the same item, another filing (the rings spec swaps; nothing else moves)
+      const cur = L.highlight ? L.highlight() : null;
+      if (!cur || cur.id !== ID_SL_PLANNED || !STARLINK_PLANS.some((p) => p.id === row.plan)) return false;
+      this._slPlan = row.plan;
+      this._slReissue();
+      return true;
+    }
+
     if (row.toggle === 'famDead') {                 // a family's "+ dead": the item's own state, kept here; the sets swap, nothing else moves
       const cur = L.highlight ? L.highlight() : null;
       const cat = L.catalogue ? L.catalogue() : null;
@@ -1235,7 +1378,7 @@ export class RealSkyCard {
     if (!force && now - this._hlTickMs < HL_TICK_MS) return;
     this._hlTickMs = now;
     for (const r of e.rowEls) {
-      if (r.toggle) continue;
+      if (r.toggle || r.plan) continue;
       const i = L.rowOf(r.first);
       const v = i >= 0 ? L.rowView(i) : '';
       let state = v === 'behind' || v === 'off' || v === 'hidden' ? v : '';
@@ -1301,7 +1444,7 @@ export class RealSkyCard {
     e.off.style.minWidth = glass ? '44px' : '36px';
     e.nameBtn.style.minHeight = e.head.style.minHeight;
     if (headOn) {
-      const name = mine ? mine.title : String((cur && (cur.label || cur.id)) || '');
+      const name = mine ? (mine.headTitle || mine.title) : String((cur && (cur.label || cur.id)) || '');
       const text = mine && !p1 ? `${name} \u25be` : name;
       if (e.nameBtn.textContent !== text) e.nameBtn.textContent = text;
       e.nameBtn.style.cursor = mine && !p1 ? 'pointer' : 'default';
@@ -1329,22 +1472,25 @@ export class RealSkyCard {
     set(e.strip, false);
     // the list
     set(e.list, showList);
+    set(e.years, showList && !!mine.yearControl);   // the Starlink layers' "Launched by" control, below the (empty) list
     set(e.more, false);
     if (!headOn && e.listKey) { e.listKey = ''; e.rowEls = []; e.list.textContent = ''; }
     if (showList) this._hlDrawList(e, mine, glass);
+    if (showList && mine.yearControl) this._hlDrawYears(e, glass);
     if (headOn !== this._hlHeadOn) { this._hlHeadOn = headOn; this._syncCardGap(); this._syncDisplay(); }
     if (!fromParent) this._renderLegend();
   }
 
   _hlDrawItems(e, items, cur, rowH) {
-    const top = items.filter((i) => i.group !== 'families'), fams = items.filter((i) => i.group === 'families');
-    const famOpen = fams.length > 0 && this._hlFamOpen;
-    const key = `${items.map((i) => `${i.id}:${i.count}:${i.country ? i.country.name : ''}`).join('|')}|${cur ? cur.id : ''}|${rowH}|${famOpen ? 1 : 0}`;
+    const grouped = new Set(HL_OPENERS.map((o) => o.group));
+    const top = items.filter((i) => !grouped.has(i.group));
+    const opens = HL_OPENERS.map((o) => ({ ...o, items: items.filter((i) => i.group === o.group) })).filter((o) => o.items.length > 0).map((o) => ({ ...o, open: this._hlOpen[o.group] === true }));
+    const key = `${items.map((i) => `${i.id}:${i.count}:${i.country ? i.country.name : ''}`).join('|')}|${cur ? cur.id : ''}|${rowH}|${opens.map((o) => (o.open ? 1 : 0)).join('')}`;
     if (e.itemsKey === key) return;
     e.itemsKey = key;
     e.items.textContent = '';
     e.itemEls = [];
-    e.famRow = null;
+    e.openerRows = {};
     const d = this._doc;
     for (const it of top) {
       const row = d.createElement('div');
@@ -1358,38 +1504,60 @@ export class RealSkyCard {
       e.items.append(row);
       e.itemEls.push(row);
     }
-    if (fams.length === 0) return;
-    // "By mission" (the families; owner 11-25 "Choose another name." for "Families", then "consider changing by job to mission"): one row that opens five, indented under it ("Navigation · 289": the count of its working ones)
-    const fr = d.createElement('div');
-    fr.id = 'real-sky-hl-families';
-    fr.style.cssText = `display:flex;align-items:center;justify-content:space-between;gap:6px;box-sizing:border-box;padding:0 8px;margin-top:2px;min-height:${rowH};${HL_BTN_CSS}`;
-    const fa = d.createElement('span'); fa.textContent = 'By mission';
-    const fb = d.createElement('span'); fb.style.cssText = 'color:#8392b3;font-size:10px'; fb.textContent = famOpen ? '\u25b4' : '\u25be';
-    fr.append(fa, fb);
-    fr.setAttribute('aria-expanded', famOpen ? 'true' : 'false');
-    e.press(fr, () => this._hlToggleFamilies());
-    e.items.append(fr);
-    e.itemEls.push(fr);
-    e.famRow = fr;
-    if (!famOpen) return;
-    for (const it of fams) {
-      const row = d.createElement('div');
-      row.id = `real-sky-hl-item-${it.id}`;
-      row.style.cssText = `display:flex;align-items:center;gap:6px;box-sizing:border-box;padding:3px 8px;margin:2px 0 0 14px;min-height:${rowH};${HL_BTN_CSS}`;
-      if (!it.noCount) row.title = fmtInt(it.count);
-      const a = d.createElement('span'); a.style.cssText = 'min-width:0;white-space:normal;overflow-wrap:anywhere';
-      a.textContent = `${cur && cur.id === it.id ? '\u2713 ' : ''}${it.title}`;
-      row.append(a);
-      e.press(row, () => this.hlPick(it.id));
-      e.items.append(row);
-      e.itemEls.push(row);
+    // The openers: "By mission" (the families; owner 11-25 "Choose another name." for "Families", then "consider changing by job to mission") and "Starlink layers" (Sky 37):
+    // each one row that opens its rows indented 14 px under it; the count of an item is the item's hover (Sky 34, §108 row 6)
+    for (const o of opens) {
+      const fr = d.createElement('div');
+      fr.id = o.id;
+      fr.style.cssText = `display:flex;align-items:center;justify-content:space-between;gap:6px;box-sizing:border-box;padding:0 8px;margin-top:2px;min-height:${rowH};${HL_BTN_CSS}`;
+      if (o.group === 'starlink') { const cat = this._layer && typeof this._layer.catalogue === 'function' ? this._layer.catalogue() : null; fr.title = starlinkOpenerHover(cat); }
+      const fa = d.createElement('span'); fa.textContent = o.word;
+      const fb = d.createElement('span'); fb.style.cssText = 'color:#8392b3;font-size:10px'; fb.textContent = o.open ? '\u25b4' : '\u25be';
+      fr.append(fa, fb);
+      fr.setAttribute('aria-expanded', o.open ? 'true' : 'false');
+      e.press(fr, () => this._hlToggleOpener(o.group));
+      e.items.append(fr);
+      e.itemEls.push(fr);
+      e.openerRows[o.group] = fr;
+      if (!o.open) continue;
+      for (const it of o.items) {
+        const row = d.createElement('div');
+        row.id = `real-sky-hl-item-${it.id}`;
+        row.style.cssText = `display:flex;align-items:center;gap:6px;box-sizing:border-box;padding:3px 8px;margin:2px 0 0 14px;min-height:${rowH};${HL_BTN_CSS}`;
+        if (it.hover !== undefined) row.title = it.hover;
+        else if (!it.noCount) row.title = fmtInt(it.count);
+        const a = d.createElement('span'); a.style.cssText = 'min-width:0;white-space:normal;overflow-wrap:anywhere';
+        a.textContent = `${cur && cur.id === it.id ? '\u2713 ' : ''}${it.title}`;
+        row.append(a);
+        e.press(row, () => this.hlPick(it.id));
+        e.items.append(row);
+        e.itemEls.push(row);
+      }
     }
+  }
+
+  /** The Starlink layers' "Launched by" control: the year between two arrows, and Play (left out under reduced motion). Cheap: runs with every render of the list. */
+  _hlDrawYears(e, glass) {
+    const px = glass ? HL_ROW_PX_GLASS : HL_ROW_PX - 2;
+    const first = this._slYear <= YEAR_MIN, last = this._slYear >= YEAR_MAX;
+    for (const [b, off] of [[e.yPrev, first], [e.yNext, last]]) {
+      b.style.minHeight = `${px}px`; b.style.width = glass ? '44px' : '32px';
+      b.style.opacity = off ? '0.35' : '1';
+      b.setAttribute('aria-disabled', off ? 'true' : 'false');
+    }
+    if (e.yText.textContent !== String(this._slYear)) e.yText.textContent = String(this._slYear);
+    e.years.title = glass ? '' : SL_YEAR_HOVER;
+    const showPlay = !this._slReduced();
+    e.play.style.display = showPlay ? 'flex' : 'none';
+    e.play.style.minHeight = `${px}px`;
+    const text = this._slTimer !== null ? 'Stop' : 'Play';
+    if (e.play.textContent !== text) e.play.textContent = text;
   }
 
   _hlDrawList(e, item, glass) {
     const visible = glass ? HL_LIST_ROWS_GLASS : HL_LIST_ROWS;
     const rowPx = glass ? HL_LIST_ROW_PX_GLASS : HL_LIST_ROW_PX;
-    const key = `${item.id}|${glass ? 1 : 0}|${item.rows.map((r) => `${r.key}${r.on ? '+' : ''}${r.short || r.label}`).join(',')}`;
+    const key = `${item.id}|${glass ? 1 : 0}|${item.plan || ''}|${item.rows.map((r) => `${r.key}${r.on ? '+' : ''}${r.short || r.label}`).join(',')}`;
     e.list.style.maxHeight = `${visible * rowPx}px`;
     if (e.listKey !== key) {
       e.listKey = key;
@@ -1402,12 +1570,12 @@ export class RealSkyCard {
         const el = d.createElement('div');
         el.style.cssText = `display:flex;align-items:center;box-sizing:border-box;min-height:${rowPx}px;padding:0 6px;border-radius:3px;cursor:pointer;touch-action:manipulation;line-height:18px;`;
         el.title = glass ? '' : (row.sub || '');
-        const labelText = row.short || row.label;
+        const labelText = `${row.plan && row.plan === item.plan ? '\u2713 ' : ''}${row.short || row.label}`;   // Planned: a tick on the filing that is drawn
         const label = d.createElement('span'); label.style.cssText = 'flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere;color:#e8eefc'; label.textContent = labelText;
         el.append(label);
         e.press(el, () => this.hlTapRow(row));
         e.list.append(el);
-        e.rowEls.push({ el, labelEl: label, label: labelText, sub: row.sub || '', first: row.first, norads: row.norads || null, toggle: row.toggle || null, state: '' });
+        e.rowEls.push({ el, labelEl: label, label: labelText, sub: row.sub || '', first: row.first, norads: row.norads || null, toggle: row.toggle || null, plan: row.plan || null, state: '' });
       }
     this._hlTickMs = -Infinity;
     this._hlHeadOn = false;                         // the Highlight header shows (an item is on): page 1 then shows the panel with no card

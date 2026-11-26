@@ -143,6 +143,7 @@ import { RealSkyLayer } from './ui/RealSkyLayer.js';
 import { OpeningDive, diveOn, diveVeil } from './ui/OpeningDive.js';
 import { RealSkyCard, REACH_NAME } from './ui/RealSkyCard.js';
 import { ID_FAMOUS } from './ui/HighlightItems.js';
+import { createStarlinkRims } from './ui/StarlinkRims.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
 import { LibraryPane } from './ui/LibraryPane.js';
@@ -2091,6 +2092,9 @@ async function init() {
     getFlag: () => settingsManager.getLanguageEntry().flag,
     onLanguage: (fn) => eventBus.on(Events.LANGUAGE_CHANGED, fn),
     defaultHighlight: ID_FAMOUS,
+    // Starlink layers (Sky 37 plan, Sky 39): the rings / bands / labels of a lit layer; the card passes isGlass and isOn (globe only), the viewport is bound here
+    starlinkRims: (o) => createStarlinkRims({ ...o, getViewport: () => ({ w: window.innerWidth, h: window.innerHeight }) }),
+    reducedMotion: _prefersReducedMotion,   // no "Launched by" Play under reduced motion
   });
   realSkyLayer = new RealSkyLayer({
     scene,

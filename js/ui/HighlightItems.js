@@ -18,14 +18,15 @@
  */
 
 import { HEAVY_KG } from './SkyLook.js';
+import { classifyStarlink, launchedBy, STARLINK_PLANS, PLAN_STATUS_WORDS, OTHER_COLOR, YEAR_MAX, turnBackLatDeg } from '../systems/StarlinkLayers.js';
 
 export const ID_FAMOUS = 'menu-famous';
 export const ID_COUNTRY = 'menu-country';
 export const ID_HEAVY = 'menu-heavy';
-/** The ids of the three items, in menu order (the five Families come after them: FAMILY_IDS). */
+/** The ids of the three items, in menu order (the five Families and the seven Starlink layers come after them: FAMILY_IDS, STARLINK_IDS). */
 export const ITEM_IDS = [ID_FAMOUS, ID_COUNTRY, ID_HEAVY];
-/** True for an id that is one of this menu's items, a family included (another item's highlight is not the menu's to list). */
-export const isMenuId = (id) => ITEM_IDS.includes(id) || FAMILY_IDS.includes(id);
+/** True for an id that is one of this menu's items, a family or a Starlink layer included (another item's highlight is not the menu's to list). */
+export const isMenuId = (id) => ITEM_IDS.includes(id) || FAMILY_IDS.includes(id) || STARLINK_IDS.includes(id);
 
 /** The key's kind names by sky.json class number (RealSkyCard CLASS_NAMES, with 'starlink' for a working row named STARLINK). */
 const KIND_NAMES = ['debris', 'rocket stage', 'dead', 'working', 'satellite', 'unknown'];
@@ -303,14 +304,16 @@ export function buildHeaviest(cat, hidden = []) {
  * Families (`group: 'families'`; the card draws them under a "By mission" row).
  * @param {object|null} cat `layer.catalogue()` @param {object|null} hl `layer.highlights()` @param {string|null} flag the selected country's flag code
  * @param {{stages?:boolean, debris?:boolean}} [extras] the Selected country extras now on
- * @param {{joined?:boolean, famDead?:string|null, hidden?:string[]}} [opts] `joined` = the catalogue's working / dead status is trusted (default: the data's own
- *   `statusJoined`); `famDead` = the id of the family whose "+ dead" is on (the card keeps that state); `hidden` = the kinds unticked in the key (Heaviest leaves them out)
+ * @param {{joined?:boolean, famDead?:string|null, hidden?:string[], slYear?:number, slPlan?:string}} [opts] `joined` = the catalogue's working / dead status is trusted (default: the data's own
+ *   `statusJoined`); `famDead` = the id of the family whose "+ dead" is on (the card keeps that state); `hidden` = the kinds unticked in the key (Heaviest leaves them out);
+ *   `slYear` = the "Launched by" year of the Starlink layers (default the last, all of them); `slPlan` = the filing "Planned" draws (default the first)
  * @returns {Array<object>}
  */
 export function buildItems(cat, hl, flag, extras, opts = {}) {
   if (!cat || !Array.isArray(cat.rows)) return [];
   const joined = typeof opts.joined === 'boolean' ? opts.joined : cat.statusJoined !== false;
-  return [buildFamous(cat, hl), flag ? buildCountry(cat, hl, flag, extras) : null, buildHeaviest(cat, opts.hidden || []), ...buildFamilies(cat, hl, { joined, famDead: opts.famDead || null })].filter(Boolean);
+  return [buildFamous(cat, hl), flag ? buildCountry(cat, hl, flag, extras) : null, buildHeaviest(cat, opts.hidden || []), ...buildFamilies(cat, hl, { joined, famDead: opts.famDead || null }),
+    ...buildStarlinkItems(cat, { slYear: opts.slYear, slPlan: opts.slPlan })].filter(Boolean);
 }
 
 /* ---------------------------------------------------------------- Families (Sky 33, DECISIONS §105 rows 1-3)
@@ -462,7 +465,92 @@ export function buildFamilies(cat, hl, o) {
   return out.filter(Boolean);
 }
 
-/** What `layer.setHighlight` takes for an item (the layer adds the fade, the rings and the names' boxes). */
+/* ---------------------------------------------------------------- Starlink layers (Sky 37 lane M, DECISIONS §93 row 3, §110)
+ * Seven rows under "Starlink layers": All, 53°, 43°, 97°, 70°, Other, Planned. A layer lights its satellites in its own colour, with a thin ring at its
+ * height (`rims`, drawn by StarlinkRims through the card's overlay); "Launched by <year>" keeps the ones launched by then that still fly; Planned lights
+ * nothing and fades nothing: it draws one filing at a time (rings for approved shells, a band where only a height range is public). Lit Starlink dots
+ * stay drawn when the key hides the Starlink kind (`showHidden`). Names are the menu's words only; the counts are the hover (§108 rows 3, 6, 11). */
+
+export const ID_SL_ALL = 'sl-all', ID_SL_OTHER = 'sl-other', ID_SL_PLANNED = 'sl-planned';
+/** The ids of the seven Starlink items, in menu order. */
+export const STARLINK_IDS = [ID_SL_ALL, 'sl-53', 'sl-43', 'sl-97', 'sl-70', ID_SL_OTHER, ID_SL_PLANNED];
+/** The colour of a planned ring or band: a pale neutral that is no layer's own colour. */
+export const PLAN_COLOR = '#c9d6ef';
+
+/** True when the catalogue has any Starlink row (no rows: no Starlink items). */
+const hasStarlink = (cat) => cat.rows.some((r) => isStarlink(r));
+
+/** A filing's hover on its list row (what, how many, status, date; never a height range, §108 row 11). */
+function planHover(p) {
+  return `${p.title} \u00b7 ${fmtInt(p.count)} satellites \u00b7 ${PLAN_STATUS_WORDS[p.status]} ${snapshotDate(`${p.date}T12:00:00Z`)}`;
+}
+
+/** The rims spec of a filing: a dashed ring per shell at the turn-back latitude of its tilt (no label), one band per band labelled with the filing's short name. */
+function planRims(p) {
+  return {
+    rings: (p.shells || []).map((s) => ({ latDeg: turnBackLatDeg(s.tiltDeg), heightKm: s.heightKm, color: PLAN_COLOR, dashed: true, label: '' })),
+    bands: (p.bands || []).map((b) => ({ loKm: b.loKm, hiKm: b.hiKm, color: PLAN_COLOR, label: p.short })),
+  };
+}
+
+/**
+ * The hover of the "Starlink layers" opener row: how big Starlink is, one number each, no ranges.
+ * @param {{rows:Array[], snapshotUtc?:string}} cat @returns {string} '' when the catalogue has no Starlink row
+ */
+export function starlinkOpenerHover(cat) {
+  if (!cat || !Array.isArray(cat.rows)) return '';
+  const n = cat.rows.filter((r) => isStarlink(r)).length;
+  if (n === 0) return '';
+  const date = snapshotDate(cat.snapshotUtc);
+  return `Starlink is ${fmtInt(n)} of the ${fmtInt(cat.rows.length)} objects. Layers differ by tilt more than by height.${date ? ` As of ${date}.` : ''}`;
+}
+
+/**
+ * The seven Starlink items (none when the data has no Starlink row).
+ * @param {{rows:Array[], fields:string[], snapshotUtc?:string}} cat
+ * @param {{slYear?: number, slPlan?: string}} [o] `slYear` = "Launched by" (default the last year: all of them); `slPlan` = the filing Planned draws (default the first)
+ * @returns {Array<object>}
+ */
+export function buildStarlinkItems(cat, o = {}) {
+  if (!cat || !Array.isArray(cat.rows) || !hasStarlink(cat)) return [];
+  const { layers, other, yearOf } = classifyStarlink(cat, isStarlink);
+  const year = Number.isFinite(o.slYear) ? o.slYear : YEAR_MAX;
+  const plan = STARLINK_PLANS.find((p) => p.id === o.slPlan) || STARLINK_PLANS[0];
+  const credit = creditLine(cat);
+  const total = layers.reduce((a, l) => a + l.norads.length, 0) + other.length;
+  const lit = (list) => launchedBy(list, yearOf, year);
+  const mk = (id, title, headTitle, hover, count, groupsIn, rimLayers) => {
+    const groups = groupsIn.map((g) => ({ color: g.color, norads: lit(g.norads) }));
+    const norads = new Set(); for (const g of groups) for (const n of g.norads) norads.add(n);
+    const byYear = year >= YEAR_MAX ? '' : `launched by ${year} \u00b7 `;
+    return {
+      id, title, headTitle, hover, group: 'starlink', yearControl: true, count, litCount: norads.size, header: `${headTitle} \u00b7 ${byYear}${fmtInt(norads.size)}`,
+      rows: [], names: new Map(), credit, honesty: '', norads, groups, stage: 'globe', showHidden: true, slYear: year,
+      rims: { rings: rimLayers.map((l) => ({ latDeg: l.latDeg, heightKm: l.heightKm, color: l.color, dashed: false, label: l.label })), bands: [] },
+    };
+  };
+  const otherG = { color: OTHER_COLOR, norads: other };
+  const items = [mk(ID_SL_ALL, 'All', 'Starlink all', fmtInt(total), total, [...layers, otherG], layers)];
+  for (const l of layers) {
+    const t = `${Math.round(l.tiltDeg)}\u00b0`;
+    items.push(mk(l.id, t, `Starlink ${t}`, `${Math.round(l.heightKm)} km \u00b7 ${fmtInt(l.norads.length)}`, l.norads.length, [l], [l]));
+  }
+  items.push(mk(ID_SL_OTHER, 'Other', 'Starlink other', fmtInt(other.length), other.length, [otherG], []));
+  items.push({
+    id: ID_SL_PLANNED, title: 'Planned', headTitle: 'Starlink planned', hover: `${STARLINK_PLANS.length} filings`, group: 'starlink', yearControl: false, count: STARLINK_PLANS.length, litCount: 0,
+    header: `Starlink planned \u00b7 ${plan.short}`, plan: plan.id, credit, honesty: '', names: new Map(), norads: new Set(), groups: [], fade: 0, stage: 'globe', showHidden: false, slYear: year,
+    rows: STARLINK_PLANS.map((p) => ({ key: `plan-${p.id}`, plan: p.id, label: p.title, short: p.short, sub: planHover(p), norads: [], first: null, count: p.count })),
+    rims: planRims(plan),
+  });
+  return items;
+}
+
+/** What `layer.setHighlight` takes for an item (the layer adds the fade, the rings and the names' boxes). Starlink items also pass their colour groups, fade, stage and `showHidden`. */
 export function toHighlight(item) {
-  return { id: item.id, label: item.header, norads: new Set(item.norads), names: new Map(item.names), honesty: item.honesty };
+  const h = { id: item.id, label: item.header, norads: new Set(item.norads), names: new Map(item.names), honesty: item.honesty };
+  if (item.groups) h.groups = item.groups;
+  if (item.fade !== undefined) h.fade = item.fade;
+  if (item.stage) h.stage = item.stage;
+  if (item.showHidden) h.showHidden = true;
+  return h;
 }
