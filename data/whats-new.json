@@ -1,8 +1,8 @@
 {
   "bullets": [
     "Refined sun and moon",
-    "Highlight sats by mission, by country, or the heaviest",
-    "Gas salvage tools and a better cinematic debris view"
+    "Highlight sats by mission, country, or KG",
+    "Gas salvage tools and a better cinematic view"
   ],
   "release": "2026-11-26",
   "version": "1.22"
